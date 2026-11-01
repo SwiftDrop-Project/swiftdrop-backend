@@ -31,7 +31,8 @@ public class JsonSecurityErrorHandlers {
         return (request, response, ex) -> write(response, ErrorCode.FORBIDDEN);
     }
 
-    private void write(HttpServletResponse response, ErrorCode code) throws IOException {
+    /** Writes the error for {@code code} in the API.md shape. */
+    public void write(HttpServletResponse response, ErrorCode code) throws IOException {
         response.setStatus(code.status().value());
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         jsonMapper.writeValue(response.getOutputStream(), ErrorResponse.of(code));

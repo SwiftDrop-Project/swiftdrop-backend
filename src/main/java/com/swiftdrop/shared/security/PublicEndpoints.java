@@ -22,6 +22,10 @@ public final class PublicEndpoints {
             PATHS.matcher("/v3/api-docs/**"),
             PATHS.matcher(HttpMethod.GET, "/actuator/health"),
             PATHS.matcher(HttpMethod.GET, "/actuator/health/**"),
+            // "Continue with Google": start (/oauth2/authorization/google) and Google's redirect back
+            // (/login/oauth2/code/google). Both answer 404 when Google sign-in is not configured.
+            PATHS.matcher("/oauth2/**"),
+            PATHS.matcher("/login/oauth2/**"),
             // Spring forwards here to render errors; it must not be blocked.
             PATHS.matcher("/error"));
 

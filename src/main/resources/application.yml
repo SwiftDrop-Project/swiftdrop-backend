@@ -57,6 +57,10 @@ swiftdrop:
       secret: ${JWT_SECRET:}
       expiry-minutes: ${JWT_EXPIRY_MINUTES:60}
       remember-me-days: ${JWT_REMEMBER_ME_DAYS:7}
+    # "Continue with Google" is on only when both are set.
+    google:
+      client-id: ${GOOGLE_CLIENT_ID:}
+      client-secret: ${GOOGLE_CLIENT_SECRET:}
   seed:
     admin-email: ${ADMIN_EMAIL:}
     admin-password: ${ADMIN_PASSWORD:}

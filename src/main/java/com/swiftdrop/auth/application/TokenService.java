@@ -1,7 +1,9 @@
 package com.swiftdrop.auth.application;
 
 import com.swiftdrop.shared.config.SecurityProperties;
+import com.swiftdrop.shared.security.TokenClaims;
 import com.swiftdrop.users.domain.Role;
+import com.swiftdrop.users.domain.UserStatus;
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
 import org.springframework.security.oauth2.jwt.JwsHeader;
 import org.springframework.security.oauth2.jwt.JwtClaimsSet;
@@ -13,7 +15,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
 
-/** Issues HS256 JWTs. Claims: sub (user id), role, iat, exp. No personal data. */
+/** Issues HS256 JWTs. Claims: sub (user id), role, status, iat, exp. No personal data. */
 @Service
 public class TokenService {
 
@@ -25,14 +27,15 @@ public class TokenService {
         this.properties = properties;
     }
 
-    public String issue(UUID userId, Role role, boolean rememberMe) {
+    public String issue(UUID userId, Role role, UserStatus status, boolean rememberMe) {
         Instant now = Instant.now();
         Duration lifetime = rememberMe
                 ? Duration.ofDays(properties.jwt().rememberMeDays())
                 : Duration.ofMinutes(properties.jwt().expiryMinutes());
         JwtClaimsSet claims = JwtClaimsSet.builder()
                 .subject(userId.toString())
-                .claim("role", role.name())
+                .claim(TokenClaims.ROLE, role.name())
+                .claim(TokenClaims.STATUS, status.name())
                 .issuedAt(now)
                 .expiresAt(now.plus(lifetime))
                 .build();

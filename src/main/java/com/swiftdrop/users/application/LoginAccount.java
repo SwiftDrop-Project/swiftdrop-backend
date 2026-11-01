@@ -5,7 +5,7 @@ import com.swiftdrop.users.domain.UserStatus;
 
 import java.util.UUID;
 
-/** What the auth module needs to check a login. */
+/** What the auth module needs to check a login. {@code passwordHash} is null for Google-only accounts. */
 public record LoginAccount(UUID id, String passwordHash, Role role, UserStatus status) {
 
     /** Keeps the password hash out of logs. */

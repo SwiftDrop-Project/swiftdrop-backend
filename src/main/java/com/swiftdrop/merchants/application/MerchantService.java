@@ -1,6 +1,8 @@
 package com.swiftdrop.merchants.application;
 
+import com.swiftdrop.merchants.application.MerchantViews.BusinessDetails;
 import com.swiftdrop.merchants.application.MerchantViews.MerchantAccountView;
+import com.swiftdrop.merchants.application.MerchantViews.MerchantApplication;
 import com.swiftdrop.merchants.application.MerchantViews.MerchantApplicationView;
 import com.swiftdrop.merchants.application.MerchantViews.MerchantProfileView;
 import com.swiftdrop.merchants.application.MerchantViews.NewMerchant;
@@ -43,10 +45,25 @@ public class MerchantService {
     public MerchantAccountView registerMerchant(NewMerchant command) {
         UserView user = userService.register(new NewUser(command.contactPerson(), command.email(), command.phone(),
                 command.rawPassword(), Role.MERCHANT, UserStatus.PENDING_APPROVAL));
-        MerchantProfile profile = profiles.save(new MerchantProfile(user.id(), command.businessName().trim(),
-                blankToNull(command.businessRegNo()), command.parcelsPerMonth(), command.pickupDistrict(),
-                command.city().trim()));
-        return new MerchantAccountView(user, toView(profile));
+        return new MerchantAccountView(user, createProfile(user.id(), command.business()));
+    }
+
+    /**
+     * Turns a Google sign-up (status PROFILE_INCOMPLETE) into a merchant application: the user becomes a
+     * MERCHANT with PENDING_APPROVAL, named after the contact person, and gets a PENDING profile.
+     * Same errors as {@link UserService#completeProfile}.
+     */
+    @Transactional
+    public MerchantAccountView applyAsMerchant(UUID userId, MerchantApplication command) {
+        UserView user = userService.completeProfile(userId, command.contactPerson(), command.phone(), Role.MERCHANT,
+                UserStatus.PENDING_APPROVAL);
+        return new MerchantAccountView(user, createProfile(user.id(), command.business()));
+    }
+
+    private MerchantProfileView createProfile(UUID userId, BusinessDetails business) {
+        return toView(profiles.save(new MerchantProfile(userId, business.businessName().trim(),
+                blankToNull(business.businessRegNo()), business.parcelsPerMonth(), business.pickupDistrict(),
+                business.city().trim())));
     }
 
     public Optional<MerchantProfileView> findProfile(UUID userId) {

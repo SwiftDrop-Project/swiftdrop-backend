@@ -1,6 +1,7 @@
 package com.swiftdrop.auth.application;
 
 import com.swiftdrop.merchants.application.MerchantService;
+import com.swiftdrop.merchants.application.MerchantViews.MerchantApplication;
 import com.swiftdrop.merchants.application.MerchantViews.MerchantProfileView;
 import com.swiftdrop.merchants.application.MerchantViews.NewMerchant;
 import com.swiftdrop.merchants.domain.ParcelsPerMonth;
@@ -48,12 +49,22 @@ public class AuthService {
     public record AuthResult(Account account, String token) {
     }
 
+    /** A Google account whose email Google has verified. {@code subject} is Google's stable account id. */
+    public record GoogleIdentity(String subject, String email, String fullName) {
+
+        /** Keeps personal data out of logs. */
+        @Override
+        public String toString() {
+            return "GoogleIdentity[]";
+        }
+    }
+
     /** Customers are logged in straight away (session cookie, JWT_EXPIRY_MINUTES). */
     @Transactional
     public AuthResult registerCustomer(String fullName, String email, String rawPhone, String password) {
         UserView user = userService.register(new NewUser(fullName, email, normalizePhone(rawPhone), password,
                 Role.CUSTOMER, UserStatus.ACTIVE));
-        return new AuthResult(new Account(user, null), tokenService.issue(user.id(), user.role(), false));
+        return new AuthResult(new Account(user, null), issueToken(user, false));
     }
 
     /** Merchants start as PENDING_APPROVAL and get no token. */
@@ -67,26 +78,53 @@ public class AuthService {
     }
 
     /**
-     * Unknown user and wrong password give the same 401. The account status is checked only after
-     * the password, so it is never revealed to someone who doesn't know the password.
+     * Unknown user, wrong password and Google-only accounts (no password) all give the same 401.
+     * The account status is checked only after the password, so it is never revealed to someone who
+     * doesn't know the password.
      * Not transactional on purpose: BCrypt is slow and should not hold a database connection.
      */
     public AuthResult login(String identifier, String password, boolean rememberMe) {
         Optional<LoginAccount> found = findAccount(identifier);
         String hash = found.map(LoginAccount::passwordHash).orElse(dummyHash);
         boolean passwordMatches = passwordEncoder.matches(password, hash);
-        if (found.isEmpty() || !passwordMatches) {
+        if (found.isEmpty() || found.get().passwordHash() == null || !passwordMatches) {
             throw new ApiException(ErrorCode.INVALID_CREDENTIALS);
         }
         LoginAccount account = found.get();
-        switch (account.status()) {
-            case ACTIVE -> { }
-            case PENDING_APPROVAL -> throw new ApiException(ErrorCode.ACCOUNT_PENDING_APPROVAL);
-            case REJECTED -> throw new ApiException(ErrorCode.ACCOUNT_REJECTED);
-            case DISABLED -> throw new ApiException(ErrorCode.ACCOUNT_DISABLED);
-        }
-        String token = tokenService.issue(account.id(), account.role(), rememberMe);
+        ensureCanLogIn(account.status());
+        String token = tokenService.issue(account.id(), account.role(), account.status(), rememberMe);
         return new AuthResult(currentAccount(account.id()), token);
+    }
+
+    /**
+     * "Continue with Google". Finds the account by Google id, then by email (linking it), or creates a
+     * CUSTOMER with PROFILE_INCOMPLETE. Same status rules as {@link #login}; the token is a remember-me token.
+     * The caller must already have checked that Google verified the email.
+     */
+    public AuthResult loginWithGoogle(GoogleIdentity identity) {
+        LoginAccount account = userService.findOrCreateGoogleUser(identity.subject(), identity.email(),
+                identity.fullName(), Role.CUSTOMER, UserStatus.PROFILE_INCOMPLETE);
+        ensureCanLogIn(account.status());
+        String token = tokenService.issue(account.id(), account.role(), account.status(), true);
+        return new AuthResult(currentAccount(account.id()), token);
+    }
+
+    /** Finishes a Google sign-up as a customer: status ACTIVE and a new token without the restriction. */
+    @Transactional
+    public AuthResult completeCustomerProfile(UUID userId, String rawPhone) {
+        UserView user = userService.completeProfile(userId, null, normalizePhone(rawPhone), Role.CUSTOMER,
+                UserStatus.ACTIVE);
+        return new AuthResult(new Account(user, null), issueToken(user, true));
+    }
+
+    /** Finishes a Google sign-up as a merchant: PENDING_APPROVAL and no token (cannot log in until approved). */
+    @Transactional
+    public AuthResult completeMerchantProfile(UUID userId, String contactPerson, String rawPhone, String businessName,
+                                              String businessRegNo, ParcelsPerMonth parcelsPerMonth,
+                                              District pickupDistrict, String city) {
+        var applied = merchantService.applyAsMerchant(userId, new MerchantApplication(contactPerson,
+                normalizePhone(rawPhone), businessName, businessRegNo, parcelsPerMonth, pickupDistrict, city));
+        return new AuthResult(new Account(applied.user(), applied.profile()), null);
     }
 
     /** The logged-in user; 401 if the account no longer exists. */
@@ -97,6 +135,20 @@ public class AuthService {
                 ? merchantService.findProfile(userId).orElse(null)
                 : null;
         return new Account(user, merchant);
+    }
+
+    /** PROFILE_INCOMPLETE may log in; its token only reaches /auth/me and /auth/complete-profile. */
+    private static void ensureCanLogIn(UserStatus status) {
+        switch (status) {
+            case ACTIVE, PROFILE_INCOMPLETE -> { }
+            case PENDING_APPROVAL -> throw new ApiException(ErrorCode.ACCOUNT_PENDING_APPROVAL);
+            case REJECTED -> throw new ApiException(ErrorCode.ACCOUNT_REJECTED);
+            case DISABLED -> throw new ApiException(ErrorCode.ACCOUNT_DISABLED);
+        }
+    }
+
+    private String issueToken(UserView user, boolean rememberMe) {
+        return tokenService.issue(user.id(), user.role(), user.status(), rememberMe);
     }
 
     private Optional<LoginAccount> findAccount(String identifier) {

@@ -19,11 +19,38 @@ public final class MerchantViews {
                               String businessName, String businessRegNo, ParcelsPerMonth parcelsPerMonth,
                               District pickupDistrict, String city) {
 
+        BusinessDetails business() {
+            return new BusinessDetails(businessName, businessRegNo, parcelsPerMonth, pickupDistrict, city);
+        }
+
         /** Keeps personal data and the password out of logs. */
         @Override
         public String toString() {
             return "NewMerchant[district=" + pickupDistrict + "]";
         }
+    }
+
+    /**
+     * Input for turning an existing Google sign-up into a merchant application. {@code phone} must already be
+     * normalised. Email and name come from the existing account; {@code contactPerson} becomes the user's name.
+     */
+    public record MerchantApplication(String contactPerson, String phone, String businessName, String businessRegNo,
+                                      ParcelsPerMonth parcelsPerMonth, District pickupDistrict, String city) {
+
+        BusinessDetails business() {
+            return new BusinessDetails(businessName, businessRegNo, parcelsPerMonth, pickupDistrict, city);
+        }
+
+        /** Keeps personal data out of logs. */
+        @Override
+        public String toString() {
+            return "MerchantApplication[district=" + pickupDistrict + "]";
+        }
+    }
+
+    /** The business part of a merchant sign-up, shared by both ways of applying. */
+    record BusinessDetails(String businessName, String businessRegNo, ParcelsPerMonth parcelsPerMonth,
+                           District pickupDistrict, String city) {
     }
 
     public record MerchantProfileView(UUID userId, String businessName, String businessRegNo,

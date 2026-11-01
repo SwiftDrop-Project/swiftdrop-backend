@@ -12,10 +12,12 @@ public enum ErrorCode {
             "Your merchant account is waiting for approval. We'll email you when it's ready."),
     ACCOUNT_REJECTED(HttpStatus.FORBIDDEN, "Your merchant application was not approved."),
     ACCOUNT_DISABLED(HttpStatus.FORBIDDEN, "Your account has been disabled. Please contact support."),
+    PROFILE_INCOMPLETE(HttpStatus.FORBIDDEN, "Finish setting up your account to continue."),
     NOT_FOUND(HttpStatus.NOT_FOUND, "We couldn't find what you were looking for."),
     METHOD_NOT_ALLOWED(HttpStatus.METHOD_NOT_ALLOWED, "This action is not supported here."),
     EMAIL_ALREADY_REGISTERED(HttpStatus.CONFLICT, "This email is already registered."),
     PHONE_ALREADY_REGISTERED(HttpStatus.CONFLICT, "This mobile number is already registered."),
+    PROFILE_ALREADY_COMPLETE(HttpStatus.CONFLICT, "Your account is already set up."),
     UNSUPPORTED_MEDIA_TYPE(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "Send the request as JSON (application/json)."),
     INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "Something went wrong on our side. Please try again.");
 

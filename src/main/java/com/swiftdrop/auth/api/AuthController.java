@@ -15,6 +15,7 @@ import jakarta.validation.Valid;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -24,9 +25,11 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.UUID;
+
 @RestController
 @RequestMapping("/auth")
-@Tag(name = "Auth", description = "Register, log in, log out, current user")
+@Tag(name = "Auth", description = "Register, log in, log out, current user, finish a Google sign-up")
 public class AuthController {
 
     private static final String CUSTOMER_EXAMPLE = """
@@ -37,6 +40,12 @@ public class AuthController {
              "parcelsPerMonth": "FROM_50_TO_200", "contactPerson": "Nimal Perera", "phone": "0712345678",
              "email": "orders@lankacrafts.lk", "pickupDistrict": "COLOMBO", "city": "Nugegoda",
              "password": "secret123", "acceptTerms": true}""";
+    private static final String COMPLETE_CUSTOMER_EXAMPLE = """
+            {"accountType": "CUSTOMER", "phone": "077 123 4567", "acceptTerms": true}""";
+    private static final String COMPLETE_MERCHANT_EXAMPLE = """
+            {"accountType": "MERCHANT", "businessName": "Lanka Crafts", "businessRegNo": "PV 00012345",
+             "parcelsPerMonth": "FROM_50_TO_200", "contactPerson": "Nimal Perera", "phone": "0712345678",
+             "pickupDistrict": "COLOMBO", "city": "Nugegoda", "acceptTerms": true}""";
 
     private final AuthService authService;
     private final AuthCookies authCookies;
@@ -90,6 +99,31 @@ public class AuthController {
     @Operation(summary = "The logged-in user")
     public UserResponse me(@AuthenticationPrincipal Jwt jwt) {
         return toResponse(authService.currentAccount(CurrentUser.id(jwt)));
+    }
+
+    @PostMapping(path = "/complete-profile", consumes = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(summary = """
+            Finish a Google sign-up (status PROFILE_INCOMPLETE). CUSTOMER becomes ACTIVE and gets a fresh SD_TOKEN; \
+            MERCHANT waits for approval and the cookie is cleared.""")
+    @io.swagger.v3.oas.annotations.parameters.RequestBody(content = @Content(examples = {
+            @ExampleObject(name = "Customer", value = COMPLETE_CUSTOMER_EXAMPLE),
+            @ExampleObject(name = "Merchant", value = COMPLETE_MERCHANT_EXAMPLE)}))
+    public ResponseEntity<UserResponse> completeProfile(@AuthenticationPrincipal Jwt jwt,
+                                                        @Valid @RequestBody CompleteProfileRequest request) {
+        UUID userId = CurrentUser.id(jwt);
+        AuthResult result = switch (request) {
+            case CompleteProfileRequest.Customer c -> authService.completeCustomerProfile(userId, c.phone());
+            case CompleteProfileRequest.Merchant m ->
+                    authService.completeMerchantProfile(userId, m.contactPerson(), m.phone(), m.businessName(),
+                            m.businessRegNo(), m.parcelsPerMonth(), m.pickupDistrict(), m.city());
+        };
+        // Same lifetime as the Google sign-in that created the session (remember me).
+        ResponseCookie cookie = result.token() != null
+                ? authCookies.create(result.token(), true)
+                : authCookies.clear();
+        return ResponseEntity.ok()
+                .header(HttpHeaders.SET_COOKIE, cookie.toString())
+                .body(toResponse(result.account()));
     }
 
     private static UserResponse toResponse(Account account) {

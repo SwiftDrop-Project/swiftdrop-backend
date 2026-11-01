@@ -34,6 +34,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "swiftdrop.security.jwt.remember-me-days=7",
         "swiftdrop.security.cookie-secure=false",
         "swiftdrop.security.frontend-url=http://localhost:3000",
+        // Google sign-in off by default (GoogleSignInTest turns it on), whatever the local .env says.
+        "swiftdrop.security.google.client-id=",
+        "swiftdrop.security.google.client-secret=",
         "swiftdrop.seed.admin-email=" + IntegrationTest.ADMIN_EMAIL,
         "swiftdrop.seed.admin-password=" + IntegrationTest.ADMIN_PASSWORD,
         "swiftdrop.seed.demo-users=false",

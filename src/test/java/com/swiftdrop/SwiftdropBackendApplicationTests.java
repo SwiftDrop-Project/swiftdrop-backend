@@ -31,6 +31,17 @@ class SwiftdropBackendApplicationTests extends IntegrationTest {
 		mvc.perform(get("/swagger-ui.html")).andExpect(status().is3xxRedirection());
 	}
 
+	/** This shared context runs with blank GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET: it starts, and Google is off. */
+	@Test
+	void googleSignInIsOffWithoutCredentials() throws Exception {
+		mvc.perform(get("/oauth2/authorization/google"))
+				.andExpect(status().isNotFound())
+				.andExpect(jsonPath("$.code").value("NOT_FOUND"));
+		mvc.perform(get("/login/oauth2/code/google").param("code", "abc").param("state", "xyz"))
+				.andExpect(status().isNotFound())
+				.andExpect(jsonPath("$.code").value("NOT_FOUND"));
+	}
+
 	@Test
 	void unknownEndpointNeedsLogin() throws Exception {
 		mvc.perform(get("/api/v1/nothing-here"))

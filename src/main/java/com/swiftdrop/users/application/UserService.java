@@ -2,6 +2,7 @@ package com.swiftdrop.users.application;
 
 import com.swiftdrop.shared.exception.ApiException;
 import com.swiftdrop.shared.exception.ErrorCode;
+import com.swiftdrop.users.domain.Role;
 import com.swiftdrop.users.domain.User;
 import com.swiftdrop.users.domain.UserStatus;
 import com.swiftdrop.users.infrastructure.UserRepository;
@@ -65,6 +66,50 @@ public class UserService {
 
     public List<UserView> findAllById(Collection<UUID> ids) {
         return users.findAllById(ids).stream().map(UserService::toView).toList();
+    }
+
+    /**
+     * The account for a verified Google identity: found by {@code googleSub}, else by email (and the Google
+     * account is linked to it), else a new user with the given role and status, without password or phone.
+     * Throws 409 EMAIL_ALREADY_REGISTERED if the email belongs to an account linked to a different Google account.
+     */
+    @Transactional
+    public LoginAccount findOrCreateGoogleUser(String googleSub, String email, String fullName, Role newUserRole,
+                                               UserStatus newUserStatus) {
+        Optional<User> linked = users.findByGoogleSub(googleSub);
+        if (linked.isPresent()) {
+            return toLoginAccount(linked.get());
+        }
+        String normalizedEmail = normalizeEmail(email);
+        Optional<User> sameEmail = users.findByEmail(normalizedEmail);
+        if (sameEmail.isPresent()) {
+            User user = sameEmail.get();
+            if (user.getGoogleSub() != null) {
+                throw new ApiException(ErrorCode.EMAIL_ALREADY_REGISTERED);
+            }
+            user.linkGoogle(googleSub);
+            return toLoginAccount(users.saveAndFlush(user));
+        }
+        User created = User.fromGoogle(googleSub, fullName.trim(), normalizedEmail, newUserRole, newUserStatus);
+        return toLoginAccount(users.saveAndFlush(created));
+    }
+
+    /**
+     * Finishes a Google sign-up: sets the phone (and optionally a new name), role and status.
+     * 409 PROFILE_ALREADY_COMPLETE unless the user is PROFILE_INCOMPLETE; 409 PHONE_ALREADY_REGISTERED on duplicates.
+     * {@code normalizedPhone} must already be in +947XXXXXXXX form; {@code fullName} null keeps the current name.
+     */
+    @Transactional
+    public UserView completeProfile(UUID id, String fullName, String normalizedPhone, Role role, UserStatus status) {
+        User user = users.findByIdForUpdate(id).orElseThrow(() -> new ApiException(ErrorCode.UNAUTHENTICATED));
+        if (user.getStatus() != UserStatus.PROFILE_INCOMPLETE) {
+            throw new ApiException(ErrorCode.PROFILE_ALREADY_COMPLETE);
+        }
+        if (users.existsByPhone(normalizedPhone)) {
+            throw new ApiException(ErrorCode.PHONE_ALREADY_REGISTERED);
+        }
+        user.completeProfile(fullName == null ? null : fullName.trim(), normalizedPhone, role, status);
+        return toView(users.saveAndFlush(user));
     }
 
     @Transactional

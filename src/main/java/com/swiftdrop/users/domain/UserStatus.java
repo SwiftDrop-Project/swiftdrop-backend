@@ -8,5 +8,7 @@ public enum UserStatus {
     /** Merchant application rejected by an admin. */
     REJECTED,
     /** Blocked by an admin. */
-    DISABLED
+    DISABLED,
+    /** Signed up with Google and must still call POST /auth/complete-profile (no phone yet). */
+    PROFILE_INCOMPLETE
 }
