@@ -1,0 +1,68 @@
+# All values come from environment variables (full list: .env.example).
+# Local runs read ./.env; Docker gets the same names from swiftdrop-deploy/docker-compose.yml.
+spring:
+  application:
+    name: swiftdrop-backend
+  config:
+    import: optional:file:.env[.properties]
+
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USER}
+    password: ${DB_PASSWORD}
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+
+  flyway:
+    enabled: true
+
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER}
+    password: ${RABBITMQ_PASSWORD}
+
+  mail:
+    host: ${MAIL_HOST:localhost}
+    port: ${MAIL_PORT:1025}
+    # Without timeouts a stuck SMTP server makes /actuator/health hang forever.
+    properties:
+      "[mail.smtp.connectiontimeout]": 3000
+      "[mail.smtp.timeout]": 3000
+      "[mail.smtp.writetimeout]": 3000
+
+# Only the health endpoint is exposed, without details.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+  default-produces-media-type: application/json
+
+swiftdrop:
+  security:
+    frontend-url: ${FRONTEND_URL:http://localhost:3000}
+    cookie-secure: ${COOKIE_SECURE:false}
+    jwt:
+      secret: ${JWT_SECRET:}
+      expiry-minutes: ${JWT_EXPIRY_MINUTES:60}
+      remember-me-days: ${JWT_REMEMBER_ME_DAYS:7}
+    # "Continue with Google" is on only when both are set.
+    google:
+      client-id: ${GOOGLE_CLIENT_ID:}
+      client-secret: ${GOOGLE_CLIENT_SECRET:}
+  seed:
+    admin-email: ${ADMIN_EMAIL:}
+    admin-password: ${ADMIN_PASSWORD:}
+    demo-users: ${SEED_DEMO_USERS:false}
+    demo-password: ${DEMO_PASSWORD:}
