@@ -1,23 +1,42 @@
-# All values come from environment variables (full list: .env.example).
+# The only configuration file. All values come from environment variables (full list: .env.example).
 # Local runs read ./.env; Docker gets the same names from swiftdrop-deploy/docker-compose.yml.
+# Tests never use these database settings: they run against Testcontainers (see IntegrationTest).
 spring:
   application:
     name: swiftdrop-backend
   config:
     import: optional:file:.env[.properties]
 
+  # Neon: DB_URL=jdbc:postgresql://<neon-host>/swiftdrop?sslmode=require (use the direct host, not "-pooler").
   datasource:
     url: ${DB_URL}
     username: ${DB_USER}
     password: ${DB_PASSWORD}
+    # Small pool: 9 developers share one Neon database, and Neon limits connections.
+    # minimum-idle 0 lets the pool (and Neon's compute) go idle; 30 s covers a Neon cold start.
+    hikari:
+      maximum-pool-size: 3
+      minimum-idle: 0
+      idle-timeout: 60000        # 60 s (Hikari takes milliseconds)
+      max-lifetime: 300000       # 5 min
+      connection-timeout: 30000  # 30 s
 
   jpa:
     open-in-view: false
     hibernate:
       ddl-auto: validate
 
+  # One folder per module under db/migration (identity/, merchants/, ...). Each module's tables live in its own
+  # schema; the history table stays in public. Teammates on different branches share one database, so:
+  # out-of-order applies an older-timestamp migration merged later, and "missing"/"future" migrations from
+  # other branches are ignored instead of failing validation.
   flyway:
     enabled: true
+    locations: classpath:db/migration
+    default-schema: public
+    out-of-order: true
+    ignore-migration-patterns: "*:missing,*:future"
+    validate-on-migrate: true
 
   rabbitmq:
     host: ${RABBITMQ_HOST:localhost}
@@ -33,6 +52,11 @@ spring:
       "[mail.smtp.connectiontimeout]": 3000
       "[mail.smtp.timeout]": 3000
       "[mail.smtp.writetimeout]": 3000
+
+# Every log line carries the request's correlation id (CorrelationIdFilter, header X-Correlation-Id).
+logging:
+  pattern:
+    correlation: "[%X{correlationId:-}] "
 
 # Only the health endpoint is exposed, without details.
 management:

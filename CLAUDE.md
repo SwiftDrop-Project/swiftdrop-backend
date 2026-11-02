@@ -1,59 +1,105 @@
 # SwiftDrop Backend - project notes for Claude Code
 
-Spring Boot 4 · Java 21 · Maven · PostgreSQL · Flyway · RabbitMQ.
+Spring Boot 4 · Java 21 · Maven · PostgreSQL (Neon) · Flyway · RabbitMQ · Spring Modulith.
 Part of SwiftDrop, a parcel delivery & courier management system (university group project, 9 developers).
 Related repos, cloned side by side: `../swiftdrop-frontend` (Next.js), `../swiftdrop-deploy` (docker-compose, docs).
-Check pom.xml for exact versions and use APIs that match them (Spring Boot 4 / Spring Security 7 / Jackson 3).
+Check pom.xml for exact versions and use APIs that match them (Spring Boot 4.1 / Spring Security 7 / Jackson 3 /
+Spring Modulith 2.1).
 
-## Architecture: modular monolith
-- One package per business module under `com.swiftdrop`: auth, users, merchants, parcels, pricing, dispatch,
-  courier, tracking, notifications, webhooks, reports. Cross-cutting code goes in `shared/`
-  (config, security, exception, event, util).
-- Every module has 4 layers:
-  - `api`: REST controllers and request/response DTOs (Java records)
-  - `application`: services / use cases (transactions live here)
-  - `domain`: entities, enums, domain rules
-  - `infrastructure`: JPA repositories, messaging, external clients
-- A module calls another module ONLY through that module's `application` service, or by listening to its events.
-  Never use another module's repository or entity directly.
-- Controllers never return entities. Map to DTOs.
+## Architecture: modular monolith (Spring Modulith)
+Every direct sub-package of `com.swiftdrop` is a module. `SwiftdropBackendApplication` stays at the root.
+
+| Module | Public (top-level) types | Schema | Owner |
+|---|---|---|---|
+| `shared` (OPEN) | `error/` ApiError, ErrorCode, ApiException + NotFound/Forbidden/Conflict/BusinessRule exceptions; `web/` CurrentUser, PageResponse, PublicEndpoints, ApiPaths; `reference/` District, ParcelsPerMonth; `validation/` PhoneNumberNormalizer, @SriLankanMobile | - | TBD |
+| `infrastructure` | none (only `internal/`: web, config, messaging) | - | TBD |
+| `identity` | IdentityApi, UserSummary, CourierSummary, Role, UserStatus, MerchantProfiles (implemented by merchants) | `identity` | Viduranga |
+| `merchants` | MerchantApi, MerchantSummary, ApprovalStatus | `merchants` | Viduranga |
+| `pricing` | PricingApi, QuoteRequest, PriceQuote | `pricing` | TBD |
+| `delivery` | DeliveryApi, DeliveryOutboxApi, DeliverySnapshot, CreateDeliveryCommand, ChangeStatusCommand, ParcelStatus, ParcelStatusChanged | `delivery` (+ `outbox_events` later) | TBD |
+| `dispatch` | - | none | TBD |
+| `reporting` | - | none | TBD |
+| `tracking` | - | none | TBD |
+| `notifications` | NotificationsApi, AccountEmail | `notifications` | TBD |
+| `webhooks` | - | `webhooks` | TBD |
+| `outbox` | - (reads the outbox only through `DeliveryOutboxApi`) | none | TBD |
+
+```
+com.swiftdrop.<module>/
+  package-info.java        @ApplicationModule + Javadoc: purpose, owner, schema, events published/consumed
+  <Module>Api.java, records, enums, events   <- the ONLY types other modules may use
+  internal/
+    controller/   REST controllers, @PreAuthorize on every endpoint
+    dto/          request/response records
+    application/  services implementing the module's Api; transactions start here
+    domain/       entities, enums, domain rules
+    persistence/  Spring Data repositories
+    (special folders, named for what they hold: security, messaging, strategy, storage, receipt, sse, provider, client)
+```
+Empty folders hold a `package-info.java` (no `.gitkeep`).
+
+### Module rules (checked by `ModuleArchitectureTest` -> `ApplicationModules.verify()`)
+- A module may use ONLY another module's top-level types and `shared`. Never anything under another module's `internal/`.
+- No cycles between modules. If two modules need each other, the lower-level one owns an interface the other implements
+  (example: `identity.MerchantProfiles` is implemented by merchants, so identity never depends on merchants), or use an event.
+- Never use another module's entity or repository. Pass records (`UserSummary`, `MerchantSummary`, ...).
+- Controllers never return entities. Map to DTOs in `internal/dto`.
+- A module's public URLs: implement `shared.web.PublicEndpoints` as a bean in the module. Never edit identity's SecurityConfig for that.
+- Unbuilt modules have placeholder contracts ("Contract owned by <module> - extend in Phase 0"); the owner extends them.
+- Current dependencies: identity -> shared; merchants -> identity, shared; infrastructure -> shared.
 
 ## API rules
 - The contract is `API.md`. Implement it exactly; update it in the same PR when it changes.
-- All endpoints under `/api/v1`. JSON only.
+- All endpoints under `/api/v1` (`ApiPaths.PREFIX`, added automatically). JSON only.
 - Validate every request with Bean Validation.
-- All errors go through the global handler in `shared/exception` using the error shape in API.md.
+- All errors go through `infrastructure/internal/web/GlobalExceptionHandler` using `ApiError` (the shape in API.md).
+  Throw a `shared.error` exception with an `ErrorCode`.
 - Never put stack traces, passwords, tokens, emails or phone numbers in error messages or logs.
 - Keep Swagger (springdoc-openapi) working at `/swagger-ui.html`.
+- Every response carries `X-Correlation-Id` (also in every log line), set by `CorrelationIdFilter`.
 
 ## Configuration
-- No hard-coded secrets. `application.yml` reads `${VAR}` placeholders; the full list is in `.env.example`.
+- One `application.yml`, driven by environment variables (no profile files). Full list in `.env.example`.
 - Local runs load `./.env` through `spring.config.import: optional:file:.env[.properties]`.
 - In Docker the same variable names come from `../swiftdrop-deploy/docker-compose.yml`.
+- Database: Neon. `DB_URL=jdbc:postgresql://<neon-host>/swiftdrop?sslmode=require` using the direct host (not `-pooler`).
+  Hikari pool: max 3, min idle 0, idle timeout 60 s, max lifetime 5 min, connection timeout 30 s.
 
 ## Database
-- Schema changes ONLY through Flyway files in `src/main/resources/db/migration`.
-- File name: `V<yyyyMMddHHmm>__<description>.sql`, e.g. `V202611011400__create_users.sql`
-  (timestamps stop two teammates creating the same version number).
-- Never edit a migration that is already merged into `dev`. Add a new one.
+- One schema per stateful module: identity, merchants, pricing, delivery, webhooks, notifications.
+  dispatch, reporting, tracking and outbox own no schema.
+- Entities use `@Table(schema = "<module>")`. No foreign keys or joins across schemas; refer to other modules' rows by UUID only.
+- Schema changes ONLY through Flyway, in the module's folder: `src/main/resources/db/migration/<module>/`.
+- File name: `V<yyyyMMddHHmm>__<description>.sql` (current date and time, e.g. `V202611051430__add_parcels.sql`).
+  Never V1, V2... A module's first migration starts with `CREATE SCHEMA IF NOT EXISTS <module>;`.
+- Additive only: never drop or rename a column or table (add a new one, migrate data, stop using the old one).
+- Never edit a migration after it has run once anywhere (the shared database has it). Add a new one.
+- 9 developers share one database, so Flyway runs with `out-of-order: true`, `ignore-migration-patterns: "*:missing,*:future"`
+  and `validate-on-migrate: true`; the history table is `public.flyway_schema_history`.
 - `spring.jpa.hibernate.ddl-auto: validate`.
+- Seeders must be idempotent and safe when several backends start at once (catch the duplicate, log, continue).
 
 ## Security
 - JWT (HS256) using Spring Security's OAuth2 resource server with Nimbus encoder/decoder (no extra JWT library).
 - Token is stored in the httpOnly cookie `SD_TOKEN` (see API.md), read by a custom BearerTokenResolver.
-- Roles: CUSTOMER, MERCHANT, COURIER, ADMIN. Deny by default; open only what API.md marks public.
+- Roles: CUSTOMER, MERCHANT, COURIER, ADMIN. Deny by default; open only what API.md marks public (via `PublicEndpoints`).
+- `@PreAuthorize` on every controller endpoint; `/api/v1/admin/**` additionally requires ADMIN in the filter chain.
 - Passwords hashed with BCrypt.
 
 ## Testing
-- JUnit 5 + Spring Boot Test + Testcontainers (PostgreSQL). Docker Desktop must be running.
-- Every endpoint gets tests, including authorization tests (no login → 401, wrong role → 403).
+- JUnit 5 + Spring Boot Test + Testcontainers (PostgreSQL, RabbitMQ). Docker Desktop must be running.
+- Tests NEVER touch the `.env` / Neon database: `IntegrationTest` uses Testcontainers (`DatabaseIsolationTest` proves it).
+- `ModuleArchitectureTest` verifies module boundaries and writes docs to `target/spring-modulith-docs`.
+- Test packages mirror the modules (`src/test/java/com/swiftdrop/<module>/`).
+- Every endpoint gets tests, including authorization tests (no login -> 401, wrong role -> 403).
+- Raw SQL in tests uses schema-qualified tables (`identity.users`).
 - Run `./mvnw test` and keep it green before finishing a task.
 
 ## Commands
-- Start infrastructure: `cd ../swiftdrop-deploy && docker compose up -d postgres rabbitmq mailpit adminer`
+- Start local infrastructure (optional, instead of Neon): `cd ../swiftdrop-deploy && docker compose up -d postgres rabbitmq mailpit adminer`
 - Run: `./mvnw spring-boot:run`
 - Test: `./mvnw test`
 - Build: `./mvnw clean package`
 
 ## Git
-- Work on `feature/*` branches; PRs into `dev`. Commit style: `feat(auth): add login endpoint`.
+- Work on `feature/*` branches; PRs into `dev`. Commit style: `feat(identity): add login endpoint`.

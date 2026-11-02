@@ -26,9 +26,15 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * Base class for API tests: real PostgreSQL and RabbitMQ in Docker, one shared Spring context.
  * The inline properties win over the local .env, so tests behave the same on every laptop and in CI.
+ * Tests never touch the .env database (e.g. the shared Neon database): Testcontainers' @ServiceConnection replaces
+ * the connection, and the datasource properties below point to a host that cannot exist, so if Testcontainers were
+ * ever unwired the tests would fail instead of reaching a real database (see DatabaseIsolationTest).
  * Every test creates its own users with unique emails and phones, so no cleanup is needed.
  */
 @SpringBootTest(properties = {
+        "spring.datasource.url=" + IntegrationTest.UNREACHABLE_DB_URL,
+        "spring.datasource.username=tests-must-use-testcontainers",
+        "spring.datasource.password=tests-must-use-testcontainers",
         "swiftdrop.security.jwt.secret=test-only-jwt-secret-0123456789-abcdefghijklmnopqrstuvwxyz",
         "swiftdrop.security.jwt.expiry-minutes=60",
         "swiftdrop.security.jwt.remember-me-days=7",
@@ -48,6 +54,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @Import(TestcontainersConfiguration.class)
 public abstract class IntegrationTest {
 
+    /** Overridden by Testcontainers; never reachable, so a misconfigured test fails rather than using a real database. */
+    protected static final String UNREACHABLE_DB_URL = "jdbc:postgresql://tests-must-use-testcontainers.invalid:5432/none";
     protected static final String ADMIN_EMAIL = "admin@test.swiftdrop.lk";
     protected static final String ADMIN_PASSWORD = "AdminPass123";
     protected static final String PASSWORD = "secret123";

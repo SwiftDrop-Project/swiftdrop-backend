@@ -1,7 +1,8 @@
 # SwiftDrop Backend
 
 The REST API for SwiftDrop, a parcel delivery and courier management system for Sri Lanka.
-It is one Spring Boot application (a modular monolith) with a PostgreSQL database.
+It is one Spring Boot application (a modular monolith, with boundaries checked by Spring Modulith) with a PostgreSQL database
+(Neon, shared by the team).
 
 - Whole-project setup, Docker and team workflow: [swiftdrop-deploy](https://github.com/SwiftDrop-Project/swiftdrop-deploy)
 - Web app: [swiftdrop-frontend](https://github.com/SwiftDrop-Project/swiftdrop-frontend)
@@ -13,64 +14,85 @@ It is one Spring Boot application (a modular monolith) with a PostgreSQL databas
 | Area | Technology |
 |---|---|
 | Language and framework | Java 21, Spring Boot 4.1 (Spring MVC, Spring Security 7, Jackson 3) |
-| Database | PostgreSQL 17, Spring Data JPA (Hibernate), Flyway migrations |
+| Database | PostgreSQL 17 on Neon (one schema per module), Spring Data JPA (Hibernate), Flyway migrations |
 | Security | JWT (HS256) in an httpOnly cookie, via Spring Security's OAuth2 resource server; Google sign-in via OAuth2 client (OpenID Connect); BCrypt passwords |
-| Messaging and mail | RabbitMQ (Spring AMQP) and Spring Mail, connected but not used by any feature yet |
+| Messaging and mail | RabbitMQ (Spring AMQP): exchange `parcel.events`, queues `notifications.q` and `webhooks.q` (declared, no feature uses them yet); Spring Mail |
+| Architecture | Spring Modulith 2.1 (`ModuleArchitectureTest` checks the module boundaries) |
 | API docs | springdoc-openapi (Swagger UI) |
 | Build | Maven (wrapper included: `mvnw`, `mvnw.cmd`), Lombok |
 | Tests | JUnit 5, Spring Boot Test, MockMvc, Testcontainers (PostgreSQL and RabbitMQ in Docker) |
 
 ## Modules
 
-All code lives under `src/main/java/com/swiftdrop`. Each business area is one package (a module).
+All code lives under `src/main/java/com/swiftdrop`. Every direct sub-package is a module (it follows the
+architecture diagram). `SwiftdropBackendApplication` stays at the root.
 
-| Module | Owns | Status |
-|---|---|---|
-| `auth` | Register, log in, log out, current user, Google sign-in, completing a Google sign-up, issuing JWTs, seed accounts | Built |
-| `users` | User accounts: name, email, mobile, password hash, role, status, linked Google ID | Built |
-| `merchants` | Merchant business profiles and the admin approval workflow | Built |
-| `parcels` | Parcels and orders and their statuses | Planned |
-| `pricing` | Delivery rates by district and weight | Planned |
-| `dispatch` | Assigning parcels to couriers by zone | Planned |
-| `courier` | The courier's pickups and deliveries | Planned |
-| `tracking` | Parcel tracking by tracking number | Planned |
-| `notifications` | Emails and other messages to users | Planned |
-| `webhooks` | Merchant API keys and webhooks | Planned |
-| `reports` | Delivery and cash-on-delivery reports | Planned |
-| `shared` | Cross-cutting code: `config`, `security`, `exception`, `event`, `util`, `meta` (districts) | Built |
+| Module | Owns | Schema | Owner | Status |
+|---|---|---|---|---|
+| `shared` | Open to all: `ApiError`, `ErrorCode`, exceptions, `PageResponse`, `CurrentUser`, `PublicEndpoints`, `District`, `ParcelsPerMonth`, phone normaliser and validation | - | TBD | Built |
+| `infrastructure` | Technical wiring: global error handler, correlation-ID filter, `GET /meta/districts`, OpenAPI, CORS, RabbitMQ declarations | - | TBD | Built |
+| `identity` | Register, log in, log out, current user, Google sign-in, complete-profile, JWTs, the `SD_TOKEN` cookie, roles, seed accounts, the security filter chain | `identity` | Viduranga | Built |
+| `merchants` | Merchant business profiles and the admin approval workflow (API keys later) | `merchants` | Viduranga | Built |
+| `pricing` | Delivery rates and price quotes | `pricing` | TBD | Placeholder |
+| `delivery` | Parcels, status changes, proof of delivery, receipts, outbox events | `delivery` | TBD | Placeholder |
+| `dispatch` | Assigning parcels to couriers by zone | - | TBD | Placeholder |
+| `reporting` | Delivery and cash-on-delivery reports | - | TBD | Placeholder |
+| `tracking` | Parcel tracking by tracking number, live updates (SSE) | - | TBD | Placeholder |
+| `notifications` | Emails (and later SMS) to users | `notifications` | TBD | Placeholder |
+| `webhooks` | Merchant webhooks | `webhooks` | TBD | Placeholder |
+| `outbox` | Relays delivery's outbox events to RabbitMQ | - | TBD | Placeholder |
 
-### The four layers
+Each module's `package-info.java` describes its purpose, owner, schema and the events it publishes and consumes.
+Placeholder modules already have their public contract types (for example `DeliveryApi`, `ParcelStatusChanged`)
+so other modules can code against them; the owner extends them in Phase 0.
 
-Every module has the same four packages:
+### Inside a module
 
-| Layer | Contains | Example |
-|---|---|---|
-| `api` | REST controllers and request/response DTOs (Java records) | `auth/api/AuthController.java` |
-| `application` | Services (use cases). Transactions start here. | `auth/application/AuthService.java` |
-| `domain` | Entities, enums, domain rules | `users/domain/User.java` |
-| `infrastructure` | JPA repositories, messaging, external clients | `users/infrastructure/UserRepository.java` |
+```
+com.swiftdrop.<module>/
+  package-info.java   @ApplicationModule and the module description
+  <Module>Api.java    plus public records, enums and events: the only types other modules may use
+  internal/
+    controller/       REST controllers, @PreAuthorize on every endpoint
+    dto/              request and response records
+    application/      services that implement the module's Api; transactions start here
+    domain/           entities, enums, domain rules
+    persistence/      Spring Data repositories
+    ...               special folders named for what they hold (security, messaging, strategy, storage, sse, ...)
+```
+
+Example: `identity/IdentityApi.java` (public), `identity/internal/application/UserService.java` (implements it),
+`identity/internal/domain/User.java`, `identity/internal/persistence/UserRepository.java`.
 
 ### Module boundary rules
 
-- A module calls another module **only through its `application` service** (or by listening to its
-  events). Example: `auth` uses `UserService` and `MerchantService`, never `UserRepository`.
-- Never use another module's entity or repository directly. Pass records such as `UserView` instead.
+- A module uses **only another module's top-level types** (its Api, public records, events) and `shared`.
+  Never anything under another module's `internal/`. `ModuleArchitectureTest` fails the build otherwise.
+- **No cycles.** merchants depends on identity (it calls `IdentityApi` to approve merchants). identity must not
+  depend on merchants, so for merchant sign-up and `/auth/me` it calls `identity.MerchantProfiles`, an interface
+  that merchants implements.
+- Never use another module's entity or repository. Pass records such as `UserSummary` instead.
 - Controllers never return entities. They map to DTOs.
 - All endpoints are under `/api/v1`. `WebConfig` adds this prefix to every controller.
 - Every request body is validated with Bean Validation.
-- Every error goes through `shared/exception/GlobalExceptionHandler` and uses the error shape in API.md.
-  Throw `ApiException` with an `ErrorCode`.
+- Every error goes through `GlobalExceptionHandler` and uses the error shape in API.md. Throw a `shared.error`
+  exception (`NotFoundException`, `ForbiddenException`, `ConflictException`, `BusinessRuleException`, or
+  `ApiException` for 401) with an `ErrorCode`.
 - Never put passwords, tokens, emails or phone numbers in error messages or logs.
+- Every response has an `X-Correlation-Id` header, and every log line shows the same id.
 
 ## Run locally
 
-You need Java 21 and Docker Desktop (running). The database, RabbitMQ and Mailpit run in Docker from
+You need Java 21 and Docker Desktop (running). The database is the team's shared Neon database (or, if you
+prefer, a local PostgreSQL from swiftdrop-deploy). RabbitMQ and Mailpit run in Docker from
 [swiftdrop-deploy](https://github.com/SwiftDrop-Project/swiftdrop-deploy); clone it next to this folder.
 
 **1. Start the infrastructure** (from `swiftdrop-deploy`, after creating its `.env`, see its README):
 
 ```bash
-docker compose up -d postgres rabbitmq mailpit adminer
+docker compose up -d rabbitmq mailpit
+# only if you want a local database instead of Neon:
+docker compose up -d postgres adminer
 ```
 
 **2. Create your `.env`** (in this folder).
@@ -89,8 +111,11 @@ Copy-Item .env.example .env
 notepad .env
 ```
 
-Use the same `DB_PASSWORD` as `POSTGRES_PASSWORD`, the same `RABBITMQ_PASSWORD` and the same
-`JWT_SECRET` as in `swiftdrop-deploy/.env`. To generate a new `JWT_SECRET`:
+Set `DB_URL`, `DB_USER` and `DB_PASSWORD` to the Neon database (Neon console > Connect):
+`DB_URL=jdbc:postgresql://<neon-host>/swiftdrop?sslmode=require`. Use the **direct** host, not the `-pooler` one,
+because Flyway needs a normal session connection. For a local database use
+`jdbc:postgresql://localhost:5432/swiftdrop` and the `POSTGRES_PASSWORD` from `swiftdrop-deploy/.env`.
+Use the same `RABBITMQ_PASSWORD` and `JWT_SECRET` as in `swiftdrop-deploy/.env`. To generate a new `JWT_SECRET`:
 
 - Git Bash: `openssl rand -base64 48`
 - PowerShell: `$b = New-Object byte[] 48; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b)`
@@ -110,8 +135,8 @@ PowerShell:
 ```
 
 The first run downloads dependencies and takes a few minutes. The backend is ready when the log shows
-`Started SwiftdropBackendApplication`. On every start, Flyway applies new migrations and the seeder
-creates any missing admin and demo accounts.
+`Started SwiftdropBackendApplication`. On every start, Flyway applies new migrations and the seeders
+create any missing admin and demo accounts (safe when several teammates start at the same time).
 
 | What | URL |
 |---|---|
@@ -134,7 +159,7 @@ secrets in the code.
 
 | Variable | Default | Required | What it does |
 |---|---|---|---|
-| `DB_URL` | none | Yes | JDBC URL, e.g. `jdbc:postgresql://localhost:5432/swiftdrop` |
+| `DB_URL` | none | Yes | JDBC URL. Neon: `jdbc:postgresql://<neon-host>/swiftdrop?sslmode=require` (direct host, not `-pooler`); local: `jdbc:postgresql://localhost:5432/swiftdrop` |
 | `DB_USER` | none | Yes | Database user |
 | `DB_PASSWORD` | none | Yes | Database password |
 | `RABBITMQ_HOST` | `localhost` | No | RabbitMQ host |
@@ -155,26 +180,36 @@ secrets in the code.
 | `GOOGLE_CLIENT_ID` | empty | No | Google OAuth client ID. Google sign-in is on only when both Google values are set. |
 | `GOOGLE_CLIENT_SECRET` | empty | No | Google OAuth client secret. Never commit it. |
 
+The connection pool is small on purpose (at most 3 connections, none kept while idle), because the
+whole team shares one Neon database. These values are fixed in `application.yml`.
+
 How to create the Google client: see "Google sign-in setup" in the
 [swiftdrop-deploy README](https://github.com/SwiftDrop-Project/swiftdrop-deploy#google-sign-in-setup).
 
 ## Database migrations (Flyway)
 
-- Schema changes happen **only** through Flyway files in `src/main/resources/db/migration`.
-- Hibernate never changes the schema. `ddl-auto: validate` stops the backend if entities and tables
-  don't match.
+- Each stateful module owns one schema: `identity`, `merchants`, `pricing`, `delivery`, `webhooks`,
+  `notifications`. dispatch, reporting, tracking and outbox own none. No foreign keys or joins across schemas;
+  a module refers to another module's rows by UUID only. Entities use `@Table(schema = "<module>")`.
+- Schema changes happen **only** through Flyway files in the module's own folder:
+  `src/main/resources/db/migration/<module>/`. A module's first migration starts with
+  `CREATE SCHEMA IF NOT EXISTS <module>;`.
 - File name: `V<yyyyMMddHHmm>__<description>.sql`, using the current date and time. Example:
-  `V202611011400__create_users.sql`. Timestamps stop two teammates from picking the same version number.
-- **Never edit a migration that is already merged into `dev`.** Teammates' databases have already run
-  it, and Flyway would stop with a checksum error. Add a new migration instead.
+  `V202611051430__create_parcels.sql`. Never `V1`, `V2`: timestamps stop two teammates picking the same version.
+- **Additive only.** Never drop or rename a column or table; add a new one instead.
+- **Never edit a migration after it has run once** (it has run on the shared database). Add a new one.
+- Hibernate never changes the schema. `ddl-auto: validate` stops the backend if entities and tables don't match.
+- Because 9 developers on different branches share one database, Flyway runs with `out-of-order: true`
+  (a migration merged later with an older timestamp still runs), `ignore-migration-patterns: "*:missing,*:future"`
+  (migrations that exist only on someone else's branch don't fail your start) and `validate-on-migrate: true`.
+  The history table is `public.flyway_schema_history`.
 
-Current migrations:
+Current migrations (the baseline for the new Neon database; the old `V2026110114..` files were replaced):
 
 | File | What it does |
 |---|---|
-| `V202611011400__create_users.sql` | `users` table |
-| `V202611011410__create_merchant_profiles.sql` | `merchant_profiles` table |
-| `V202611011500__google_sign_in.sql` | Google sign-in: `google_sub` column, nullable password and phone, status `PROFILE_INCOMPLETE` |
+| `identity/V202611030900__identity_baseline.sql` | `identity` schema, `identity.users` (incl. Google sign-in columns) |
+| `merchants/V202611030905__merchants_baseline.sql` | `merchants` schema, `merchants.merchant_profiles` (no foreign keys) |
 
 ## Authentication design
 
@@ -196,9 +231,10 @@ The full contract is in [API.md](API.md) ("Cookie and token" and "Google sign-in
 
 - Roles: `CUSTOMER`, `MERCHANT`, `COURIER`, `ADMIN`. The `role` claim becomes the authority
   `ROLE_<role>`.
-- Everything is denied by default. Public endpoints are listed in `shared/security/PublicEndpoints.java`:
-  register, login, logout, districts, Swagger, health, and the Google sign-in URLs.
-- `/api/v1/admin/**` needs `ADMIN`. A missing or invalid cookie gives `401 UNAUTHENTICATED`; a wrong
+- Everything is denied by default. Each module lists its public endpoints in a `PublicEndpoints` bean
+  (`IdentityPublicEndpoints`: register, login, logout, Google sign-in URLs; `InfrastructurePublicEndpoints`:
+  districts, Swagger, health). The filter chain in `identity/internal/security/SecurityConfig` collects them all.
+- Controllers use `@PreAuthorize`. `/api/v1/admin/**` needs `ADMIN`. A missing or invalid cookie gives `401 UNAUTHENTICATED`; a wrong
   role gives `403 FORBIDDEN`.
 - Account status is checked at login: `PENDING_APPROVAL`, `REJECTED` and `DISABLED` can't log in.
 
@@ -240,20 +276,29 @@ PowerShell: `.\mvnw.cmd test`
 
 - **Docker Desktop must be running.** Testcontainers starts `postgres:17` and `rabbitmq:4-management`
   containers for the tests and removes them afterwards.
-- Tests don't use your `.env`: `IntegrationTest` sets its own values, so results are the same on every
-  laptop. Google is never called; the tests use a mocked Google user.
+- Tests **never** touch the database in your `.env` (the shared Neon database): `IntegrationTest` uses
+  Testcontainers and points the normal datasource settings at a host that cannot exist, and
+  `DatabaseIsolationTest` checks it. Google is never called; the tests use a mocked Google user.
+- `ModuleArchitectureTest` checks the module boundaries (no Docker needed) and writes module diagrams to
+  `target/spring-modulith-docs`.
+- Test packages mirror the modules: `src/test/java/com/swiftdrop/<module>/`.
 - Every endpoint has tests, including authorization tests (no login → 401, wrong role → 403).
 - Run one test class: `./mvnw test -Dtest=GoogleSignInTest`
 - Reports: `target/surefire-reports/` (a `.txt` summary and a `TEST-*.xml` file per test class).
 
 | Test class | Covers |
 |---|---|
-| `auth/AuthRegisterTest` | Register customer and merchant, validation, duplicates |
-| `auth/AuthLoginTest` | Login with email or mobile, remember me, account statuses, logout |
-| `auth/AuthMeTest` | Current user |
-| `auth/GoogleSignInTest` | Google redirects, account linking, statuses, complete-profile, `PROFILE_INCOMPLETE` |
+| `ModuleArchitectureTest` | Module list, boundaries and cycles (`ApplicationModules.verify()`), module docs |
+| `DatabaseIsolationTest` | Tests use Testcontainers, never `.env`; one schema per module, no cross-schema foreign keys |
+| `identity/AuthRegisterTest` | Register customer and merchant, validation, duplicates |
+| `identity/AuthLoginTest` | Login with email or mobile, remember me, account statuses, logout |
+| `identity/AuthMeTest` | Current user |
+| `identity/GoogleSignInTest` | Google redirects, account linking, statuses, complete-profile, `PROFILE_INCOMPLETE` |
+| `identity/internal/...` | The Google request cookie; seeders started in parallel |
 | `merchants/AdminMerchantTest` | Admin list, approve, reject, and access rules |
-| `shared/...` | Districts, phone number rules, the Google request cookie |
+| `merchants/internal/...` | Demo merchant seeding (approved, can log in, parallel-safe) |
+| `infrastructure/...` | Districts, correlation ID, RabbitMQ exchange and queues |
+| `shared/validation/...` | Phone number rules |
 | `SwiftdropBackendApplicationTests` | App starts, health, Swagger, Google off without credentials |
 
 ## Docker
@@ -279,16 +324,17 @@ docker build -t swiftdrop-backend .
 
 1. Create a branch from `dev`: `git switch dev`, `git pull`, `git switch -c feature/<name>`.
 2. Agree on the endpoints and write them in [API.md](API.md) first: paths, bodies, responses, error codes.
-3. Put the code in the module's package, using the four layers (`api`, `application`, `domain`,
-   `infrastructure`). For a new module, create all four packages.
-4. Call other modules only through their `application` services.
-5. Add a new Flyway migration for any table change. Never edit an existing one.
+3. Put the code in your module: public contract types at the module root, everything else under `internal/`
+   (`controller`, `dto`, `application`, `domain`, `persistence`, ...). Replace placeholder `package-info.java`
+   files once a folder has classes, and keep the module's `package-info.java` description up to date.
+4. Use other modules only through their top-level types (`IdentityApi`, `MerchantApi`, records, events).
+5. Add a migration in `db/migration/<module>/` with a timestamp version. Additive only; never edit one that ran.
 6. Validate request bodies with Bean Validation. Use the same messages as API.md.
-7. Throw `ApiException` with an `ErrorCode`. Add new codes to `ErrorCode` and to the table in API.md.
-8. Check security: new endpoints need a login by default. Open a public endpoint only if API.md says it
-   is public (add it to `PublicEndpoints`). Restrict by role in `SecurityConfig`.
+7. Throw a `shared.error` exception with an `ErrorCode`. Add new codes to `ErrorCode` and to the table in API.md.
+8. Check security: new endpoints need a login by default. Open a public endpoint only if API.md says it is public,
+   by adding it to your module's `PublicEndpoints` bean. Put `@PreAuthorize` on every controller endpoint.
 9. Add any new setting as a `${VARIABLE}` in `application.yml`, to `.env.example`, and to
    `swiftdrop-deploy/docker-compose.yml` and its `.env.example`.
-10. Write tests that extend `IntegrationTest`, including 401 and 403 cases.
-11. Run `./mvnw test`. Check that Swagger UI still loads.
+10. Write tests that extend `IntegrationTest`, including 401 and 403 cases, in `src/test/java/com/swiftdrop/<module>/`.
+11. Run `./mvnw test` (includes `ModuleArchitectureTest`). Check that Swagger UI still loads.
 12. Commit (`feat(<module>): ...`), push and open a PR into `dev`. Tell the frontend team about API changes.

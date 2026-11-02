@@ -77,7 +77,7 @@ class AdminMerchantTest extends IntegrationTest {
                 .andExpect(jsonPath("$[*].userId", hasItem(userId)));
 
         Map<String, Object> row = jdbc.queryForMap(
-                "select reviewed_at, reviewed_by from merchant_profiles where user_id = ?", UUID.fromString(userId));
+                "select reviewed_at, reviewed_by from merchants.merchant_profiles where user_id = ?", UUID.fromString(userId));
         assertThat(row.get("reviewed_at")).isNotNull();
         assertThat(row.get("reviewed_by")).isNotNull();
     }
