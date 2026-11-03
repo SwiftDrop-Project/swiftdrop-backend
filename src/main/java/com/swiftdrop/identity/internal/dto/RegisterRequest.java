@@ -6,6 +6,7 @@ import com.swiftdrop.identity.internal.dto.SignUpFields.AcceptTerms;
 import com.swiftdrop.identity.internal.dto.SignUpFields.BusinessName;
 import com.swiftdrop.identity.internal.dto.SignUpFields.BusinessRegNo;
 import com.swiftdrop.identity.internal.dto.SignUpFields.City;
+import com.swiftdrop.identity.internal.dto.SignUpFields.DeliverableEmail;
 import com.swiftdrop.identity.internal.dto.SignUpFields.EmailAddress;
 import com.swiftdrop.identity.internal.dto.SignUpFields.ParcelsRange;
 import com.swiftdrop.identity.internal.dto.SignUpFields.Password;
@@ -44,7 +45,7 @@ public sealed interface RegisterRequest permits RegisterRequest.Customer, Regist
     record Customer(
             @Schema(example = "Ayesha Fernando") @PersonName String fullName,
             @Schema(example = "077 123 4567") @SriLankanMobile String phone,
-            @Schema(example = "ayesha@example.com") @EmailAddress String email,
+            @Schema(example = "ayesha@example.com") @EmailAddress @DeliverableEmail String email,
             @Schema(example = "secret123") @Password String password,
             @Schema(example = "true") @AcceptTerms Boolean acceptTerms) implements RegisterRequest {
 
@@ -61,7 +62,7 @@ public sealed interface RegisterRequest permits RegisterRequest.Customer, Regist
             @ParcelsRange ParcelsPerMonth parcelsPerMonth,
             @Schema(example = "Nimal Perera") @PersonName String contactPerson,
             @Schema(example = "0712345678") @SriLankanMobile String phone,
-            @Schema(example = "orders@lankacrafts.lk") @EmailAddress String email,
+            @Schema(example = "orders@lankacrafts.lk") @EmailAddress @DeliverableEmail String email,
             @Schema(example = "COLOMBO") @PickupDistrict District pickupDistrict,
             @Schema(example = "Nugegoda") @City String city,
             @Schema(example = "secret123") @Password String password,

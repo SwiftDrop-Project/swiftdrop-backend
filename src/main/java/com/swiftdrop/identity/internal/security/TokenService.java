@@ -4,6 +4,7 @@ import com.swiftdrop.identity.Role;
 import com.swiftdrop.identity.UserStatus;
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
 import org.springframework.security.oauth2.jwt.JwsHeader;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtClaimsSet;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
@@ -13,7 +14,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
 
-/** Issues HS256 JWTs. Claims: sub (user id), role, status, iat, exp. No personal data. */
+/** Issues HS256 JWTs. Claims: sub (user id), role, status, ver (token version), iat, exp. No personal data. */
 @Service
 public class TokenService {
 
@@ -25,7 +26,7 @@ public class TokenService {
         this.properties = properties;
     }
 
-    public String issue(UUID userId, Role role, UserStatus status, boolean rememberMe) {
+    public String issue(UUID userId, Role role, UserStatus status, int tokenVersion, boolean rememberMe) {
         Instant now = Instant.now();
         Duration lifetime = rememberMe
                 ? Duration.ofDays(properties.jwt().rememberMeDays())
@@ -34,10 +35,20 @@ public class TokenService {
                 .subject(userId.toString())
                 .claim(TokenClaims.ROLE, role.name())
                 .claim(TokenClaims.STATUS, status.name())
+                .claim(TokenClaims.VERSION, tokenVersion)
                 .issuedAt(now)
                 .expiresAt(now.plus(lifetime))
                 .build();
         JwsHeader header = JwsHeader.with(MacAlgorithm.HS256).build();
         return encoder.encode(JwtEncoderParameters.from(header, claims)).getTokenValue();
+    }
+
+    /** Whether {@code token} was issued as a remember-me token (it lives longer than a session token). */
+    public boolean isRememberMe(Jwt token) {
+        if (token.getIssuedAt() == null || token.getExpiresAt() == null) {
+            return false;
+        }
+        Duration lifetime = Duration.between(token.getIssuedAt(), token.getExpiresAt());
+        return lifetime.compareTo(Duration.ofMinutes(properties.jwt().expiryMinutes())) > 0;
     }
 }

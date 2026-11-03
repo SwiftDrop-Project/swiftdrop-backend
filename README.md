@@ -166,9 +166,17 @@ secrets in the code.
 | `RABBITMQ_PORT` | `5672` | No | RabbitMQ port |
 | `RABBITMQ_USER` | none | Yes | RabbitMQ user |
 | `RABBITMQ_PASSWORD` | none | Yes | RabbitMQ password |
-| `MAIL_HOST` | `localhost` | No | SMTP host (Mailpit in development) |
-| `MAIL_PORT` | `1025` | No | SMTP port |
+| `MAIL_HOST` | `localhost` | No | SMTP host (Mailpit in development, `smtp.gmail.com` for real emails) |
+| `MAIL_PORT` | `1025` | No | SMTP port (`587` for Gmail) |
+| `MAIL_USERNAME` | empty | No | SMTP user (the Gmail address). Empty for Mailpit. |
+| `MAIL_PASSWORD` | empty | No | SMTP password (a Gmail **App Password**, not the account password). Never commit it. |
+| `MAIL_SMTP_AUTH` | `false` | No | `true` for Gmail |
+| `MAIL_STARTTLS` | `false` | No | `true` for Gmail |
+| `MAIL_FROM` | `no-reply@swiftdrop.lk` | No | Sender: `name@example.com` or `SwiftDrop <name@example.com>`. With Gmail it must be the Gmail address itself. An invalid value stops the backend at startup. |
+| `MAIL_DEBUG` | `false` | No | `true` prints the SMTP conversation, **including the base64-encoded password**. Local troubleshooting only; never share the output. |
+| `EMAIL_MX_CHECK` | `true` | No | Sign-up rejects email domains without MX records (DNS). `false` skips the lookup (offline). |
 | `JWT_SECRET` | none | Yes | Signs login tokens. At least 32 characters, or the backend refuses to start. |
+| `VERIFICATION_CODE_SECRET` | empty | No | HMAC key for stored email codes (at least 32 characters). Empty = derived from `JWT_SECRET`. |
 | `JWT_EXPIRY_MINUTES` | `60` | No | Token lifetime without "Keep me logged in" |
 | `JWT_REMEMBER_ME_DAYS` | `7` | No | Token and cookie lifetime with "Keep me logged in" and after Google sign-in |
 | `FRONTEND_URL` | `http://localhost:3000` | No | The only origin allowed by CORS; also where Google sign-in redirects back to |
@@ -210,6 +218,11 @@ Current migrations (the baseline for the new Neon database; the old `V2026110114
 |---|---|
 | `identity/V202611030900__identity_baseline.sql` | `identity` schema, `identity.users` (incl. Google sign-in columns) |
 | `merchants/V202611030905__merchants_baseline.sql` | `merchants` schema, `merchants.merchant_profiles` (no foreign keys) |
+| `identity/V202611031000__email_verification.sql` | Status `PENDING_EMAIL_VERIFICATION` (column widened to 30), `users.token_version`, `identity.verification_codes` |
+| `notifications/V202611031005__notifications_baseline.sql` | `notifications` schema, `notifications.email_log` |
+
+Flyway orders migrations by version across **all** module folders, so a new file must also be newer than the
+migrations it depends on (e.g. a change to `identity.users` must sort after the identity baseline).
 
 ## Authentication design
 
@@ -220,9 +233,13 @@ The full contract is in [API.md](API.md) ("Cookie and token" and "Google sign-in
 - After login the backend sets the cookie `SD_TOKEN`: `HttpOnly; Path=/; SameSite=Lax`, plus `Secure`
   when `COOKIE_SECURE=true`. JavaScript can't read it, so it can't be stolen by a script.
 - The cookie holds a JWT signed with HS256 using `JWT_SECRET`. Claims: `sub` (user ID), `role`, `status`,
-  `iat`, `exp`. No personal data.
+  `ver` (token version), `iat`, `exp`. No personal data.
 - `CookieBearerTokenResolver` reads the token from the cookie. Spring Security's resource server checks
   the signature and expiry. Public endpoints ignore the cookie, so an old cookie never blocks login.
+- `SessionValidityFilter` then checks the database (cached up to 30 s by `SessionStateCache`): the user must
+  exist, be `ACTIVE` or `PROFILE_INCOMPLETE`, and the token's `ver` must equal `users.token_version`. Otherwise
+  `401` and the cookie is cleared. A password change or reset increments `token_version`, which ends every
+  other session; disabling an account ends its sessions too.
 - "Keep me logged in" gives a 7-day cookie and token. Without it, the cookie ends when the browser closes
   and the token lasts 60 minutes.
 - Passwords are hashed with BCrypt. Wrong password and unknown user give the same `401` response.
@@ -236,7 +253,28 @@ The full contract is in [API.md](API.md) ("Cookie and token" and "Google sign-in
   districts, Swagger, health). The filter chain in `identity/internal/security/SecurityConfig` collects them all.
 - Controllers use `@PreAuthorize`. `/api/v1/admin/**` needs `ADMIN`. A missing or invalid cookie gives `401 UNAUTHENTICATED`; a wrong
   role gives `403 FORBIDDEN`.
-- Account status is checked at login: `PENDING_APPROVAL`, `REJECTED` and `DISABLED` can't log in.
+- Account status is checked at login: `PENDING_EMAIL_VERIFICATION`, `PENDING_APPROVAL`, `REJECTED` and
+  `DISABLED` can't log in.
+- `AuthRateLimitFilter` limits register, login, verify, resend, forgot, reset and change password per client IP
+  (`swiftdrop.security.rate-limit` in `application.yml`): over the limit → `429 TOO_MANY_REQUESTS` with
+  `Retry-After`. Counters live in memory, per backend instance.
+
+**Email verification and passwords**
+
+- Password sign-ups start as `PENDING_EMAIL_VERIFICATION`, get no cookie, and receive a 6-digit code by email.
+  `POST /auth/email-verification/verify` makes a customer `ACTIVE` (with cookie) and a merchant
+  `PENDING_APPROVAL`. Google accounts and seeded accounts are verified already.
+- Forgot/reset password sends a 6-digit code to the account's email; reset ends every session. Change password
+  (logged in) ends the other sessions.
+- Codes: `SecureRandom`, stored only as HMAC-SHA256 (`CodeHasher`, key `VERIFICATION_CODE_SECRET` or derived from
+  `JWT_SECRET`), valid 10 minutes, dead after 5 wrong tries, replaced by a newer code, at most one per 60 s and
+  5 per hour per account. Resend and forgot always answer `202`, so nobody can find out which emails are registered.
+- Sign-up also rejects disposable email domains (`resources/email/disposable-domains.txt`) and domains without
+  MX records (DNS, 3 s timeout, cached; if DNS fails the address is allowed).
+- Emails go through `NotificationsApi.sendAccountEmail` (notifications module): rendered from
+  `resources/templates/email/`, sent over SMTP in the background after the transaction commits, and recorded in
+  `notifications.email_log` with a masked address. Codes and addresses never appear in logs.
+- Locally, read the emails in Mailpit: <http://localhost:8025>.
 
 **Why CSRF protection is off**
 
@@ -279,6 +317,8 @@ PowerShell: `.\mvnw.cmd test`
 - Tests **never** touch the database in your `.env` (the shared Neon database): `IntegrationTest` uses
   Testcontainers and points the normal datasource settings at a host that cannot exist, and
   `DatabaseIsolationTest` checks it. Google is never called; the tests use a mocked Google user.
+- No real email or DNS either: `CapturingMailSender` keeps the emails in memory (tests read the codes from it)
+  and `FakeMxLookup` answers MX lookups by domain name.
 - `ModuleArchitectureTest` checks the module boundaries (no Docker needed) and writes module diagrams to
   `target/spring-modulith-docs`.
 - Test packages mirror the modules: `src/test/java/com/swiftdrop/<module>/`.
@@ -291,10 +331,18 @@ PowerShell: `.\mvnw.cmd test`
 | `ModuleArchitectureTest` | Module list, boundaries and cycles (`ApplicationModules.verify()`), module docs |
 | `DatabaseIsolationTest` | Tests use Testcontainers, never `.env`; one schema per module, no cross-schema foreign keys |
 | `identity/AuthRegisterTest` | Register customer and merchant, validation, duplicates |
-| `identity/AuthLoginTest` | Login with email or mobile, remember me, account statuses, logout |
+| `identity/AuthLoginTest` | Login with email or mobile, remember me, account statuses (incl. unverified email), logout |
 | `identity/AuthMeTest` | Current user |
-| `identity/GoogleSignInTest` | Google redirects, account linking, statuses, complete-profile, `PROFILE_INCOMPLETE` |
-| `identity/internal/...` | The Google request cookie; seeders started in parallel |
+| `identity/GoogleSignInTest` | Google redirects, account linking (incl. unverified accounts), statuses, complete-profile, `PROFILE_INCOMPLETE` |
+| `identity/EmailVerificationTest` | Code email, verify (customer/merchant), wrong/expired codes, resend cooldown and hourly cap |
+| `identity/PasswordRecoveryTest` | Forgot by email/mobile, reset, unknown identifiers, Google-only accounts |
+| `identity/PasswordChangeTest` | Change password, other sessions end, wrong current password |
+| `identity/SessionValidityTest` | Disabled users and old token versions are logged out |
+| `identity/RateLimitTest` | 429 + `Retry-After` per client IP |
+| `identity/RegisterEmailDomainTest` | MX and disposable-domain checks on sign-up (fake DNS) |
+| `identity/NoSecretsInLogsTest` | Codes, emails and passwords never reach the logs |
+| `identity/internal/...` | The Google request cookie; seeders started in parallel; code hashing; email domain checks |
+| `notifications/AccountEmailTest` | Email content, `email_log` (SENT/FAILED, masked address), nothing sent on rollback |
 | `merchants/AdminMerchantTest` | Admin list, approve, reject, and access rules |
 | `merchants/internal/...` | Demo merchant seeding (approved, can log in, parallel-safe) |
 | `infrastructure/...` | Districts, correlation ID, RabbitMQ exchange and queues |

@@ -22,6 +22,21 @@ class AuthLoginTest extends IntegrationTest {
     UserService userService;
 
     @Test
+    void unverifiedEmailGets403OnlyWithTheRightPassword() throws Exception {
+        String email = uniqueEmail();
+        register(customerBody(email, uniquePhone())).andExpect(status().isCreated());
+
+        login(email, PASSWORD, false)
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("EMAIL_NOT_VERIFIED"))
+                .andExpect(jsonPath("$.message").value(
+                        "Confirm your email address to continue. Enter the 6-digit code we emailed you."));
+        login(email, "wrong-password1", false)
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("INVALID_CREDENTIALS"));
+    }
+
+    @Test
     void loginWithEmailIgnoresCaseAndSpaces() throws Exception {
         String email = uniqueEmail();
         registerCustomer(email, uniquePhone());

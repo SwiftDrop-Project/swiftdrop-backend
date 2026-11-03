@@ -25,7 +25,7 @@ class AuthRegisterTest extends IntegrationTest {
     PasswordEncoder passwordEncoder;
 
     @Test
-    void registerCustomerReturns201AndLogsIn() throws Exception {
+    void registerCustomerReturns201WaitingForEmailVerificationWithoutCookie() throws Exception {
         String email = uniqueEmail();
         String phone = uniquePhone();
 
@@ -36,9 +36,24 @@ class AuthRegisterTest extends IntegrationTest {
                 .andExpect(jsonPath("$.email").value(email))
                 .andExpect(jsonPath("$.phone").value(stored(phone)))
                 .andExpect(jsonPath("$.role").value("CUSTOMER"))
-                .andExpect(jsonPath("$.status").value("ACTIVE"))
+                .andExpect(jsonPath("$.status").value("PENDING_EMAIL_VERIFICATION"))
                 .andExpect(jsonPath("$.merchant").isEmpty())
                 .andExpect(jsonPath("$.passwordHash").doesNotExist())
+                .andExpect(header().doesNotExist("Set-Cookie"))
+                .andReturn();
+
+        assertThat(setCookieHeader(result)).isNull();
+        assertThat(mail.awaitMessages(email, VERIFICATION_SUBJECT, 1)).hasSize(1);
+    }
+
+    @Test
+    void verifiedCustomerGetsASessionCookie() throws Exception {
+        String email = uniqueEmail();
+        register(customerBody(email, uniquePhone())).andExpect(status().isCreated());
+
+        MvcResult result = verifyEmail(email)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("ACTIVE"))
                 .andReturn();
 
         String cookie = setCookieHeader(result);
@@ -47,13 +62,13 @@ class AuthRegisterTest extends IntegrationTest {
     }
 
     @Test
-    void registerMerchantReturns201WithoutCookieAndPendingApproval() throws Exception {
+    void registerMerchantReturns201WithoutCookieWaitingForEmailVerification() throws Exception {
         String email = uniqueEmail();
 
         MvcResult result = register(merchantBody(email, uniquePhone()))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.role").value("MERCHANT"))
-                .andExpect(jsonPath("$.status").value("PENDING_APPROVAL"))
+                .andExpect(jsonPath("$.status").value("PENDING_EMAIL_VERIFICATION"))
                 .andExpect(jsonPath("$.fullName").value("Nimal Perera"))
                 .andExpect(jsonPath("$.merchant.businessName").value("Lanka Crafts"))
                 .andExpect(jsonPath("$.merchant.pickupDistrict").value("COLOMBO"))

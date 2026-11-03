@@ -1,0 +1,14 @@
+SwiftDrop
+
+Hi {{name}},
+
+Enter this code to confirm your email address and finish creating your SwiftDrop account:
+
+    {{code}}
+
+The code expires in {{minutes}} minutes. Never share it with anyone; SwiftDrop staff will never ask for it.
+
+If you didn't sign up for SwiftDrop, you can ignore this email.
+
+--
+SwiftDrop parcel delivery. This is an automatic message about your account; replies are not read.

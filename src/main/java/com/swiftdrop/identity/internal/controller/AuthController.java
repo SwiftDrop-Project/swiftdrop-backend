@@ -34,6 +34,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/auth")
 @Tag(name = "Auth", description = "Register, log in, log out, current user, finish a Google sign-up")
+// The /auth/email-verification/** and /auth/password/** endpoints are in AccountRecoveryController.
 public class AuthController {
 
     private static final String CUSTOMER_EXAMPLE = """
@@ -61,7 +62,9 @@ public class AuthController {
 
     @PostMapping(path = "/register", consumes = MediaType.APPLICATION_JSON_VALUE)
     @PreAuthorize("permitAll()")
-    @Operation(summary = "Self sign-up (public). CUSTOMER is logged in at once; MERCHANT waits for approval (no cookie).")
+    @Operation(summary = """
+            Self sign-up (public). Status PENDING_EMAIL_VERIFICATION, no cookie; a 6-digit code is emailed. \
+            Then POST /auth/email-verification/verify.""")
     @SecurityRequirements
     @io.swagger.v3.oas.annotations.parameters.RequestBody(content = @Content(examples = {
             @ExampleObject(name = "Customer", value = CUSTOMER_EXAMPLE),

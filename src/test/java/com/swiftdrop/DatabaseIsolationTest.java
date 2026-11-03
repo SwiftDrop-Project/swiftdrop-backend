@@ -56,11 +56,14 @@ class DatabaseIsolationTest extends IntegrationTest {
     @Test
     void eachModuleOwnsItsSchemaAndThereAreNoCrossSchemaForeignKeys() {
         assertThat(schemaOf("users")).containsExactly("identity");
+        assertThat(schemaOf("verification_codes")).containsExactly("identity");
         assertThat(schemaOf("merchant_profiles")).containsExactly("merchants");
+        assertThat(schemaOf("email_log")).containsExactly("notifications");
         assertThat(schemaOf("flyway_schema_history")).containsExactly("public");
         assertThat(jdbc.queryForObject("""
                 select count(*) from information_schema.table_constraints
-                where constraint_type = 'FOREIGN KEY' and table_schema in ('identity', 'merchants')""", Long.class))
+                where constraint_type = 'FOREIGN KEY'
+                  and table_schema in ('identity', 'merchants', 'notifications')""", Long.class))
                 .isZero();
     }
 

@@ -63,11 +63,16 @@ public class MerchantService implements MerchantApi, MerchantProfiles {
                 p.getPickupDistrict(), p.getCity(), p.getParcelsPerMonth(), p.getApprovalStatus()));
     }
 
-    /** Applications with the given status, oldest first. */
+    /**
+     * Applications with the given status, oldest first. Merchants who have not confirmed their email yet are left
+     * out: the admin only reviews applications from verified addresses.
+     */
     public List<MerchantApplicationView> listApplications(ApprovalStatus status) {
         List<MerchantProfile> matching = profiles.findAllByApprovalStatus(status);
         Map<UUID, UserSummary> usersById = identity.findAllById(matching.stream().map(MerchantProfile::getUserId).toList())
-                .stream().collect(Collectors.toMap(UserSummary::id, Function.identity()));
+                .stream()
+                .filter(user -> user.status() != UserStatus.PENDING_EMAIL_VERIFICATION)
+                .collect(Collectors.toMap(UserSummary::id, Function.identity()));
         return matching.stream()
                 .filter(profile -> usersById.containsKey(profile.getUserId()))
                 .map(profile -> {

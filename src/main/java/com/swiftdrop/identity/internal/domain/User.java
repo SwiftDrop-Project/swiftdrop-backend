@@ -41,7 +41,7 @@ public class User {
     @Column(unique = true, length = 12)
     private String phone;
 
-    /** Null for accounts created with Google; they cannot log in with a password. */
+    /** Null for accounts created with Google; they cannot log in with a password until they reset it. */
     @Column(name = "password_hash", length = 100)
     private String passwordHash;
 
@@ -54,8 +54,15 @@ public class User {
     private Role role;
 
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 20)
+    @Column(nullable = false, length = 30)
     private UserStatus status;
+
+    /**
+     * Copied into every token as the "ver" claim. A token whose version differs from this is rejected, so
+     * incrementing it ends every existing session of the user.
+     */
+    @Column(name = "token_version", nullable = false)
+    private int tokenVersion;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -95,6 +102,35 @@ public class User {
         this.phone = phone;
         this.role = role;
         this.status = status;
+    }
+
+    /** Sets a new BCrypt hash and ends every existing session. */
+    public void changePassword(String passwordHash) {
+        this.passwordHash = passwordHash;
+        endSessions();
+    }
+
+    /** Removes the password (e.g. one set by someone who never proved they own the email) and ends every session. */
+    public void removePassword() {
+        this.passwordHash = null;
+        endSessions();
+    }
+
+    /** Every token issued so far stops working. */
+    public void endSessions() {
+        this.tokenVersion++;
+    }
+
+    /**
+     * The owner proved they control the email address. Only changes PENDING_EMAIL_VERIFICATION: customers become
+     * ACTIVE, merchants PENDING_APPROVAL (they still wait for an admin). Returns whether the status changed.
+     */
+    public boolean markEmailVerified() {
+        if (status != UserStatus.PENDING_EMAIL_VERIFICATION) {
+            return false;
+        }
+        this.status = role == Role.MERCHANT ? UserStatus.PENDING_APPROVAL : UserStatus.ACTIVE;
+        return true;
     }
 
     @PrePersist

@@ -9,6 +9,12 @@ public final class TokenClaims {
     /** The user's status when the token was issued, e.g. ACTIVE or PROFILE_INCOMPLETE. */
     public static final String STATUS = "status";
 
+    /**
+     * The user's token version when the token was issued. A token whose version differs from the database is
+     * rejected (see SessionValidityFilter), which ends sessions after a password change or reset.
+     */
+    public static final String VERSION = "ver";
+
     private TokenClaims() {
     }
 }
