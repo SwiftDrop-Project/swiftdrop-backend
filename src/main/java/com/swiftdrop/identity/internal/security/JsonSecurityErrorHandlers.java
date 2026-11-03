@@ -3,6 +3,7 @@ package com.swiftdrop.identity.internal.security;
 import com.swiftdrop.shared.error.ApiError;
 import com.swiftdrop.shared.error.ErrorCode;
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.access.AccessDeniedHandler;
@@ -29,6 +30,12 @@ public class JsonSecurityErrorHandlers {
     /** Logged in, but the role is not allowed. */
     public AccessDeniedHandler forbidden() {
         return (request, response, ex) -> write(response, ErrorCode.FORBIDDEN);
+    }
+
+    /** 429 TOO_MANY_REQUESTS with {@code Retry-After} in seconds. */
+    public void writeTooManyRequests(HttpServletResponse response, long retryAfterSeconds) throws IOException {
+        response.setHeader(HttpHeaders.RETRY_AFTER, Long.toString(retryAfterSeconds));
+        write(response, ErrorCode.TOO_MANY_REQUESTS);
     }
 
     /** Writes the error for {@code code} in the API.md shape. */

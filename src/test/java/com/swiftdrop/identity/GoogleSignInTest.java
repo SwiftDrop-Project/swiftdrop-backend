@@ -184,6 +184,32 @@ class GoogleSignInTest extends IntegrationTest {
     }
 
     @Test
+    void unverifiedPasswordAccountIsVerifiedByGoogleAndLosesTheUnprovenPassword() throws Exception {
+        // Someone registered with this email but never confirmed it; the real owner then uses Google.
+        String email = uniqueEmail();
+        String userId = json.readTree(register(customerBody(email, uniquePhone()))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString()).get("id").asString();
+        String code = mail.awaitCode(email, VERIFICATION_SUBJECT);
+
+        MockHttpServletResponse response = googleSignIn(newSub(), email, "Real Owner", true);
+
+        assertThat(response.getRedirectedUrl()).isEqualTo(CALLBACK);
+        mvc.perform(get("/api/v1/auth/me").cookie(tokenCookie(response)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(userId))
+                .andExpect(jsonPath("$.status").value("ACTIVE"));
+        assertThat(jdbc.queryForObject("select password_hash from identity.users where id = ?::uuid", String.class,
+                userId)).isNull();
+        // The squatter's password and the old code are worthless now.
+        login(email, PASSWORD, false)
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("INVALID_CREDENTIALS"));
+        postJson(VERIFY_PATH, Map.of("email", email, "code", code))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_CODE"));
+    }
+
+    @Test
     void pendingMerchantGetsNoCookieAndAnErrorRedirect() throws Exception {
         String email = uniqueEmail();
         registerMerchant(email, uniquePhone());
@@ -393,10 +419,11 @@ class GoogleSignInTest extends IntegrationTest {
         Cookie cookie = tokenCookie(googleSignIn(newSub(), uniqueEmail(), "Kamal Silva", true));
         postJson(COMPLETE_PROFILE, merchantProfile(uniquePhone()), cookie).andExpect(status().isOk());
 
-        // The cookie was cleared, but the old token is still signed and unexpired.
+        // The cookie was cleared, and the old (still signed, unexpired) token no longer works either: the account is
+        // now PENDING_APPROVAL, so the server-side session check rejects it.
         postJson(COMPLETE_PROFILE, customerProfile(uniquePhone()), cookie)
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.code").value("PROFILE_ALREADY_COMPLETE"));
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHENTICATED"));
 
         Cookie passwordUser = registerCustomer(uniqueEmail(), uniquePhone());
         postJson(COMPLETE_PROFILE, customerProfile(uniquePhone()), passwordUser)

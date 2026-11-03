@@ -5,7 +5,9 @@ import com.swiftdrop.identity.Role;
 import com.swiftdrop.identity.UserStatus;
 import com.swiftdrop.identity.UserSummary;
 import com.swiftdrop.identity.internal.domain.User;
+import com.swiftdrop.identity.internal.domain.VerificationPurpose;
 import com.swiftdrop.identity.internal.persistence.UserRepository;
+import com.swiftdrop.identity.internal.security.SessionStateCache;
 import com.swiftdrop.shared.error.ApiException;
 import com.swiftdrop.shared.error.ConflictException;
 import com.swiftdrop.shared.error.ErrorCode;
@@ -27,10 +29,15 @@ public class UserService implements IdentityApi {
 
     private final UserRepository users;
     private final PasswordEncoder passwordEncoder;
+    private final SessionStateCache sessions;
+    private final VerificationCodeService codes;
 
-    public UserService(UserRepository users, PasswordEncoder passwordEncoder) {
+    public UserService(UserRepository users, PasswordEncoder passwordEncoder, SessionStateCache sessions,
+                       VerificationCodeService codes) {
         this.users = users;
         this.passwordEncoder = passwordEncoder;
+        this.sessions = sessions;
+        this.codes = codes;
     }
 
     /** Creates a user. Throws 409 EMAIL_ALREADY_REGISTERED / PHONE_ALREADY_REGISTERED on duplicates. */
@@ -77,6 +84,10 @@ public class UserService implements IdentityApi {
         return users.findByPhone(normalizedPhone).map(UserService::toLoginAccount);
     }
 
+    public Optional<LoginAccount> findLoginAccountById(UUID id) {
+        return users.findById(id).map(UserService::toLoginAccount);
+    }
+
     @Override
     public Optional<UserSummary> findById(UUID id) {
         return users.findById(id).map(UserService::toView);
@@ -91,6 +102,9 @@ public class UserService implements IdentityApi {
      * The account for a verified Google identity: found by {@code googleSub}, else by email (and the Google
      * account is linked to it), else a new user with the given role and status, without password or phone.
      * Throws 409 EMAIL_ALREADY_REGISTERED if the email belongs to an account linked to a different Google account.
+     *
+     * <p>Linking to an account still waiting for email verification verifies it (Google has verified the email),
+     * and removes its password and sessions: whoever chose that password never proved they own the address.
      */
     @Transactional
     public LoginAccount findOrCreateGoogleUser(String googleSub, String email, String fullName, Role newUserRole,
@@ -107,6 +121,11 @@ public class UserService implements IdentityApi {
                 throw new ConflictException(ErrorCode.EMAIL_ALREADY_REGISTERED);
             }
             user.linkGoogle(googleSub);
+            if (user.markEmailVerified()) {
+                user.removePassword();
+                codes.invalidateAll(user.getId(), VerificationPurpose.EMAIL_VERIFICATION);
+                sessions.evict(user.getId());
+            }
             return toLoginAccount(users.saveAndFlush(user));
         }
         User created = User.fromGoogle(googleSub, fullName.trim(), normalizedEmail, newUserRole, newUserStatus);
@@ -128,27 +147,40 @@ public class UserService implements IdentityApi {
             throw new ConflictException(ErrorCode.PHONE_ALREADY_REGISTERED);
         }
         user.completeProfile(fullName == null ? null : fullName.trim(), normalizedPhone, role, status);
+        sessions.evict(id);
         return toView(users.saveAndFlush(user));
     }
 
+    /** The user's current token version (the "ver" claim of new tokens). */
+    public int tokenVersion(UUID id) {
+        return users.findById(id).map(User::getTokenVersion)
+                .orElseThrow(() -> new ApiException(ErrorCode.UNAUTHENTICATED));
+    }
+
+    /**
+     * Sets the account status. Sessions of an account that is no longer ACTIVE (e.g. DISABLED) stop working
+     * within 30 seconds, at once on this backend instance.
+     */
     @Override
     @Transactional
     public UserSummary changeStatus(UUID id, UserStatus status) {
         User user = users.findById(id).orElseThrow(() -> new NotFoundException(ErrorCode.NOT_FOUND));
         user.changeStatus(status);
+        sessions.evict(id);
         return toView(users.saveAndFlush(user));
     }
 
-    private static String normalizeEmail(String email) {
+    static String normalizeEmail(String email) {
         return email.trim().toLowerCase(Locale.ROOT);
     }
 
-    private static UserSummary toView(User user) {
+    static UserSummary toView(User user) {
         return new UserSummary(user.getId(), user.getFullName(), user.getEmail(), user.getPhone(), user.getRole(),
                 user.getStatus(), user.getCreatedAt());
     }
 
-    private static LoginAccount toLoginAccount(User user) {
-        return new LoginAccount(user.getId(), user.getPasswordHash(), user.getRole(), user.getStatus());
+    static LoginAccount toLoginAccount(User user) {
+        return new LoginAccount(user.getId(), user.getPasswordHash(), user.getRole(), user.getStatus(),
+                user.getTokenVersion());
     }
 }

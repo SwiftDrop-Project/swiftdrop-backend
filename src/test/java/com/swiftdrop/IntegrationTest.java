@@ -1,6 +1,8 @@
 package com.swiftdrop;
 
+import com.swiftdrop.identity.internal.security.AuthRateLimiter;
 import jakarta.servlet.http.Cookie;
+import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -47,12 +49,20 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "swiftdrop.seed.admin-password=" + IntegrationTest.ADMIN_PASSWORD,
         "swiftdrop.seed.demo-users=false",
         "swiftdrop.seed.demo-password=",
-        // no Mailpit in tests
-        "management.health.mail.enabled=false"
+        // no Mailpit in tests: emails are captured by CapturingMailSender
+        "management.health.mail.enabled=false",
+        "swiftdrop.mail.from=no-reply@test.swiftdrop.lk",
+        "swiftdrop.security.verification-codes.secret=test-only-code-secret-0123456789-abcdefghijklmnop",
+        "swiftdrop.email-checks.mx-enabled=true"
 })
 @AutoConfigureMockMvc
-@Import(TestcontainersConfiguration.class)
+@Import({TestcontainersConfiguration.class, TestDoublesConfiguration.class})
 public abstract class IntegrationTest {
+
+    protected static final String VERIFY_PATH = "/api/v1/auth/email-verification/verify";
+    protected static final String VERIFICATION_SUBJECT = "Your SwiftDrop verification code";
+    protected static final String RESET_SUBJECT = "Your SwiftDrop password reset code";
+    protected static final String CHANGED_SUBJECT = "Your SwiftDrop password was changed";
 
     /** Overridden by Testcontainers; never reachable, so a misconfigured test fails rather than using a real database. */
     protected static final String UNREACHABLE_DB_URL = "jdbc:postgresql://tests-must-use-testcontainers.invalid:5432/none";
@@ -69,6 +79,19 @@ public abstract class IntegrationTest {
 
     @Autowired
     protected JsonMapper json;
+
+    @Autowired
+    protected CapturingMailSender mail;
+
+    @Autowired
+    private AuthRateLimiter rateLimiter;
+
+    /** All requests come from 127.0.0.1, so each test starts with fresh rate-limit counters. */
+    @BeforeEach
+    void resetRateLimits() {
+        rateLimiter.reset();
+        mail.failSending(false);
+    }
 
     protected static String uniqueEmail() {
         return "user-" + UUID.randomUUID().toString().substring(0, 12) + "@test.lk";
@@ -128,16 +151,22 @@ public abstract class IntegrationTest {
                 "rememberMe", rememberMe));
     }
 
-    /** Registers a customer and returns its SD_TOKEN cookie. */
+    /** Registers a customer, confirms the email with the emailed code, and returns its SD_TOKEN cookie (ACTIVE). */
     protected Cookie registerCustomer(String email, String phone) throws Exception {
-        MvcResult result = register(customerBody(email, phone)).andExpect(status().isCreated()).andReturn();
-        return tokenCookie(result);
+        register(customerBody(email, phone)).andExpect(status().isCreated());
+        return tokenCookie(verifyEmail(email).andExpect(status().isOk()).andReturn());
     }
 
-    /** Registers a merchant (PENDING) and returns its user id. */
+    /** Registers a merchant, confirms the email (status PENDING_APPROVAL) and returns its user id. */
     protected String registerMerchant(String email, String phone) throws Exception {
         MvcResult result = register(merchantBody(email, phone)).andExpect(status().isCreated()).andReturn();
+        verifyEmail(email).andExpect(status().isOk());
         return json.readTree(result.getResponse().getContentAsString()).get("id").asString();
+    }
+
+    /** Posts the newest verification code emailed to {@code email}. */
+    protected ResultActions verifyEmail(String email) throws Exception {
+        return postJson(VERIFY_PATH, Map.of("email", email, "code", mail.awaitCode(email, VERIFICATION_SUBJECT)));
     }
 
     protected Cookie loginAsAdmin() throws Exception {

@@ -3,6 +3,7 @@ package com.swiftdrop.infrastructure.internal.web;
 import com.swiftdrop.shared.error.ApiError;
 import com.swiftdrop.shared.error.ApiException;
 import com.swiftdrop.shared.error.ErrorCode;
+import com.swiftdrop.shared.error.FieldValidationException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,6 +46,12 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ApiException.class)
     ResponseEntity<ApiError> handleApi(ApiException ex) {
         return respond(ApiError.of(ex.code(), ex.getMessage()));
+    }
+
+    /** A rule checked in the service layer, reported like an invalid request body. */
+    @ExceptionHandler(FieldValidationException.class)
+    ResponseEntity<ApiError> handleFieldValidation(FieldValidationException ex) {
+        return respond(ApiError.validation(ex.fieldErrors()));
     }
 
     /** A {@code @PreAuthorize} check failed: logged in, wrong role (URL rules answer before this in most cases). */

@@ -42,7 +42,9 @@ public class SecurityConfig {
     @Bean
     SecurityFilterChain securityFilterChain(HttpSecurity http, JsonSecurityErrorHandlers errorHandlers,
                                             SecurityProperties properties, GoogleSignInHandler googleSignInHandler,
-                                            JsonMapper jsonMapper, List<PublicEndpoints> publicEndpoints)
+                                            JsonMapper jsonMapper, List<PublicEndpoints> publicEndpoints,
+                                            AuthRateLimiter rateLimiter, SessionStateCache sessions,
+                                            AuthCookies authCookies)
             throws Exception {
         RequestMatcher publicMatcher = new OrRequestMatcher(publicEndpoints.stream()
                 .flatMap(endpoints -> endpoints.matchers().stream())
@@ -71,7 +73,12 @@ public class SecurityConfig {
                         .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter()))
                         .authenticationEntryPoint(errorHandlers.unauthenticated())
                         .accessDeniedHandler(errorHandlers.forbidden()))
-                .addFilterAfter(new ProfileIncompleteFilter(errorHandlers), BearerTokenAuthenticationFilter.class)
+                // Order: rate limit → read JWT → session still valid? → PROFILE_INCOMPLETE restriction → role checks.
+                .addFilterBefore(new AuthRateLimitFilter(rateLimiter, errorHandlers),
+                        BearerTokenAuthenticationFilter.class)
+                .addFilterAfter(new SessionValidityFilter(sessions, errorHandlers, authCookies),
+                        BearerTokenAuthenticationFilter.class)
+                .addFilterAfter(new ProfileIncompleteFilter(errorHandlers), SessionValidityFilter.class)
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint(errorHandlers.unauthenticated())
                         .accessDeniedHandler(errorHandlers.forbidden()));

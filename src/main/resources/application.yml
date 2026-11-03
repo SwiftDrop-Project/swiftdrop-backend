@@ -44,14 +44,22 @@ spring:
     username: ${RABBITMQ_USER}
     password: ${RABBITMQ_PASSWORD}
 
+  # SMTP. Local default: Mailpit (no auth). Shared setup: Gmail with an App Password (see .env.example).
   mail:
     host: ${MAIL_HOST:localhost}
     port: ${MAIL_PORT:1025}
-    # Without timeouts a stuck SMTP server makes /actuator/health hang forever.
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
     properties:
-      "[mail.smtp.connectiontimeout]": 3000
-      "[mail.smtp.timeout]": 3000
-      "[mail.smtp.writetimeout]": 3000
+      "[mail.smtp.auth]": ${MAIL_SMTP_AUTH:false}
+      "[mail.smtp.starttls.enable]": ${MAIL_STARTTLS:false}
+      # 10 s each, so a blocked port or a stuck server fails quickly (and /actuator/health never hangs).
+      "[mail.smtp.connectiontimeout]": 10000
+      "[mail.smtp.timeout]": 10000
+      "[mail.smtp.writetimeout]": 10000
+      # MAIL_DEBUG=true prints the whole SMTP conversation to the console, INCLUDING the base64-encoded
+      # username and password. Only for local troubleshooting; never share that output.
+      "[mail.debug]": ${MAIL_DEBUG:false}
 
 # Every log line carries the request's correlation id (CorrelationIdFilter, header X-Correlation-Id).
 logging:
@@ -85,6 +93,24 @@ swiftdrop:
     google:
       client-id: ${GOOGLE_CLIENT_ID:}
       client-secret: ${GOOGLE_CLIENT_SECRET:}
+    # HMAC key for stored email codes. Empty: derived from JWT_SECRET.
+    verification-codes:
+      secret: ${VERIFICATION_CODE_SECRET:}
+    # Per client IP; over the limit -> 429 TOO_MANY_REQUESTS with Retry-After.
+    rate-limit:
+      login: { requests: 10, window: 1m }
+      register: { requests: 10, window: 10m }
+      verify: { requests: 10, window: 1m }
+      resend: { requests: 5, window: 1m }
+      forgot: { requests: 5, window: 1m }
+      reset: { requests: 10, window: 1m }
+      change: { requests: 10, window: 1m }
+  # Sign-up email checks: disposable domains are always rejected; EMAIL_MX_CHECK=false skips the DNS (MX) lookup.
+  email-checks:
+    mx-enabled: ${EMAIL_MX_CHECK:true}
+  mail:
+    from: ${MAIL_FROM:no-reply@swiftdrop.lk}
+    from-name: SwiftDrop
   seed:
     admin-email: ${ADMIN_EMAIL:}
     admin-password: ${ADMIN_PASSWORD:}

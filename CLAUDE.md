@@ -11,7 +11,7 @@ Every direct sub-package of `com.swiftdrop` is a module. `SwiftdropBackendApplic
 
 | Module | Public (top-level) types | Schema | Owner |
 |---|---|---|---|
-| `shared` (OPEN) | `error/` ApiError, ErrorCode, ApiException + NotFound/Forbidden/Conflict/BusinessRule exceptions; `web/` CurrentUser, PageResponse, PublicEndpoints, ApiPaths; `reference/` District, ParcelsPerMonth; `validation/` PhoneNumberNormalizer, @SriLankanMobile | - | TBD |
+| `shared` (OPEN) | `error/` ApiError, ErrorCode, ApiException + NotFound/Forbidden/Conflict/BusinessRule/FieldValidation exceptions; `web/` CurrentUser, PageResponse, PublicEndpoints, ApiPaths; `reference/` District, ParcelsPerMonth; `validation/` PhoneNumberNormalizer, @SriLankanMobile | - | TBD |
 | `infrastructure` | none (only `internal/`: web, config, messaging) | - | TBD |
 | `identity` | IdentityApi, UserSummary, CourierSummary, Role, UserStatus, MerchantProfiles (implemented by merchants) | `identity` | Viduranga |
 | `merchants` | MerchantApi, MerchantSummary, ApprovalStatus | `merchants` | Viduranga |
@@ -46,7 +46,10 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
 - Controllers never return entities. Map to DTOs in `internal/dto`.
 - A module's public URLs: implement `shared.web.PublicEndpoints` as a bean in the module. Never edit identity's SecurityConfig for that.
 - Unbuilt modules have placeholder contracts ("Contract owned by <module> - extend in Phase 0"); the owner extends them.
-- Current dependencies: identity -> shared; merchants -> identity, shared; infrastructure -> shared.
+- Current dependencies: identity -> notifications, shared; merchants -> identity, shared; infrastructure -> shared.
+- Emails are sent only through `NotificationsApi.sendAccountEmail(AccountEmail)` (async, after the caller's
+  transaction commits; templates in `resources/templates/email/`; outcome in `notifications.email_log`).
+  notifications must never depend on identity (that would be a cycle): pass the recipient and name in `AccountEmail`.
 
 ## API rules
 - The contract is `API.md`. Implement it exactly; update it in the same PR when it changes.
@@ -72,6 +75,8 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
 - Schema changes ONLY through Flyway, in the module's folder: `src/main/resources/db/migration/<module>/`.
 - File name: `V<yyyyMMddHHmm>__<description>.sql` (current date and time, e.g. `V202611051430__add_parcels.sql`).
   Never V1, V2... A module's first migration starts with `CREATE SCHEMA IF NOT EXISTS <module>;`.
+  Flyway orders versions across all module folders: a migration must sort after the ones it changes.
+- No foreign keys at all, not even inside one schema (`DatabaseIsolationTest` checks it).
 - Additive only: never drop or rename a column or table (add a new one, migrate data, stop using the old one).
 - Never edit a migration after it has run once anywhere (the shared database has it). Add a new one.
 - 9 developers share one database, so Flyway runs with `out-of-order: true`, `ignore-migration-patterns: "*:missing,*:future"`
@@ -85,6 +90,13 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
 - Roles: CUSTOMER, MERCHANT, COURIER, ADMIN. Deny by default; open only what API.md marks public (via `PublicEndpoints`).
 - `@PreAuthorize` on every controller endpoint; `/api/v1/admin/**` additionally requires ADMIN in the filter chain.
 - Passwords hashed with BCrypt.
+- JWT claim `ver` = `users.token_version`. `SessionValidityFilter` checks status + version on every authenticated
+  request (`SessionStateCache`, 30 s); call `SessionStateCache.evict(userId)` whenever a user's status, password or
+  token version changes. Incrementing `token_version` ends all sessions.
+- Password sign-ups start as `PENDING_EMAIL_VERIFICATION` and confirm a 6-digit email code. One-time codes live in
+  `identity.verification_codes`, only as HMAC-SHA256 (`CodeHasher`); never log codes.
+- Per-IP rate limits on the auth endpoints: `AuthRateLimitFilter` (429 + Retry-After). Tests reset it per test.
+- Tests never send real email or do DNS: `CapturingMailSender` and `FakeMxLookup` (see `IntegrationTest`).
 
 ## Testing
 - JUnit 5 + Spring Boot Test + Testcontainers (PostgreSQL, RabbitMQ). Docker Desktop must be running.

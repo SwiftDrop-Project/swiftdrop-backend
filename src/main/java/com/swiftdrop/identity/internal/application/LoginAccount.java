@@ -5,8 +5,11 @@ import com.swiftdrop.identity.UserStatus;
 
 import java.util.UUID;
 
-/** What the auth module needs to check a login. {@code passwordHash} is null for Google-only accounts. */
-public record LoginAccount(UUID id, String passwordHash, Role role, UserStatus status) {
+/**
+ * What the auth flows need to check a login and issue a token. {@code passwordHash} is null for Google-only
+ * accounts; {@code tokenVersion} goes into the token's "ver" claim.
+ */
+public record LoginAccount(UUID id, String passwordHash, Role role, UserStatus status, int tokenVersion) {
 
     /** Keeps the password hash out of logs. */
     @Override

@@ -26,7 +26,9 @@ Change it in the same PR as the code, and tell the frontend team.
 }
 ```
 - `role`: `CUSTOMER` | `MERCHANT` | `COURIER` | `ADMIN`
-- `status`: `ACTIVE` | `PENDING_APPROVAL` | `REJECTED` | `DISABLED` | `PROFILE_INCOMPLETE`
+- `status`: `ACTIVE` | `PENDING_EMAIL_VERIFICATION` | `PENDING_APPROVAL` | `REJECTED` | `DISABLED` | `PROFILE_INCOMPLETE`
+  - `PENDING_EMAIL_VERIFICATION`: signed up with a password and has not entered the 6-digit code from the
+    verification email yet (see [Email verification](#email-verification)). Cannot log in.
   - `PROFILE_INCOMPLETE`: signed up with Google and has not called `POST /auth/complete-profile` yet
     (see [Google sign-in](#google-sign-in)). The frontend sends these users to the complete-profile page.
 - `phone`: `null` only while `status` is `PROFILE_INCOMPLETE`.
@@ -50,9 +52,13 @@ Change it in the same PR as the code, and tell the frontend team.
 | HTTP | code | When |
 |---|---|---|
 | 400 | `VALIDATION_FAILED` | Invalid request body |
-| 401 | `UNAUTHENTICATED` | Not logged in / token expired |
+| 400 | `INVALID_CODE` | Wrong 6-digit code, or no code waiting for this email/identifier (also for unknown accounts) |
+| 400 | `CODE_EXPIRED` | The code is older than 10 minutes: ask for a new one |
+| 400 | `TOO_MANY_ATTEMPTS` | 5 wrong tries: this code no longer works, even the right one. Ask for a new one |
+| 401 | `UNAUTHENTICATED` | Not logged in / token expired / session ended (password changed, account disabled) |
 | 401 | `INVALID_CREDENTIALS` | Wrong identifier or password |
 | 403 | `FORBIDDEN` | Logged in, wrong role |
+| 403 | `EMAIL_NOT_VERIFIED` | Login with the right password, but the email is not confirmed yet |
 | 403 | `ACCOUNT_PENDING_APPROVAL` | Merchant not approved yet |
 | 403 | `ACCOUNT_REJECTED` | Merchant application rejected |
 | 403 | `ACCOUNT_DISABLED` | Account disabled by admin |
@@ -63,7 +69,31 @@ Change it in the same PR as the code, and tell the frontend team.
 | 409 | `PHONE_ALREADY_REGISTERED` | Mobile number already in use |
 | 409 | `PROFILE_ALREADY_COMPLETE` | `POST /auth/complete-profile` for an account that is not `PROFILE_INCOMPLETE` |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | Request body is not `application/json` |
+| 429 | `TOO_MANY_REQUESTS` | Too many requests from this IP address; the `Retry-After` header says how many seconds to wait |
 | 500 | `INTERNAL_ERROR` | Anything unexpected (generic message only) |
+
+Messages of the new codes (show them as-is):
+
+| code | message |
+|---|---|
+| `EMAIL_NOT_VERIFIED` | Confirm your email address to continue. Enter the 6-digit code we emailed you. |
+| `INVALID_CODE` | That code isn't right. Check it and try again. |
+| `CODE_EXPIRED` | This code has expired. Ask for a new one. |
+| `TOO_MANY_ATTEMPTS` | Too many wrong codes. Ask for a new one. |
+| `TOO_MANY_REQUESTS` | Too many attempts. Please wait a moment and try again. |
+
+**Rate limits** (per client IP; over the limit → `429 TOO_MANY_REQUESTS` + `Retry-After: <seconds>`; CORS exposes
+`Retry-After`, so the frontend can read it):
+
+| Endpoint | Limit |
+|---|---|
+| `POST /auth/login` | 10 per minute |
+| `POST /auth/register` | 10 per 10 minutes |
+| `POST /auth/email-verification/verify` | 10 per minute |
+| `POST /auth/email-verification/resend` | 5 per minute |
+| `POST /auth/password/forgot` | 5 per minute |
+| `POST /auth/password/reset` | 10 per minute |
+| `POST /auth/password/change` | 10 per minute |
 
 `VALIDATION_FAILED` is also returned for unreadable JSON, unknown enum values (e.g. `pickupDistrict: "XYZ"` → `fieldErrors.pickupDistrict`)
 and bad query/path parameters (e.g. a non-UUID id).
@@ -77,7 +107,12 @@ and bad query/path parameters (e.g. a non-UUID id).
 | `fullName`, `contactPerson` | 2-100 chars | Enter your full name. |
 | `phone` | Sri Lankan mobile. Accept `0771234567`, `771234567`, `+94771234567`, spaces allowed. Stored as `+94771234567` (`+947` + 8 digits) | Enter a Sri Lankan mobile number, like 077 123 4567. |
 | `email` | Valid email, max 254, stored lower-case | Enter a full email address, like name@example.com |
-| `password` | 8-72 chars, at least one letter and one number | Use at least 8 characters, including a number. |
+| `email` (register only) | The domain must have MX records (if DNS itself fails, the email is allowed) | We couldn't find this email domain. Check for typos. |
+| `email` (register only) | Not a disposable-inbox domain (e.g. mailinator.com, yopmail.com) | Use a permanent email address. |
+| `password`, `newPassword` | 8-72 chars, at least one letter and one number | Use at least 8 characters, including a number. |
+| `code` | Exactly 6 digits | Enter the 6-digit code. |
+| `identifier` (forgot/reset) | Not blank, max 254 | Enter your mobile number or email. |
+| `currentPassword` | Not blank | Enter your current password. |
 | `businessName` | 2-120 chars | Enter your business name. |
 | `businessRegNo` | Optional, max 30 | - |
 | `parcelsPerMonth` | `UNDER_50` \| `FROM_50_TO_200` \| `FROM_200_TO_1000` \| `OVER_1000` | Select a range. |
@@ -121,9 +156,24 @@ Merchant:
 ```
 
 Responses:
-- `201` CUSTOMER: User + `Set-Cookie: SD_TOKEN` (customer is logged in immediately, as with `rememberMe: false`)
-- `201` MERCHANT: User with `status: PENDING_APPROVAL`, **no cookie** (cannot log in until approved)
-- `400` `VALIDATION_FAILED` · `409` `EMAIL_ALREADY_REGISTERED` / `PHONE_ALREADY_REGISTERED`
+- `201` CUSTOMER and MERCHANT: User with `status: PENDING_EMAIL_VERIFICATION`, **no cookie**. A 6-digit code is
+  emailed to the address ("Your SwiftDrop verification code", valid 10 minutes). The frontend shows the
+  "enter the code" page and calls [`POST /auth/email-verification/verify`](#post-authemail-verificationverify-public).
+  Merchants also get `merchant` with `approvalStatus: PENDING`.
+- `400` `VALIDATION_FAILED` (including the email domain checks) · `409` `EMAIL_ALREADY_REGISTERED` / `PHONE_ALREADY_REGISTERED`
+- `429` `TOO_MANY_REQUESTS`
+
+```json
+{
+  "id": "6f1c2a0e-1b2c-4d5e-9f00-1a2b3c4d5e6f",
+  "fullName": "Ayesha Fernando",
+  "email": "ayesha@example.com",
+  "phone": "+94771234567",
+  "role": "CUSTOMER",
+  "status": "PENDING_EMAIL_VERIFICATION",
+  "merchant": null
+}
+```
 
 Only `CUSTOMER` and `MERCHANT` can self-register. Couriers and admins are created by an admin (or the seeder).
 A missing or other `accountType` (e.g. `COURIER`) → `400` with `fieldErrors.accountType`.
@@ -139,9 +189,12 @@ Email duplicates are checked case-insensitively, phone duplicates after normalis
 - `400` `VALIDATION_FAILED`: blank `identifier` or `password`
 - `401` `INVALID_CREDENTIALS`: "The mobile number, email or password is incorrect." (same response for unknown user,
   wrong password, and accounts created with Google, which have no password)
+- `403` `EMAIL_NOT_VERIFIED`: the email was never confirmed. The frontend shows the "enter the code" page
+  (and may call `POST /auth/email-verification/resend` for a fresh code).
 - `403` `ACCOUNT_PENDING_APPROVAL`: "Your merchant account is waiting for approval. We'll email you when it's ready."
 - `403` `ACCOUNT_REJECTED` / `ACCOUNT_DISABLED`
 - The 403 codes are only returned when the password is correct (otherwise `401`).
+- `429` `TOO_MANY_REQUESTS`
 
 ### `POST /auth/logout` (any)
 - `204`, clears the cookie (`Max-Age=0`)
@@ -183,6 +236,77 @@ Responses:
 - `400` `VALIDATION_FAILED` (missing or other `accountType` → `fieldErrors.accountType`)
 - `401` `UNAUTHENTICATED` · `409` `PHONE_ALREADY_REGISTERED` · `409` `PROFILE_ALREADY_COMPLETE`
 
+### Email verification
+
+Every password sign-up (`POST /auth/register`) must confirm its email with a 6-digit code before it can log in.
+Google accounts are verified by Google, and seeded accounts are created verified: neither gets a code.
+
+Codes (also for password reset): 6 random digits, valid **10 minutes**, dead after **5 wrong tries**
+(`TOO_MANY_ATTEMPTS`), used once, and replaced by a newer code of the same kind. At most one new code per
+**60 seconds** and **5 codes per hour** per account; requests beyond that are answered the same way but send nothing
+(the frontend shows a 60-second countdown on its "Send a new code" button).
+
+#### `POST /auth/email-verification/verify` (public)
+```json
+{ "email": "ayesha@example.com", "code": "482913" }
+```
+- `200` CUSTOMER: User with `status: ACTIVE` + `Set-Cookie: SD_TOKEN` (logged in, as with `rememberMe: false`)
+- `200` MERCHANT: User with `status: PENDING_APPROVAL`, `merchant.approvalStatus: PENDING`, **no cookie**
+  (waits for an admin; only now does the application appear in `GET /admin/merchants`)
+- `400` `VALIDATION_FAILED` (`fieldErrors.email` / `fieldErrors.code`)
+- `400` `INVALID_CODE` (also for an unknown email or an already verified account) · `400` `CODE_EXPIRED` ·
+  `400` `TOO_MANY_ATTEMPTS` · `429` `TOO_MANY_REQUESTS`
+
+#### `POST /auth/email-verification/resend` (public)
+```json
+{ "email": "ayesha@example.com" }
+```
+- `202`, always (whether or not the email is registered or waiting for verification):
+  ```json
+  { "message": "If this email is waiting for verification, we've sent a new code." }
+  ```
+- `400` `VALIDATION_FAILED` · `429` `TOO_MANY_REQUESTS`
+
+### Passwords
+
+#### `POST /auth/password/forgot` (public)
+```json
+{ "identifier": "0771234567 or name@example.com" }
+```
+Same `identifier` rules as login. If an account matches, a 6-digit code ("Your SwiftDrop password reset code")
+is emailed to **that account's email** (also when the identifier was a mobile number).
+- `202`, always, with the same body:
+  ```json
+  { "message": "If an account matches, we've sent a code to its email." }
+  ```
+- `400` `VALIDATION_FAILED` (`fieldErrors.identifier`) · `429` `TOO_MANY_REQUESTS`
+
+#### `POST /auth/password/reset` (public)
+```json
+{ "identifier": "0771234567", "code": "482913", "newPassword": "newSecret456" }
+```
+`identifier` is any identifier of the same account (email or mobile). `newPassword` follows the register
+password rules.
+- `204`, no body, no cookie: the password is changed, **every** existing session of the account ends, and a
+  "Your SwiftDrop password was changed" email is sent. The frontend sends the user to the login page.
+- Also works for accounts created with Google (they get their first password) and for accounts still waiting for
+  email verification (the code proves the email, so they become `ACTIVE` / `PENDING_APPROVAL`).
+- `400` `VALIDATION_FAILED` (`fieldErrors.identifier` / `code` / `newPassword`)
+- `400` `INVALID_CODE` (also for unknown identifiers) · `400` `CODE_EXPIRED` · `400` `TOO_MANY_ATTEMPTS` ·
+  `429` `TOO_MANY_REQUESTS`
+
+#### `POST /auth/password/change` (logged in)
+```json
+{ "currentPassword": "secret123", "newPassword": "newSecret456" }
+```
+- `204` + `Set-Cookie: SD_TOKEN` (a fresh token with the same lifetime as the current one). Every **other**
+  session of the user ends; a "password was changed" email is sent.
+- `400` `VALIDATION_FAILED`:
+  - `fieldErrors.currentPassword`: "Your current password is incorrect." (or, for an account created with Google:
+    "This account has no password yet. Use Forgot password to set one.")
+  - `fieldErrors.newPassword`: the register password rule
+- `401` `UNAUTHENTICATED` · `429` `TOO_MANY_REQUESTS`
+
 ### `GET /meta/districts` (public)
 ```json
 [ { "code": "AMPARA", "name": "Ampara" }, { "code": "COLOMBO", "name": "Colombo" } ]
@@ -193,6 +317,7 @@ All 25 districts of Sri Lanka, sorted by name.
 No login → `401 UNAUTHENTICATED`; any other role → `403 FORBIDDEN`.
 - `GET /admin/merchants?status=PENDING`
   `status`: `PENDING` (default) | `APPROVED` | `REJECTED`. Oldest application first. `createdAt` = sign-up time.
+  Merchants who have not confirmed their email yet (`PENDING_EMAIL_VERIFICATION`) are not listed.
   ```json
   [ { "userId": "...", "businessName": "...", "contactPerson": "...", "email": "...", "phone": "...",
       "pickupDistrict": "COLOMBO", "city": "...", "parcelsPerMonth": "UNDER_50", "createdAt": "2026-11-01T10:15:00Z" } ]
@@ -210,10 +335,14 @@ No login → `401 UNAUTHENTICATED`; any other role → `403 FORBIDDEN`.
 - `rememberMe: true` → `Max-Age` = `JWT_REMEMBER_ME_DAYS` (7 days), token valid 7 days.
 - `rememberMe: false` → no `Max-Age` (ends when the browser closes), token valid `JWT_EXPIRY_MINUTES` (60).
 - JWT: HS256 signed with `JWT_SECRET` (at least 32 characters; the backend refuses to start otherwise).
-  Claims: `sub` (user id), `role`, `status`, `iat`, `exp`. No personal data in the token.
+  Claims: `sub` (user id), `role`, `status`, `ver` (token version), `iat`, `exp`. No personal data in the token.
   A token with `status: PROFILE_INCOMPLETE` only works for `GET /auth/me` and `POST /auth/complete-profile`
   (`403 PROFILE_INCOMPLETE` everywhere else that needs a login).
-- A token stays valid until it expires, even if the account is disabled later (disabled users cannot log in again).
+- Sessions can end before the token expires. On every request that needs a login the backend checks the account
+  (cached for at most 30 seconds): it must still exist, be `ACTIVE` or `PROFILE_INCOMPLETE`, and `ver` must match.
+  Otherwise `401 UNAUTHENTICATED` and the cookie is cleared (`Max-Age=0`); the frontend sends the user to login.
+  This happens after a password reset (all sessions), a password change (the other sessions), when an admin
+  disables or rejects the account, and to tokens issued before this check existed (no `ver`).
 - Public endpoints ignore the cookie, so an expired cookie never blocks login, register or logout.
 - CSRF: the cookie is `SameSite=Lax`, CORS allows only `FRONTEND_URL` with credentials, and write endpoints only accept `application/json`.
 
@@ -236,6 +365,9 @@ Flow:
 3. The backend checks Google's `email_verified` claim, then finds the account by Google id, then by email.
    - Found by email (e.g. a password account): the Google account is linked to it. The user keeps their role
      and can still log in with their password.
+   - Found by email, but still `PENDING_EMAIL_VERIFICATION`: Google has proved the email, so the account is
+     verified (customer → `ACTIVE`, merchant → `PENDING_APPROVAL`) and its password is **removed** (whoever chose it
+     never proved they own the address). The owner can set a password with `POST /auth/password/forgot`.
    - Not found: a new `CUSTOMER` with `status: PROFILE_INCOMPLETE` is created (name and email from Google,
      no password, no phone).
 4. The browser is redirected to the frontend:
@@ -270,3 +402,15 @@ Google tokens are used once to read the user and never stored. Logs never contai
   - `merchant@swiftdrop.lk` (MERCHANT, approved), mobile `0770000002`
   - `courier@swiftdrop.lk` (COURIER), mobile `0770000003`
 - The admin uses mobile `0770000000`. Existing accounts (same email) are never changed.
+- Seed accounts are created with a verified email (no code needed).
+
+## Emails
+
+Sent by the backend over SMTP (Mailpit locally: <http://localhost:8025>; Gmail on the shared setup), in the
+background, only after the request's changes are saved. Subjects:
+
+| When | Subject |
+|---|---|
+| Register, resend | Your SwiftDrop verification code |
+| Forgot password | Your SwiftDrop password reset code |
+| Password reset or changed | Your SwiftDrop password was changed |
