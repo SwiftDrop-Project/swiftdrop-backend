@@ -10,8 +10,9 @@ import java.util.UUID;
  * <p>The assigned courier is stored on the parcel by delivery (dispatch owns no schema; it only asks delivery to
  * assign one). {@code customerId}, {@code merchantId} and {@code assignedCourierId} are identity user ids.
  *
- * <p>Contains personal data (the contacts and the proof recipient's name): never log it, and never show it on the
- * public tracking page, which may show only the status, city and district.
+ * <p>Contains personal data (the contacts, the proof recipient's name and the free-text instructions): never log it,
+ * and never show it on the public tracking page, which may show only the status, city and district.
+ * {@link #toString()} leaves the personal data out.
  *
  * <p>Contract owned by delivery; agreed with WP9 (courier). WP3 may add fields: append them at the end so
  * existing callers keep compiling with few changes.
@@ -61,4 +62,21 @@ public record DeliverySnapshot(
         BigDecimal feeAmount,
         String currency,
         long version) {
+
+    /**
+     * Every field except the proof recipient's name and the instructions; the contacts show only city and district.
+     * A field added later is left out until it is added here, so new personal data is hidden by default.
+     */
+    @Override
+    public String toString() {
+        return "DeliverySnapshot[id=" + id + ", trackingNumber=" + trackingNumber + ", status=" + status
+                + ", customerId=" + customerId + ", merchantId=" + merchantId
+                + ", pickup=" + pickup + ", recipient=" + recipient
+                + ", weightKg=" + weightKg + ", codAmount=" + codAmount
+                + ", assignedCourierId=" + assignedCourierId + ", assignedAt=" + assignedAt
+                + ", createdAt=" + createdAt + ", updatedAt=" + updatedAt
+                + ", hasProofPhoto=" + hasProofPhoto + ", failureReason=" + failureReason
+                + ", merchantOrderRef=" + merchantOrderRef + ", feeAmount=" + feeAmount + ", currency=" + currency
+                + ", version=" + version + "]";
+    }
 }

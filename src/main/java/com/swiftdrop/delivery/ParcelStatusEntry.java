@@ -15,4 +15,11 @@ import java.time.Instant;
  */
 public record ParcelStatusEntry(ParcelStatus status, String note, FailureReason failureReason, String actorRole,
                                 Instant occurredAt) {
+
+    /** Leaves out the note: free text that may hold personal data. */
+    @Override
+    public String toString() {
+        return "ParcelStatusEntry[status=" + status + ", failureReason=" + failureReason + ", actorRole=" + actorRole
+                + ", occurredAt=" + occurredAt + "]";
+    }
 }
