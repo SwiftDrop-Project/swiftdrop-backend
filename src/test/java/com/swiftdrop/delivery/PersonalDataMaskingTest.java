@@ -20,6 +20,10 @@ class PersonalDataMaskingTest {
             new ContactAddress("Nimal Perera", "+94771234567", "12 Galle Road", "Colombo 03", District.COLOMBO);
     private static final ContactAddress DROPOFF =
             new ContactAddress("Kamala Silva", "+94719876543", "45 Peradeniya Road", "Kandy", District.KANDY);
+    private static final DeliveryContact PICKUP_CONTACT =
+            new DeliveryContact("Nimal Perera", "+94771234567", "12 Galle Road", "Colombo 03", District.COLOMBO);
+    private static final DeliveryContact RECIPIENT_CONTACT =
+            new DeliveryContact("Kamala Silva", "+94719876543", "45 Peradeniya Road", "Kandy", District.KANDY);
 
     @Test
     void contactAddressShowsOnlyCityAndDistrict() {
@@ -27,13 +31,18 @@ class PersonalDataMaskingTest {
     }
 
     @Test
-    void snapshotHidesThePickupAndDropoffContacts() {
-        var snapshot = new DeliverySnapshot(UUID.randomUUID(), "SD-7K3M-Q9TX", UUID.randomUUID(), null, null, null,
-                CREATED, PICKUP, DROPOFF, new BigDecimal("2.00"), "Books", new BigDecimal("450.00"), "LKR", 0,
-                Instant.now(), Instant.now());
+    void deliveryContactShowsOnlyCityAndDistrict() {
+        assertThat(PICKUP_CONTACT.toString()).isEqualTo("DeliveryContact[city=Colombo 03, district=COLOMBO]");
+    }
+
+    @Test
+    void snapshotHidesThePickupAndRecipientContacts() {
+        var snapshot = new DeliverySnapshot(UUID.randomUUID(), "SD2611004817", CREATED, UUID.randomUUID(), null,
+                PICKUP_CONTACT, RECIPIENT_CONTACT, new BigDecimal("2.00"), null, null, null, null, Instant.now(),
+                Instant.now(), null, false, null, null, new BigDecimal("450.00"), "LKR", 0);
 
         assertThat(snapshot.toString())
-                .contains("SD-7K3M-Q9TX", "Kandy")
+                .contains("SD2611004817", "Kandy")
                 .doesNotContain("Nimal Perera", "+94771234567", "12 Galle Road",
                         "Kamala Silva", "+94719876543", "45 Peradeniya Road");
     }
@@ -68,12 +77,12 @@ class PersonalDataMaskingTest {
 
     @Test
     void statusEventHidesTheNoteAndFailureReason() {
-        var event = new ParcelStatusChanged(UUID.randomUUID(), UUID.randomUUID(), 3, "SD-7K3M-Q9TX",
+        var event = new ParcelStatusChanged(UUID.randomUUID(), UUID.randomUUID(), 3, "SD2611004817",
                 UUID.randomUUID(), null, OUT_FOR_DELIVERY, FAILED, UUID.randomUUID(), "COURIER",
                 "Called +94719876543 twice", "Kamala Silva was not at home", Instant.now());
 
         assertThat(event.toString())
-                .contains("SD-7K3M-Q9TX", "OUT_FOR_DELIVERY -> FAILED", "parcelVersion=3")
+                .contains("SD2611004817", "OUT_FOR_DELIVERY -> FAILED", "parcelVersion=3")
                 .doesNotContain("+94719876543", "Kamala Silva");
     }
 }
