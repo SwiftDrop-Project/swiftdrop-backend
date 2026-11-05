@@ -9,6 +9,7 @@ import java.util.UUID;
 
 import static com.swiftdrop.delivery.ParcelStatus.CREATED;
 import static com.swiftdrop.delivery.ParcelStatus.DELIVERED;
+import static com.swiftdrop.delivery.ParcelStatus.FAILED;
 import static com.swiftdrop.delivery.ParcelStatus.OUT_FOR_DELIVERY;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -53,5 +54,26 @@ class PersonalDataMaskingTest {
         assertThat(entry.toString())
                 .contains("OUT_FOR_DELIVERY -> DELIVERED", "COURIER")
                 .doesNotContain("Kamala Silva", "security guard");
+    }
+
+    @Test
+    void outboxMessageHidesThePayload() {
+        var message = new OutboxMessage(UUID.randomUUID(), UUID.randomUUID(), "parcel.status.changed",
+                "{\"note\":\"Call Kamala on +94719876543\"}", Instant.now());
+
+        assertThat(message.toString())
+                .contains("parcel.status.changed")
+                .doesNotContain("Kamala", "+94719876543");
+    }
+
+    @Test
+    void statusEventHidesTheNoteAndFailureReason() {
+        var event = new ParcelStatusChanged(UUID.randomUUID(), UUID.randomUUID(), 3, "SD-7K3M-Q9TX",
+                UUID.randomUUID(), null, OUT_FOR_DELIVERY, FAILED, UUID.randomUUID(), "COURIER",
+                "Called +94719876543 twice", "Kamala Silva was not at home", Instant.now());
+
+        assertThat(event.toString())
+                .contains("SD-7K3M-Q9TX", "OUT_FOR_DELIVERY -> FAILED", "parcelVersion=3")
+                .doesNotContain("+94719876543", "Kamala Silva");
     }
 }
