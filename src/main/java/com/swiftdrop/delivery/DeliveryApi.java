@@ -2,6 +2,7 @@ package com.swiftdrop.delivery;
 
 import com.swiftdrop.shared.web.PageResponse;
 
+import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -76,4 +77,11 @@ public interface DeliveryApi {
 
     /** A parcel's status timeline, oldest entry first. Empty for an unknown parcel. */
     List<StatusHistoryEntry> history(UUID parcelId);
+
+    /**
+     * Parcel counts per Sri Lanka day from {@code from} to {@code to}, both included, for the reports.
+     * {@code from} must not be after {@code to} and the range is at most 366 days. The reporting module checks the
+     * admin's dates and answers 400, so a bad range here is a programming error (IllegalArgumentException).
+     */
+    DeliveryStats stats(LocalDate from, LocalDate to);
 }
