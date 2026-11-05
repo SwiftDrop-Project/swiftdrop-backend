@@ -68,9 +68,11 @@ Change it in the same PR as the code, and tell the frontend team.
 | 409 | `EMAIL_ALREADY_REGISTERED` | Email already in use |
 | 409 | `PHONE_ALREADY_REGISTERED` | Mobile number already in use |
 | 409 | `PROFILE_ALREADY_COMPLETE` | `POST /auth/complete-profile` for an account that is not `PROFILE_INCOMPLETE` |
+| 409 | `INVALID_STATUS_TRANSITION` | The parcel can't move to that status from its current one (see [Courier](#courier-role-courier-only)) |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | Request body is not `application/json` |
 | 429 | `TOO_MANY_REQUESTS` | Too many requests from this IP address; the `Retry-After` header says how many seconds to wait |
 | 500 | `INTERNAL_ERROR` | Anything unexpected (generic message only) |
+| 503 | `SERVICE_UNAVAILABLE` | A part of SwiftDrop isn't running yet (e.g. courier endpoints before parcels exist on the server) |
 
 Messages of the new codes (show them as-is):
 
@@ -81,6 +83,8 @@ Messages of the new codes (show them as-is):
 | `CODE_EXPIRED` | This code has expired. Ask for a new one. |
 | `TOO_MANY_ATTEMPTS` | Too many wrong codes. Ask for a new one. |
 | `TOO_MANY_REQUESTS` | Too many attempts. Please wait a moment and try again. |
+| `INVALID_STATUS_TRANSITION` | This parcel can't move to that status now. Refresh to see its latest status. |
+| `SERVICE_UNAVAILABLE` | This isn't available yet. Please try again later. |
 
 **Rate limits** (per client IP; over the limit → `429 TOO_MANY_REQUESTS` + `Retry-After: <seconds>`; CORS exposes
 `Retry-After`, so the frontend can read it):
@@ -488,4 +492,120 @@ Authenticated with either the `SD_TOKEN` cookie **or** an `X-Api-Key: <rawKey>` 
 `GET /merchant/orders`
 
 > Full request/response shapes will be documented here when WP3's `DeliveryApi` contract is finalised.
+
+---
+
+## Courier (role `COURIER` only)
+
+The logged-in courier's parcels (WP9). No login → `401 UNAUTHENTICATED`; any other role (including `ADMIN`) →
+`403 FORBIDDEN`. A courier only sees parcels assigned to them: another courier's parcel, an unknown id, or a parcel
+that was reassigned to someone else → `404 NOT_FOUND`. "Today" is the current day in Sri Lankan time (Asia/Colombo).
+
+Until parcels exist on the server (the delivery module is not implemented yet), every courier endpoint answers
+`503 SERVICE_UNAVAILABLE`. For local demos, `SWIFTDROP_FAKE_DELIVERY=true` (with `SEED_DEMO_USERS=true`) gives
+`courier@swiftdrop.lk` a few in-memory demo parcels; they are not saved and a restart resets them (temporary).
+
+### Courier delivery (response)
+```json
+{
+  "parcelId": "0b6c7c1e-5d0f-4a51-9d2e-3a4f5b6c7d8e",
+  "trackingNumber": "SD2611004817",
+  "status": "OUT_FOR_DELIVERY",
+  "stop": "DELIVERY",
+  "pickup": { "name": "Lanka Crafts", "phone": "+94712345678", "address": "12 High Level Road",
+              "city": "Nugegoda", "district": "COLOMBO" },
+  "recipient": { "name": "Nimal Perera", "phone": "+94771234567", "address": "45 Peradeniya Road",
+                 "city": "Kandy", "district": "KANDY" },
+  "weightKg": 1.2,
+  "codAmount": 2450.00,
+  "instructions": "Call before you arrive.",
+  "assignedAt": "2026-11-05T02:30:00Z",
+  "updatedAt": "2026-11-05T05:10:00Z",
+  "nextStatuses": ["DELIVERED", "FAILED"]
+}
+```
+- `stop`: `PICKUP` while `status` is `CREATED`, otherwise `DELIVERY`.
+- `codAmount`: cash to collect in rupees; `null` when already paid. `instructions` may be `null`.
+- `nextStatuses`: what this courier may set now, in life-cycle order (empty once `DELIVERED` or `FAILED`).
+
+| From | Allowed next |
+|---|---|
+| `CREATED` | `PICKED_UP` |
+| `PICKED_UP` | `IN_TRANSIT` |
+| `IN_TRANSIT` | `OUT_FOR_DELIVERY` |
+| `OUT_FOR_DELIVERY` | `DELIVERED`, `FAILED` |
+| `DELIVERED`, `FAILED` | none |
+
+`failureReason`: `RECIPIENT_UNAVAILABLE` | `WRONG_ADDRESS` | `RECIPIENT_REFUSED` | `ADDRESS_UNREACHABLE` |
+`PARCEL_DAMAGED` | `OTHER`
+
+### `GET /courier/deliveries/today`
+```json
+{ "date": "2026-11-05", "toDo": 5, "done": 2, "items": [ /* Courier delivery */ ] }
+```
+Every open parcel assigned to the courier (whatever day it was assigned), plus the ones they finished today.
+Order: pickups (`CREATED`, oldest `assignedAt` first), then the other open parcels (oldest `assignedAt` first), then
+finished ones (newest first). `toDo` = not finished, `done` = finished today.
+- `200` · `401` · `403` · `503`
+
+### `GET /courier/deliveries/history?page=0&size=20&trackingNumber=SD2611004817`
+Parcels this courier delivered or marked failed, newest first, as a page of Courier delivery:
+```json
+{ "content": [ /* Courier delivery */ ], "page": 0, "size": 20, "totalElements": 42, "totalPages": 3 }
+```
+`page` from 0 (default 0); `size` 1-100 (default 20); `trackingNumber` optional, spaces and case ignored.
+- `200` · `400` `VALIDATION_FAILED` (`fieldErrors.page` / `fieldErrors.size`) · `401` · `403` · `503`
+
+### `GET /courier/deliveries/{parcelId}`
+All Courier delivery fields, plus:
+```json
+{
+  "history": [
+    { "status": "OUT_FOR_DELIVERY", "note": null, "failureReason": null, "occurredAt": "2026-11-05T05:10:00Z" },
+    { "status": "PICKED_UP", "note": "Collected from front desk", "failureReason": null, "occurredAt": "2026-11-05T03:00:00Z" }
+  ],
+  "proof": null,
+  "failureReason": null
+}
+```
+- `history`: newest first. `proof`: `{ "recipientName": "Nimal Perera", "hasPhoto": false }` once `DELIVERED`,
+  otherwise `null`. `failureReason`: only once `FAILED`.
+- `200` · `400` (non-UUID id) · `401` · `403` · `404` `NOT_FOUND` · `503`
+
+### `POST /courier/deliveries/{parcelId}/status`
+```json
+{ "status": "PICKED_UP", "note": "Collected from front desk" }
+```
+```json
+{ "status": "DELIVERED", "recipientName": "Nimal Perera", "note": "Left with the guard" }
+```
+```json
+{ "status": "FAILED", "failureReason": "RECIPIENT_UNAVAILABLE", "note": "No answer, called twice" }
+```
+- `DELIVERED` needs `recipientName`. `FAILED` needs `failureReason`; `OTHER` also needs a `note`.
+- `recipientName` only with `DELIVERED`; `failureReason` only with `FAILED`. `note` is optional otherwise.
+- `200`: the updated parcel (same shape as `GET /courier/deliveries/{parcelId}`). Customers, merchants and the
+  tracking page are told through the delivery module's `ParcelStatusChanged` event (`actorRole: COURIER`).
+- `400` `VALIDATION_FAILED` · `401` · `403` · `404` `NOT_FOUND` · `503`
+- `409` `INVALID_STATUS_TRANSITION`: not allowed from the parcel's current status (e.g. a skipped step, the button
+  pressed twice, or the dispatcher changed it). The frontend reloads the parcel.
+- Checked in this order: the request (400), the parcel is yours (404), the step is allowed (409).
+
+Proof-of-delivery photos (upload and download) come in a later version.
+
+### Validation rules (courier)
+
+| Field | Rule | Error message |
+|---|---|---|
+| `status` | Required, one of the parcel statuses | Select the new status. |
+| `note` | Optional, max 500 chars | Keep the note under 500 characters. |
+| `note` (`failureReason: OTHER`) | Required, 3-500 chars | Describe what went wrong. |
+| `recipientName` (`DELIVERED`) | Required, 2-100 chars | Enter the name of the person who received the parcel. |
+| `recipientName` with another status | Not allowed | Only for delivered parcels. |
+| `failureReason` (`FAILED`) | Required, one of the values above | Select why the delivery failed. |
+| `failureReason` with another status | Not allowed | Only for failed deliveries. |
+| `page` (history) | 0 or more | Use a page number of 0 or more. |
+| `size` (history) | 1-100 | Use a page size from 1 to 100. |
+
+An unknown `status` or `failureReason` value gives `400` with that field in `fieldErrors`.
 
