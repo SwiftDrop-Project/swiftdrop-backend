@@ -20,6 +20,8 @@ public enum ErrorCode {
     TOO_MANY_ATTEMPTS(HttpStatus.BAD_REQUEST, "Too many wrong codes. Ask for a new one."),
     TOO_MANY_REQUESTS(HttpStatus.TOO_MANY_REQUESTS, "Too many attempts. Please wait a moment and try again."),
     NOT_FOUND(HttpStatus.NOT_FOUND, "We couldn't find what you were looking for."),
+    API_KEY_REVOKED(HttpStatus.UNAUTHORIZED, "This API key has been revoked."),
+    MERCHANT_NOT_APPROVED(HttpStatus.FORBIDDEN, "Your merchant account is not approved yet."),
     METHOD_NOT_ALLOWED(HttpStatus.METHOD_NOT_ALLOWED, "This action is not supported here."),
     EMAIL_ALREADY_REGISTERED(HttpStatus.CONFLICT, "This email is already registered."),
     PHONE_ALREADY_REGISTERED(HttpStatus.CONFLICT, "This mobile number is already registered."),

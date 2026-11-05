@@ -414,3 +414,78 @@ background, only after the request's changes are saved. Subjects:
 | Register, resend | Your SwiftDrop verification code |
 | Forgot password | Your SwiftDrop password reset code |
 | Password reset or changed | Your SwiftDrop password was changed |
+
+---
+
+## Merchant API Keys (WP5)
+
+All endpoints require a logged-in `MERCHANT` cookie (`SD_TOKEN`).
+
+### Create API key
+`POST /merchant/api-keys`
+
+Request:
+```json
+{ "name": "Production key" }
+```
+- `name`: 1–80 characters, required.
+
+Response `201`:
+```json
+{
+  "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "name": "Production key",
+  "rawKey": "sd_a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+  "createdAt": "2026-11-05T10:00:00Z"
+}
+```
+> `rawKey` is shown **only once**. Store it securely — it cannot be retrieved again.
+
+---
+
+### List API keys
+`GET /merchant/api-keys`
+
+Response `200` — array, newest first:
+```json
+[
+  {
+    "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "name": "Production key",
+    "createdAt": "2026-11-05T10:00:00Z",
+    "revokedAt": null
+  }
+]
+```
+- `revokedAt`: `null` = active, ISO-8601 timestamp = revoked.
+
+---
+
+### Revoke API key
+`DELETE /merchant/api-keys/{id}`
+
+Response `200` — the key with `revokedAt` set. Idempotent.
+
+---
+
+### Rotate API key
+`POST /merchant/api-keys/{id}/rotate`
+
+Revokes the existing key and creates a new one with the same name.
+
+Response `200` — same shape as **Create**, with the new `rawKey` shown once.
+
+---
+
+## Merchant Orders (WP5 — coming in PR 3, after WP3 merges)
+
+Authenticated with either the `SD_TOKEN` cookie **or** an `X-Api-Key: <rawKey>` header.
+
+### Create order
+`POST /merchant/orders`
+
+### List orders
+`GET /merchant/orders`
+
+> Full request/response shapes will be documented here when WP3's `DeliveryApi` contract is finalised.
+
