@@ -17,4 +17,10 @@ public record ContactAddress(String name, String phone, String addressLine, Stri
         Objects.requireNonNull(city, "city");
         Objects.requireNonNull(district, "district");
     }
+
+    /** Only the city and district: names, phone numbers and street addresses must never reach the logs. */
+    @Override
+    public String toString() {
+        return "ContactAddress[city=" + city + ", district=" + district + "]";
+    }
 }
