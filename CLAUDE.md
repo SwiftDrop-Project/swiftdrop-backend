@@ -16,7 +16,7 @@ Every direct sub-package of `com.swiftdrop` is a module. `SwiftdropBackendApplic
 | `identity` | IdentityApi, UserSummary, CourierSummary, Role, UserStatus, MerchantProfiles (implemented by merchants) | `identity` | Viduranga |
 | `merchants` | MerchantApi, MerchantSummary, ApprovalStatus | `merchants` | Viduranga |
 | `pricing` | PricingApi, QuoteRequest, PriceQuote | `pricing` | TBD |
-| `delivery` | DeliveryApi, DeliveryOutboxApi, DeliverySnapshot, CreateDeliveryCommand, ChangeStatusCommand, ParcelStatus, ParcelStatusChanged | `delivery` (+ `outbox_events` later) | TBD |
+| `delivery` | DeliveryApi, DeliveryOutboxApi, OutboxMessage, DeliverySnapshot, DeliveryContact, CreateDeliveryCommand, ChangeStatusCommand, ParcelStatus, ParcelStatusEntry, ParcelStatusChanged, FailureReason, ProofPhoto, ProofPhotoRef, DeliveryStats | `delivery` (+ `outbox_events` later) | Pasindu |
 | `dispatch` | - | none | TBD |
 | `reporting` | - | none | TBD |
 | `tracking` | - | none | TBD |
@@ -46,7 +46,10 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
 - Controllers never return entities. Map to DTOs in `internal/dto`.
 - A module's public URLs: implement `shared.web.PublicEndpoints` as a bean in the module. Never edit identity's SecurityConfig for that.
 - Unbuilt modules have placeholder contracts ("Contract owned by <module> - extend in Phase 0"); the owner extends them.
-- Current dependencies: identity -> notifications, shared; merchants -> identity, shared; infrastructure -> shared.
+- Current dependencies: identity -> notifications, shared; merchants -> identity, shared; delivery -> shared; infrastructure -> shared.
+- delivery must never depend on identity: identity -> notifications, and notifications will consume
+  `ParcelStatusChanged` (notifications -> delivery), so that would be a cycle. User ids are plain UUIDs and roles are
+  plain names (e.g. `COURIER`); dispatch checks that a user is an active courier before calling `assignCourier`.
 - Emails are sent only through `NotificationsApi.sendAccountEmail(AccountEmail)` (async, after the caller's
   transaction commits; templates in `resources/templates/email/`; outcome in `notifications.email_log`).
   notifications must never depend on identity (that would be a cycle): pass the recipient and name in `AccountEmail`.
