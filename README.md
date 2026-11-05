@@ -34,7 +34,7 @@ architecture diagram). `SwiftdropBackendApplication` stays at the root.
 | `identity` | Register, log in, log out, current user, Google sign-in, complete-profile, JWTs, the `SD_TOKEN` cookie, roles, seed accounts, the security filter chain | `identity` | Viduranga | Built |
 | `merchants` | Merchant business profiles and the admin approval workflow (API keys later) | `merchants` | Viduranga | Built |
 | `pricing` | Delivery rates and price quotes | `pricing` | TBD | Placeholder |
-| `delivery` | Parcels, status changes, proof of delivery, receipts, outbox events | `delivery` | TBD | Placeholder |
+| `delivery` | Parcels, status changes, proof of delivery, receipts, outbox events | `delivery` | Pasindu | Contracts ready |
 | `dispatch` | Assigning parcels to couriers by zone | - | TBD | Placeholder |
 | `reporting` | Delivery and cash-on-delivery reports | - | TBD | Placeholder |
 | `tracking` | Parcel tracking by tracking number, live updates (SSE) | - | TBD | Placeholder |

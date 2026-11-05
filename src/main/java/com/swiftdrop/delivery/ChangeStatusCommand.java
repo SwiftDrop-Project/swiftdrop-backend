@@ -1,5 +1,6 @@
 package com.swiftdrop.delivery;
 
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -31,4 +32,12 @@ public record ChangeStatusCommand(
         FailureReason failureReason,
         String recipientName,
         UUID proofPhotoId) {
+
+    /** The parcel, the new status and who makes the change are always needed: a missing one is a caller's bug. */
+    public ChangeStatusCommand {
+        Objects.requireNonNull(parcelId, "parcelId");
+        Objects.requireNonNull(toStatus, "toStatus");
+        Objects.requireNonNull(actorId, "actorId");
+        Objects.requireNonNull(actorRole, "actorRole");
+    }
 }

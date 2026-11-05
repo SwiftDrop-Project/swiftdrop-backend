@@ -4,20 +4,71 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
 /**
- * What other modules may ask the delivery module (create parcels, change status, read parcels).
+ * What other modules may ask the delivery module: create parcels, assign couriers, change status, store proof
+ * photos, read parcels and count them for reports. The only way into the delivery module from outside it.
  *
- * <p>Contract owned by delivery. The methods below were agreed with WP9 (courier); the implementation is pending
- * (WP3). Creating parcels and assigning couriers (for dispatch) are still to be added by their owners.
+ * <p>Reads do not check who is asking: the calling module knows the logged-in user and must check ownership itself,
+ * using {@code customerId}, {@code merchantId} or {@code assignedCourierId} in the snapshot. Writes check their own
+ * rules and throw {@code shared.error} exceptions, which reach the client in the API.md error shape.
+ *
+ * <p>Contract owned by delivery (WP3); the courier methods were agreed with WP9 (courier).
  */
 public interface DeliveryApi {
 
+    // ---- Creating parcels and assigning couriers ----
+
+    /**
+     * Creates a parcel in {@link ParcelStatus#CREATED}. Asks pricing for the fee, then saves the parcel, its first
+     * history entry and a {@link ParcelStatusChanged} event in one transaction. If the merchant already sent an order
+     * with the same {@code merchantOrderRef}, that parcel is returned and nothing new is created, so a merchant can
+     * safely retry. Errors from pricing are passed on unchanged.
+     */
+    DeliverySnapshot create(CreateDeliveryCommand command);
+
+    /**
+     * Assigns a courier to a parcel that is still {@link ParcelStatus#CREATED} (sets {@code assignedCourierId} and
+     * {@code assignedAt}); calling it again replaces the courier. The status does not change, so no history entry or
+     * event is written. The caller (dispatch) must first check that {@code courierId} is an active courier, because
+     * delivery does not depend on identity.
+     *
+     * @throws com.swiftdrop.shared.error.NotFoundException     NOT_FOUND for an unknown parcel
+     * @throws com.swiftdrop.shared.error.BusinessRuleException PARCEL_NOT_ASSIGNABLE when the parcel was already
+     *                                                          picked up or is finished
+     */
+    DeliverySnapshot assignCourier(UUID parcelId, UUID courierId);
+
+    // ---- Reading parcels ----
+
     /** The parcel, or empty for an unknown id. */
     Optional<DeliverySnapshot> findById(UUID parcelId);
+
+    /**
+     * The parcel with this tracking number, or empty. The number is normalised first (spaces removed, upper case), so
+     * {@code " sd 2611 004817 "} finds {@code SD2611004817}.
+     */
+    Optional<DeliverySnapshot> findByTrackingNumber(String trackingNumber);
+
+    /** A customer's parcels, newest first. {@code status} null means every status; the page size is capped at 100. */
+    Page<DeliverySnapshot> findByCustomer(UUID customerId, ParcelStatus status, Pageable pageable);
+
+    /** A merchant's orders, newest first. Same filter and paging rules as {@link #findByCustomer}. */
+    Page<DeliverySnapshot> findByMerchant(UUID merchantId, ParcelStatus status, Pageable pageable);
+
+    /** Parcels in {@link ParcelStatus#CREATED} with no courier, oldest first, for the dispatcher to assign. */
+    List<DeliverySnapshot> findUnassigned();
+
+    /**
+     * The number of unfinished parcels per courier id (courier workloads). Couriers with none are not in the map,
+     * so read it with {@code getOrDefault(courierId, 0L)}.
+     */
+    Map<UUID, Long> countActiveByCourier();
 
     /**
      * Parcels assigned to the courier that are not finished (not DELIVERED or FAILED), plus the finished ones whose
@@ -36,6 +87,8 @@ public interface DeliveryApi {
     /** The parcel's status history, newest first. Empty for an unknown id. */
     List<ParcelStatusEntry> history(UUID parcelId);
 
+    // ---- Status changes and proof of delivery (agreed with WP9) ----
+
     /**
      * Moves the parcel to {@code command.toStatus()}, records the change in its history (and the proof or failure
      * reason) and writes {@link ParcelStatusChanged} to the outbox, all in one transaction.
@@ -48,7 +101,8 @@ public interface DeliveryApi {
      *                                                               {@link ParcelStatus#canMoveTo} is false for the
      *                                                               parcel's current status
      * @throws com.swiftdrop.shared.error.ForbiddenException         FORBIDDEN when {@code actorRole} is COURIER and
-     *                                                               {@code actorId} is not the assigned courier
+     *                                                               {@code actorId} is not the assigned courier, or
+     *                                                               when it is neither COURIER nor ADMIN
      * @throws com.swiftdrop.shared.error.FieldValidationException   field {@code proofPhotoId} when the photo was not
      *                                                               stored for this parcel
      */
@@ -64,4 +118,13 @@ public interface DeliveryApi {
 
     /** The photo attached to the parcel's proof of delivery, or empty when there is none. */
     Optional<ProofPhoto> findProofPhoto(UUID parcelId);
+
+    // ---- Reports (for WP4) ----
+
+    /**
+     * Parcel counts per Sri Lanka day from {@code from} to {@code to}, both included, for the reports.
+     * {@code from} must not be after {@code to} and the range is at most 366 days. The reporting module checks the
+     * admin's dates and answers 400, so a bad range here is a programming error (IllegalArgumentException).
+     */
+    DeliveryStats stats(LocalDate from, LocalDate to);
 }
