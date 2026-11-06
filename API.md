@@ -68,6 +68,8 @@ Change it in the same PR as the code, and tell the frontend team.
 | 409 | `EMAIL_ALREADY_REGISTERED` | Email already in use |
 | 409 | `PHONE_ALREADY_REGISTERED` | Mobile number already in use |
 | 409 | `PROFILE_ALREADY_COMPLETE` | `POST /auth/complete-profile` for an account that is not `PROFILE_INCOMPLETE` |
+| 409 | `INVALID_STATUS_TRANSITION` | The parcel can't move from its current status to the one asked for (e.g. DELIVERED → PICKED_UP) |
+| 409 | `PARCEL_NOT_ASSIGNABLE` | Assigning a courier to a parcel that was already picked up or is finished |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | Request body is not `application/json` |
 | 429 | `TOO_MANY_REQUESTS` | Too many requests from this IP address; the `Retry-After` header says how many seconds to wait |
 | 500 | `INTERNAL_ERROR` | Anything unexpected (generic message only) |
@@ -81,6 +83,8 @@ Messages of the new codes (show them as-is):
 | `CODE_EXPIRED` | This code has expired. Ask for a new one. |
 | `TOO_MANY_ATTEMPTS` | Too many wrong codes. Ask for a new one. |
 | `TOO_MANY_REQUESTS` | Too many attempts. Please wait a moment and try again. |
+| `INVALID_STATUS_TRANSITION` | This parcel can't move to that status now. Refresh to see its latest status. |
+| `PARCEL_NOT_ASSIGNABLE` | A courier can only be assigned before the parcel is picked up. |
 
 **Rate limits** (per client IP; over the limit → `429 TOO_MANY_REQUESTS` + `Retry-After: <seconds>`; CORS exposes
 `Retry-After`, so the frontend can read it):

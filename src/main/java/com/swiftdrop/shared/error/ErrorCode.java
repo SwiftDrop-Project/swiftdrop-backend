@@ -28,6 +28,7 @@ public enum ErrorCode {
     PROFILE_ALREADY_COMPLETE(HttpStatus.CONFLICT, "Your account is already set up."),
     INVALID_STATUS_TRANSITION(HttpStatus.CONFLICT,
             "This parcel can't move to that status now. Refresh to see its latest status."),
+    PARCEL_NOT_ASSIGNABLE(HttpStatus.CONFLICT, "A courier can only be assigned before the parcel is picked up."),
     UNSUPPORTED_MEDIA_TYPE(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "Send the request as JSON (application/json)."),
     INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "Something went wrong on our side. Please try again.");
 
