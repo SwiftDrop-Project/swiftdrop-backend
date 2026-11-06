@@ -220,6 +220,9 @@ Current migrations (the baseline for the new Neon database; the old `V2026110114
 | `merchants/V202611030905__merchants_baseline.sql` | `merchants` schema, `merchants.merchant_profiles` (no foreign keys) |
 | `identity/V202611031000__email_verification.sql` | Status `PENDING_EMAIL_VERIFICATION` (column widened to 30), `users.token_version`, `identity.verification_codes` |
 | `notifications/V202611031005__notifications_baseline.sql` | `notifications` schema, `notifications.email_log` |
+| `delivery/V202611052245__create_parcels.sql` | `delivery` schema, `delivery.parcels` (no foreign keys) |
+| `delivery/V202611060017__create_parcel_status_history.sql` | `delivery.parcel_status_history` (one row per status change) |
+| `delivery/V202611060024__create_outbox_events.sql` | `delivery.outbox_events` (the transactional outbox) |
 
 Flyway orders migrations by version across **all** module folders, so a new file must also be newer than the
 migrations it depends on (e.g. a change to `identity.users` must sort after the identity baseline).
