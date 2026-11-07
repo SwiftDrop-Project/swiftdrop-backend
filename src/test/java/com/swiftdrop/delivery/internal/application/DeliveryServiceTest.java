@@ -1,9 +1,11 @@
 package com.swiftdrop.delivery.internal.application;
 
+import com.swiftdrop.delivery.ChangeStatusCommand;
 import com.swiftdrop.delivery.CreateDeliveryCommand;
 import com.swiftdrop.delivery.DeliveryContact;
 import com.swiftdrop.delivery.DeliverySnapshot;
 import com.swiftdrop.delivery.ParcelStatusChanged;
+import com.swiftdrop.delivery.ParcelStatusEntry;
 import com.swiftdrop.delivery.internal.domain.Parcel;
 import com.swiftdrop.delivery.internal.domain.ParcelStatusHistory;
 import com.swiftdrop.delivery.internal.domain.TrackingNumberGenerator;
@@ -15,15 +17,22 @@ import com.swiftdrop.shared.reference.District;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 import static com.swiftdrop.delivery.ParcelStatus.CREATED;
+import static com.swiftdrop.delivery.ParcelStatus.DELIVERED;
+import static com.swiftdrop.delivery.ParcelStatus.FAILED;
+import static com.swiftdrop.delivery.ParcelStatus.PICKED_UP;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -38,6 +47,7 @@ import static org.mockito.Mockito.when;
 class DeliveryServiceTest {
 
     private static final Instant NOW = Instant.parse("2026-11-06T04:00:00Z");
+    private static final UUID COURIER_ID = UUID.randomUUID();
     private static final DeliveryContact PICKUP =
             new DeliveryContact("Nimal Perera", "+94771234567", "12 Galle Road", "Colombo 03", District.COLOMBO);
     private static final DeliveryContact RECIPIENT =
@@ -146,9 +156,76 @@ class DeliveryServiceTest {
     @Test
     void methodsOfLaterFeaturesAnswerServiceUnavailable() {
         // the same 503 the courier module gives when no DeliveryApi exists
-        assertThatThrownBy(() -> service.findForCourier(UUID.randomUUID(), NOW))
+        assertThatThrownBy(service::findUnassigned)
                 .isInstanceOfSatisfying(ApiException.class,
                         e -> assertThat(e.code()).isEqualTo(ErrorCode.SERVICE_UNAVAILABLE));
+    }
+
+    // ---- Reading parcels ----
+
+    @Test
+    void finishedMeansDeliveredOrFailed() {
+        assertThat(DeliveryService.FINISHED).containsExactlyInAnyOrder(DELIVERED, FAILED);
+    }
+
+    @Test
+    void findByIdGivesTheSnapshotOrNothing() {
+        Parcel parcel = aParcel();
+        when(parcels.findById(parcel.getId())).thenReturn(Optional.of(parcel));
+
+        assertThat(service.findById(parcel.getId()))
+                .hasValueSatisfying(snapshot -> assertThat(snapshot.trackingNumber()).isEqualTo("SD2611000777"));
+        assertThat(service.findById(UUID.randomUUID())).isEmpty();
+    }
+
+    @Test
+    void historyKeepsTheRepositoryOrderNewestFirst() {
+        Parcel parcel = aParcel();
+        ParcelStatusHistory created = ParcelStatusHistory.firstEntry(UUID.randomUUID(), parcel);
+        var pickUp = new ChangeStatusCommand(parcel.getId(), PICKED_UP, COURIER_ID, "COURIER", "At the shop", null,
+                null, null);
+        ParcelStatusHistory pickedUp = ParcelStatusHistory.forChange(UUID.randomUUID(), CREATED, pickUp, NOW);
+        when(statusHistory.findByParcelIdOrderByOccurredAtDesc(parcel.getId())).thenReturn(List.of(pickedUp, created));
+
+        List<ParcelStatusEntry> history = service.history(parcel.getId());
+
+        assertThat(history).extracting(ParcelStatusEntry::status).containsExactly(PICKED_UP, CREATED);
+        assertThat(history.get(0).note()).isEqualTo("At the shop");
+        assertThat(service.history(UUID.randomUUID())).isEmpty();
+    }
+
+    @Test
+    void findForCourierAsksForUnfinishedAndRecentlyFinishedParcels() {
+        Instant startOfDay = NOW.minusSeconds(3600);
+        Parcel parcel = aParcel();
+        when(parcels.findForCourier(COURIER_ID, DeliveryService.FINISHED, startOfDay)).thenReturn(List.of(parcel));
+
+        assertThat(service.findForCourier(COURIER_ID, startOfDay))
+                .extracting(DeliverySnapshot::id)
+                .containsExactly(parcel.getId());
+    }
+
+    @Test
+    void finishedForCourierFiltersByTrackingNumberOnlyWhenOneIsGiven() {
+        Pageable page = PageRequest.of(0, 20);
+        var onePage = new PageImpl<>(List.of(aParcel()), page, 1);
+        when(parcels.findByAssignedCourierIdAndStatusInOrderByStatusChangedAtDesc(COURIER_ID,
+                DeliveryService.FINISHED, page)).thenReturn(onePage);
+        when(parcels.findByAssignedCourierIdAndStatusInAndTrackingNumberOrderByStatusChangedAtDesc(COURIER_ID,
+                DeliveryService.FINISHED, "SD2611000777", page)).thenReturn(onePage);
+
+        assertThat(service.findFinishedForCourier(COURIER_ID, null, page).getContent()).hasSize(1);
+        assertThat(service.findFinishedForCourier(COURIER_ID, "SD2611000777", page).getContent()).hasSize(1);
+
+        verify(parcels).findByAssignedCourierIdAndStatusInOrderByStatusChangedAtDesc(COURIER_ID,
+                DeliveryService.FINISHED, page);
+        verify(parcels).findByAssignedCourierIdAndStatusInAndTrackingNumberOrderByStatusChangedAtDesc(COURIER_ID,
+                DeliveryService.FINISHED, "SD2611000777", page);
+    }
+
+    private static Parcel aParcel() {
+        return Parcel.create(UUID.randomUUID(), "SD2611000777", customerBooking(UUID.randomUUID()),
+                new BigDecimal("450.00"), "LKR", NOW);
     }
 
     private static CreateDeliveryCommand customerBooking(UUID customerId) {

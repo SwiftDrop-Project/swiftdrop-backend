@@ -26,23 +26,32 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.Arrays;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * The delivery module's implementation of {@link DeliveryApi}; other modules only see the interface.
  *
- * <p>Built feature by feature: {@link #create} works now. Until their feature is done, the other methods answer
- * {@code 503 SERVICE_UNAVAILABLE} ("This isn't available yet"), the same answer the courier module gives when no
- * DeliveryApi exists. So the bean already exists and modules that inject DeliveryApi can start.
+ * <p>Built feature by feature: {@link #create} and the courier's read methods work now. Until their feature is done,
+ * the other methods answer {@code 503 SERVICE_UNAVAILABLE} ("This isn't available yet"), the same answer the courier
+ * module gives when no DeliveryApi exists. So the bean already exists and modules that inject DeliveryApi can start.
  */
 @Service
 class DeliveryService implements DeliveryApi {
 
     /** Tries for a free tracking number. A clash is rare (6 random digits), so five in a row means a bug. */
     static final int TRACKING_NUMBER_TRIES = 5;
+
+    /** DELIVERED and FAILED, taken from ParcelStatus.isFinished() so the rule lives in one place. */
+    static final Set<ParcelStatus> FINISHED = Arrays.stream(ParcelStatus.values())
+            .filter(ParcelStatus::isFinished)
+            .collect(Collectors.toCollection(() -> EnumSet.noneOf(ParcelStatus.class)));
 
     private final ParcelRepository parcels;
     private final ParcelStatusHistoryRepository statusHistory;
@@ -106,15 +115,44 @@ class DeliveryService implements DeliveryApi {
         throw new IllegalStateException("No free tracking number after " + TRACKING_NUMBER_TRIES + " tries");
     }
 
+    // ---- Reading parcels (the courier screens use these) ----
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<DeliverySnapshot> findById(UUID parcelId) {
+        return parcels.findById(parcelId).map(Parcel::toSnapshot);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<ParcelStatusEntry> history(UUID parcelId) {
+        return statusHistory.findByParcelIdOrderByOccurredAtDesc(parcelId).stream()
+                .map(ParcelStatusHistory::toEntry)
+                .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<DeliverySnapshot> findForCourier(UUID courierId, Instant finishedSince) {
+        return parcels.findForCourier(courierId, FINISHED, finishedSince).stream()
+                .map(Parcel::toSnapshot)
+                .toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Page<DeliverySnapshot> findFinishedForCourier(UUID courierId, String trackingNumber, Pageable pageable) {
+        Page<Parcel> finished = trackingNumber == null
+                ? parcels.findByAssignedCourierIdAndStatusInOrderByStatusChangedAtDesc(courierId, FINISHED, pageable)
+                : parcels.findByAssignedCourierIdAndStatusInAndTrackingNumberOrderByStatusChangedAtDesc(
+                        courierId, FINISHED, trackingNumber, pageable);
+        return finished.map(Parcel::toSnapshot);
+    }
+
     // ---- Not built yet: each feature replaces its methods below ----
 
     @Override
     public DeliverySnapshot assignCourier(UUID parcelId, UUID courierId) {
-        throw notBuiltYet();
-    }
-
-    @Override
-    public Optional<DeliverySnapshot> findById(UUID parcelId) {
         throw notBuiltYet();
     }
 
@@ -140,21 +178,6 @@ class DeliveryService implements DeliveryApi {
 
     @Override
     public Map<UUID, Long> countActiveByCourier() {
-        throw notBuiltYet();
-    }
-
-    @Override
-    public List<DeliverySnapshot> findForCourier(UUID courierId, Instant finishedSince) {
-        throw notBuiltYet();
-    }
-
-    @Override
-    public Page<DeliverySnapshot> findFinishedForCourier(UUID courierId, String trackingNumber, Pageable pageable) {
-        throw notBuiltYet();
-    }
-
-    @Override
-    public List<ParcelStatusEntry> history(UUID parcelId) {
         throw notBuiltYet();
     }
 
