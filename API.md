@@ -481,6 +481,62 @@ Response `200` — same shape as **Create**, with the new `rawKey` shown once.
 
 ---
 
+## Deliveries (WP3)
+
+### Book a delivery
+`POST /deliveries` (logged-in `CUSTOMER`; merchants use `POST /merchant/orders`)
+
+Request:
+```json
+{
+  "pickup":    { "name": "Nimal Perera", "phone": "077 123 4567", "addressLine": "12 Galle Road",
+                 "city": "Colombo 03", "district": "COLOMBO" },
+  "recipient": { "name": "Kamala Silva", "phone": "0719876543", "addressLine": "45 Peradeniya Road",
+                 "city": "Kandy", "district": "KANDY" },
+  "weightKg": 2.5,
+  "codAmount": 2500.00,
+  "instructions": "Call before coming"
+}
+```
+There is no customer id and no fee: the customer comes from the login, and the server sets the fee and the
+tracking number.
+
+| Field | Rule | Message |
+|---|---|---|
+| `pickup`, `recipient` | Required | "Enter the pickup details." / "Enter the recipient's details." |
+| `*.name` | 1–100 characters | "Enter a name." / "Use 100 characters or fewer." |
+| `*.phone` | Sri Lankan mobile in any accepted form; stored as `+947XXXXXXXX` | "Enter a Sri Lankan mobile number, like 077 123 4567." |
+| `*.addressLine` | 1–200 characters | "Enter the address." / "Use 200 characters or fewer." |
+| `*.city` | 1–80 characters | "Enter the city." / "Use 80 characters or fewer." |
+| `*.district` | One of `GET /meta/districts` | "Select a district." (missing). An unknown value gives `fieldErrors.district`: "This value is not valid." |
+| `weightKg` | 0.01–50, up to 2 decimals | "Enter the weight." / "Enter a weight above 0 kg." / "A parcel can weigh up to 50 kg." / "Use up to 2 decimal places." |
+| `codAmount` | Optional: cash to collect on delivery; leave out when already paid. 0.01–500000, up to 2 decimals | "Enter an amount above 0, or leave it out." / "Cash on delivery can be up to Rs. 500,000." |
+| `instructions` | Optional, up to 500 characters (blank = none) | "Use 500 characters or fewer." |
+
+Response `201`:
+```json
+{
+  "id": "6f1c2b8e-3a4d-4c8e-9b1a-2f3e4d5c6b7a",
+  "trackingNumber": "SD2611004817",
+  "status": "CREATED",
+  "pickup":    { "name": "Nimal Perera", "phone": "+94771234567", "addressLine": "12 Galle Road",
+                 "city": "Colombo 03", "district": "COLOMBO" },
+  "recipient": { "name": "Kamala Silva", "phone": "+94719876543", "addressLine": "45 Peradeniya Road",
+                 "city": "Kandy", "district": "KANDY" },
+  "weightKg": 2.5,
+  "codAmount": 2500.00,
+  "instructions": "Call before coming",
+  "feeAmount": 450.00,
+  "currency": "LKR",
+  "createdAt": "2026-11-07T04:30:00Z"
+}
+```
+- `feeAmount` is a flat 450.00 LKR until pricing (WP4) is connected.
+- `400` `VALIDATION_FAILED` (keys like `pickup.phone`, `weightKg`) · `401` `UNAUTHENTICATED` · `403` `FORBIDDEN`
+  (logged in, but not a `CUSTOMER`)
+
+---
+
 ## Merchant Orders (WP5 — coming in PR 3, after WP3 merges)
 
 Authenticated with either the `SD_TOKEN` cookie **or** an `X-Api-Key: <rawKey>` header.
