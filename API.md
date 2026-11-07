@@ -68,7 +68,8 @@ Change it in the same PR as the code, and tell the frontend team.
 | 409 | `EMAIL_ALREADY_REGISTERED` | Email already in use |
 | 409 | `PHONE_ALREADY_REGISTERED` | Mobile number already in use |
 | 409 | `PROFILE_ALREADY_COMPLETE` | `POST /auth/complete-profile` for an account that is not `PROFILE_INCOMPLETE` |
-| 409 | `INVALID_STATUS_TRANSITION` | The parcel can't move to that status from its current one (see [Courier](#courier-role-courier-only)) |
+| 409 | `INVALID_STATUS_TRANSITION` | The parcel can't move to that status from its current one, e.g. DELIVERED → PICKED_UP (see [Courier](#courier-role-courier-only)) |
+| 409 | `PARCEL_NOT_ASSIGNABLE` | Assigning a courier to a parcel that was already picked up or is finished |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | Request body is not `application/json` |
 | 429 | `TOO_MANY_REQUESTS` | Too many requests from this IP address; the `Retry-After` header says how many seconds to wait |
 | 500 | `INTERNAL_ERROR` | Anything unexpected (generic message only) |
@@ -84,6 +85,7 @@ Messages of the new codes (show them as-is):
 | `TOO_MANY_ATTEMPTS` | Too many wrong codes. Ask for a new one. |
 | `TOO_MANY_REQUESTS` | Too many attempts. Please wait a moment and try again. |
 | `INVALID_STATUS_TRANSITION` | This parcel can't move to that status now. Refresh to see its latest status. |
+| `PARCEL_NOT_ASSIGNABLE` | A courier can only be assigned before the parcel is picked up. |
 | `SERVICE_UNAVAILABLE` | This isn't available yet. Please try again later. |
 
 **Rate limits** (per client IP; over the limit → `429 TOO_MANY_REQUESTS` + `Retry-After: <seconds>`; CORS exposes
@@ -478,6 +480,62 @@ Response `200` — the key with `revokedAt` set. Idempotent.
 Revokes the existing key and creates a new one with the same name.
 
 Response `200` — same shape as **Create**, with the new `rawKey` shown once.
+
+---
+
+## Deliveries (WP3)
+
+### Book a delivery
+`POST /deliveries` (logged-in `CUSTOMER`; merchants use `POST /merchant/orders`)
+
+Request:
+```json
+{
+  "pickup":    { "name": "Nimal Perera", "phone": "077 123 4567", "addressLine": "12 Galle Road",
+                 "city": "Colombo 03", "district": "COLOMBO" },
+  "recipient": { "name": "Kamala Silva", "phone": "0719876543", "addressLine": "45 Peradeniya Road",
+                 "city": "Kandy", "district": "KANDY" },
+  "weightKg": 2.5,
+  "codAmount": 2500.00,
+  "instructions": "Call before coming"
+}
+```
+There is no customer id and no fee: the customer comes from the login, and the server sets the fee and the
+tracking number.
+
+| Field | Rule | Message |
+|---|---|---|
+| `pickup`, `recipient` | Required | "Enter the pickup details." / "Enter the recipient's details." |
+| `*.name` | 1–100 characters | "Enter a name." / "Use 100 characters or fewer." |
+| `*.phone` | Sri Lankan mobile in any accepted form; stored as `+947XXXXXXXX` | "Enter a Sri Lankan mobile number, like 077 123 4567." |
+| `*.addressLine` | 1–200 characters | "Enter the address." / "Use 200 characters or fewer." |
+| `*.city` | 1–80 characters | "Enter the city." / "Use 80 characters or fewer." |
+| `*.district` | One of `GET /meta/districts` | "Select a district." (missing). An unknown value gives `fieldErrors.district`: "This value is not valid." |
+| `weightKg` | 0.01–50, up to 2 decimals | "Enter the weight." / "Enter a weight above 0 kg." / "A parcel can weigh up to 50 kg." / "Use up to 2 decimal places." |
+| `codAmount` | Optional: cash to collect on delivery; leave out when already paid. 0.01–500000, up to 2 decimals | "Enter an amount above 0, or leave it out." / "Cash on delivery can be up to Rs. 500,000." |
+| `instructions` | Optional, up to 500 characters (blank = none) | "Use 500 characters or fewer." |
+
+Response `201`:
+```json
+{
+  "id": "6f1c2b8e-3a4d-4c8e-9b1a-2f3e4d5c6b7a",
+  "trackingNumber": "SD2611004817",
+  "status": "CREATED",
+  "pickup":    { "name": "Nimal Perera", "phone": "+94771234567", "addressLine": "12 Galle Road",
+                 "city": "Colombo 03", "district": "COLOMBO" },
+  "recipient": { "name": "Kamala Silva", "phone": "+94719876543", "addressLine": "45 Peradeniya Road",
+                 "city": "Kandy", "district": "KANDY" },
+  "weightKg": 2.5,
+  "codAmount": 2500.00,
+  "instructions": "Call before coming",
+  "feeAmount": 450.00,
+  "currency": "LKR",
+  "createdAt": "2026-11-07T04:30:00Z"
+}
+```
+- `feeAmount` is a flat 450.00 LKR until pricing (WP4) is connected.
+- `400` `VALIDATION_FAILED` (keys like `pickup.phone`, `weightKg`) · `401` `UNAUTHENTICATED` · `403` `FORBIDDEN`
+  (logged in, but not a `CUSTOMER`)
 
 ---
 

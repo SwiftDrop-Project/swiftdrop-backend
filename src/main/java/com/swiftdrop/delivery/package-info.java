@@ -18,13 +18,15 @@
  * dispatch checks that a user is an active courier (through identity) before it calls {@code assignCourier}. The
  * assigned courier is stored on the parcel by this module, because dispatch owns no schema.
  *
- * <p>Owner: Pasindu (WP3); the courier methods were agreed with WP9 (courier). Database schema: {@code delivery}
- * (no foreign keys; user ids from other modules are plain UUIDs). Events published: {@code ParcelStatusChanged},
- * written to the outbox in the same transaction as the change and relayed to RabbitMQ (exchange
- * {@code parcel.events}, routing key {@code parcel.status.changed}). Events consumed: none.
+ * <p>Owner: Pasindu (WP3); the courier methods were agreed with WP9 (courier). Database schema: {@code delivery},
+ * tables {@code parcels}, {@code parcel_status_history} and {@code outbox_events} (no foreign keys; user ids from
+ * other modules are plain UUIDs). Events published: {@code ParcelStatusChanged}, written to the outbox in the same
+ * transaction as the change and relayed to RabbitMQ (exchange {@code parcel.events}, routing key
+ * {@code parcel.status.changed}). Events consumed: none.
  *
- * <p>Status: contracts only. Nothing implements {@code DeliveryApi} yet: until that is merged, the application does
- * not start with a bean that injects it, so mock it in tests.
+ * <p>Status: contracts, tables and the domain model (entities, repositories, tracking numbers). Nothing implements
+ * {@code DeliveryApi} yet: until that is merged, the application does not start with a bean that injects it, so
+ * mock it in tests.
  */
 @ApplicationModule(displayName = "Delivery")
 package com.swiftdrop.delivery;
