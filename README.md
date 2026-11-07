@@ -41,6 +41,7 @@ architecture diagram). `SwiftdropBackendApplication` stays at the root.
 | `notifications` | Emails (and later SMS) to users | `notifications` | TBD | Placeholder |
 | `webhooks` | Merchant webhooks | `webhooks` | TBD | Placeholder |
 | `outbox` | Relays delivery's outbox events to RabbitMQ | - | TBD | Placeholder |
+| `courier` | The courier's parcels: today's pickups and deliveries, status updates, delivery history (through `DeliveryApi`) | - | Kalpani | Built (answers 503 until delivery is implemented) |
 
 Each module's `package-info.java` describes its purpose, owner, schema and the events it publishes and consumes.
 Placeholder modules already have their public contract types (for example `DeliveryApi`, `ParcelStatusChanged`)
@@ -187,6 +188,7 @@ secrets in the code.
 | `DEMO_PASSWORD` | empty | No | Password for the demo accounts |
 | `GOOGLE_CLIENT_ID` | empty | No | Google OAuth client ID. Google sign-in is on only when both Google values are set. |
 | `GOOGLE_CLIENT_SECRET` | empty | No | Google OAuth client secret. Never commit it. |
+| `SWIFTDROP_FAKE_DELIVERY` | `false` | No | **Temporary**, local demos only: `true` gives the courier endpoints in-memory demo parcels for `courier@swiftdrop.lk` (needs `SEED_DEMO_USERS=true`). Nothing is saved. Removed once delivery is implemented. |
 
 The connection pool is small on purpose (at most 3 connections, none kept while idle), because the
 whole team shares one Neon database. These values are fixed in `application.yml`.
@@ -197,7 +199,7 @@ How to create the Google client: see "Google sign-in setup" in the
 ## Database migrations (Flyway)
 
 - Each stateful module owns one schema: `identity`, `merchants`, `pricing`, `delivery`, `webhooks`,
-  `notifications`. dispatch, reporting, tracking and outbox own none. No foreign keys or joins across schemas;
+  `notifications`. dispatch, reporting, tracking, outbox and courier own none. No foreign keys or joins across schemas;
   a module refers to another module's rows by UUID only. Entities use `@Table(schema = "<module>")`.
 - Schema changes happen **only** through Flyway files in the module's own folder:
   `src/main/resources/db/migration/<module>/`. A module's first migration starts with
@@ -349,6 +351,8 @@ PowerShell: `.\mvnw.cmd test`
 | `merchants/AdminMerchantTest` | Admin list, approve, reject, and access rules |
 | `merchants/internal/...` | Demo merchant seeding (approved, can log in, parallel-safe) |
 | `infrastructure/...` | Districts, correlation ID, RabbitMQ exchange and queues |
+| `courier/Courier*Test` | Courier endpoints with `DeliveryApi` mocked: access (401/403), ownership (404), today's list and order, status changes and their rules (400/409), history paging; 503 without a delivery implementation |
+| `courier/FakeDeliveryWiringTest`, `courier/internal/...` | Temporary demo fake: starts with the flag on, seeded parcels, its rules; "today" in Sri Lankan time |
 | `shared/validation/...` | Phone number rules |
 | `SwiftdropBackendApplicationTests` | App starts, health, Swagger, Google off without credentials |
 
