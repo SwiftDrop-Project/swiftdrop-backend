@@ -23,6 +23,7 @@ Every direct sub-package of `com.swiftdrop` is a module. `SwiftdropBackendApplic
 | `notifications` | NotificationsApi, AccountEmail | `notifications` | TBD |
 | `webhooks` | - | `webhooks` | TBD |
 | `outbox` | - (reads the outbox only through `DeliveryOutboxApi`) | none | TBD |
+| `courier` | - (endpoints only; uses `DeliveryApi`) | none | Kalpani |
 
 ```
 com.swiftdrop.<module>/
@@ -46,7 +47,11 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
 - Controllers never return entities. Map to DTOs in `internal/dto`.
 - A module's public URLs: implement `shared.web.PublicEndpoints` as a bean in the module. Never edit identity's SecurityConfig for that.
 - Unbuilt modules have placeholder contracts ("Contract owned by <module> - extend in Phase 0"); the owner extends them.
-- Current dependencies: identity -> notifications, shared; merchants -> identity, shared; delivery -> shared; infrastructure -> shared.
+- Current dependencies: identity -> notifications, shared; merchants -> identity, shared; delivery -> shared;
+  courier -> delivery, identity, shared; infrastructure -> shared. Nothing depends on courier.
+- courier gets `DeliveryApi` through an `ObjectProvider` and answers 503 SERVICE_UNAVAILABLE while nothing implements
+  it. TEMPORARY: `courier/internal/fake` (`SWIFTDROP_FAKE_DELIVERY=true`) is an in-memory `DeliveryApi` for demos;
+  delete it (and its property and tests) when delivery is implemented.
 - delivery must never depend on identity: identity -> notifications, and notifications will consume
   `ParcelStatusChanged` (notifications -> delivery), so that would be a cycle. User ids are plain UUIDs and roles are
   plain names (e.g. `COURIER`); dispatch checks that a user is an active courier before calling `assignCourier`.
@@ -73,7 +78,7 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
 
 ## Database
 - One schema per stateful module: identity, merchants, pricing, delivery, webhooks, notifications.
-  dispatch, reporting, tracking and outbox own no schema.
+  dispatch, reporting, tracking, outbox and courier own no schema.
 - Entities use `@Table(schema = "<module>")`. No foreign keys or joins across schemas; refer to other modules' rows by UUID only.
 - Schema changes ONLY through Flyway, in the module's folder: `src/main/resources/db/migration/<module>/`.
 - File name: `V<yyyyMMddHHmm>__<description>.sql` (current date and time, e.g. `V202611051430__add_parcels.sql`).

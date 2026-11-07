@@ -30,7 +30,9 @@ public enum ErrorCode {
             "This parcel can't move to that status now. Refresh to see its latest status."),
     PARCEL_NOT_ASSIGNABLE(HttpStatus.CONFLICT, "A courier can only be assigned before the parcel is picked up."),
     UNSUPPORTED_MEDIA_TYPE(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "Send the request as JSON (application/json)."),
-    INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "Something went wrong on our side. Please try again.");
+    INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "Something went wrong on our side. Please try again."),
+    /** A part of SwiftDrop that another module provides is not running yet (e.g. no delivery implementation). */
+    SERVICE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "This isn't available yet. Please try again later.");
 
     private final HttpStatus status;
     private final String defaultMessage;
