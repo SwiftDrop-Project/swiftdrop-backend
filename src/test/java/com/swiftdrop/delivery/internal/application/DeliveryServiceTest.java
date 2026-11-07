@@ -9,6 +9,8 @@ import com.swiftdrop.delivery.internal.domain.ParcelStatusHistory;
 import com.swiftdrop.delivery.internal.domain.TrackingNumberGenerator;
 import com.swiftdrop.delivery.internal.persistence.ParcelRepository;
 import com.swiftdrop.delivery.internal.persistence.ParcelStatusHistoryRepository;
+import com.swiftdrop.shared.error.ApiException;
+import com.swiftdrop.shared.error.ErrorCode;
 import com.swiftdrop.shared.reference.District;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -142,10 +144,11 @@ class DeliveryServiceTest {
     }
 
     @Test
-    void methodsOfLaterFeaturesAreNotBuiltYet() {
-        assertThatThrownBy(() -> service.findById(UUID.randomUUID()))
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessage("Not built yet: DeliveryApi.findById");
+    void methodsOfLaterFeaturesAnswerServiceUnavailable() {
+        // the same 503 the courier module gives when no DeliveryApi exists
+        assertThatThrownBy(() -> service.findForCourier(UUID.randomUUID(), NOW))
+                .isInstanceOfSatisfying(ApiException.class,
+                        e -> assertThat(e.code()).isEqualTo(ErrorCode.SERVICE_UNAVAILABLE));
     }
 
     private static CreateDeliveryCommand customerBooking(UUID customerId) {

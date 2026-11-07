@@ -15,6 +15,8 @@ import com.swiftdrop.delivery.internal.domain.ParcelStatusHistory;
 import com.swiftdrop.delivery.internal.domain.TrackingNumberGenerator;
 import com.swiftdrop.delivery.internal.persistence.ParcelRepository;
 import com.swiftdrop.delivery.internal.persistence.ParcelStatusHistoryRepository;
+import com.swiftdrop.shared.error.ApiException;
+import com.swiftdrop.shared.error.ErrorCode;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -32,8 +34,9 @@ import java.util.UUID;
 /**
  * The delivery module's implementation of {@link DeliveryApi}; other modules only see the interface.
  *
- * <p>Built feature by feature: {@link #create} works now. The other methods throw "not built yet" until their feature
- * is done, so the bean already exists and modules that inject DeliveryApi can start.
+ * <p>Built feature by feature: {@link #create} works now. Until their feature is done, the other methods answer
+ * {@code 503 SERVICE_UNAVAILABLE} ("This isn't available yet"), the same answer the courier module gives when no
+ * DeliveryApi exists. So the bean already exists and modules that inject DeliveryApi can start.
  */
 @Service
 class DeliveryService implements DeliveryApi {
@@ -107,75 +110,76 @@ class DeliveryService implements DeliveryApi {
 
     @Override
     public DeliverySnapshot assignCourier(UUID parcelId, UUID courierId) {
-        throw notBuiltYet("assignCourier");
+        throw notBuiltYet();
     }
 
     @Override
     public Optional<DeliverySnapshot> findById(UUID parcelId) {
-        throw notBuiltYet("findById");
+        throw notBuiltYet();
     }
 
     @Override
     public Optional<DeliverySnapshot> findByTrackingNumber(String trackingNumber) {
-        throw notBuiltYet("findByTrackingNumber");
+        throw notBuiltYet();
     }
 
     @Override
     public Page<DeliverySnapshot> findByCustomer(UUID customerId, ParcelStatus status, Pageable pageable) {
-        throw notBuiltYet("findByCustomer");
+        throw notBuiltYet();
     }
 
     @Override
     public Page<DeliverySnapshot> findByMerchant(UUID merchantId, ParcelStatus status, Pageable pageable) {
-        throw notBuiltYet("findByMerchant");
+        throw notBuiltYet();
     }
 
     @Override
     public List<DeliverySnapshot> findUnassigned() {
-        throw notBuiltYet("findUnassigned");
+        throw notBuiltYet();
     }
 
     @Override
     public Map<UUID, Long> countActiveByCourier() {
-        throw notBuiltYet("countActiveByCourier");
+        throw notBuiltYet();
     }
 
     @Override
     public List<DeliverySnapshot> findForCourier(UUID courierId, Instant finishedSince) {
-        throw notBuiltYet("findForCourier");
+        throw notBuiltYet();
     }
 
     @Override
     public Page<DeliverySnapshot> findFinishedForCourier(UUID courierId, String trackingNumber, Pageable pageable) {
-        throw notBuiltYet("findFinishedForCourier");
+        throw notBuiltYet();
     }
 
     @Override
     public List<ParcelStatusEntry> history(UUID parcelId) {
-        throw notBuiltYet("history");
+        throw notBuiltYet();
     }
 
     @Override
     public DeliverySnapshot changeStatus(ChangeStatusCommand command) {
-        throw notBuiltYet("changeStatus");
+        throw notBuiltYet();
     }
 
     @Override
     public ProofPhotoRef storeProofPhoto(UUID parcelId, UUID uploadedBy, String contentType, byte[] content) {
-        throw notBuiltYet("storeProofPhoto");
+        throw notBuiltYet();
     }
 
     @Override
     public Optional<ProofPhoto> findProofPhoto(UUID parcelId) {
-        throw notBuiltYet("findProofPhoto");
+        throw notBuiltYet();
     }
 
     @Override
     public DeliveryStats stats(LocalDate from, LocalDate to) {
-        throw notBuiltYet("stats");
+        throw notBuiltYet();
     }
 
-    private static UnsupportedOperationException notBuiltYet(String method) {
-        return new UnsupportedOperationException("Not built yet: DeliveryApi." + method);
+    /** 503 with "This isn't available yet. Please try again later.", shown as-is to the user. */
+    private static ApiException notBuiltYet() {
+        return new ApiException(ErrorCode.SERVICE_UNAVAILABLE);
     }
 }
