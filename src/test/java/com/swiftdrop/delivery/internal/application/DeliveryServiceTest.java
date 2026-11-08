@@ -191,6 +191,28 @@ class DeliveryServiceTest {
     }
 
     @Test
+    void findByTrackingNumberIgnoresSpacesAndCase() {
+        Parcel parcel = aParcel();
+        when(parcels.findByTrackingNumber("SD2611000777")).thenReturn(Optional.of(parcel));
+
+        assertThat(service.findByTrackingNumber(" sd 2611 000777 "))
+                .hasValueSatisfying(snapshot -> assertThat(snapshot.id()).isEqualTo(parcel.getId()));
+    }
+
+    @Test
+    void anUnknownTrackingNumberFindsNothing() {
+        assertThat(service.findByTrackingNumber("SD2611999999")).isEmpty();
+    }
+
+    @Test
+    void aMissingOrBlankTrackingNumberFindsNothingWithoutAskingTheDatabase() {
+        assertThat(service.findByTrackingNumber(null)).isEmpty();
+        assertThat(service.findByTrackingNumber("   ")).isEmpty();
+
+        verify(parcels, never()).findByTrackingNumber(any());
+    }
+
+    @Test
     void historyKeepsTheRepositoryOrderNewestFirst() {
         Parcel parcel = aParcel();
         ParcelStatusHistory created = ParcelStatusHistory.firstEntry(UUID.randomUUID(), parcel);

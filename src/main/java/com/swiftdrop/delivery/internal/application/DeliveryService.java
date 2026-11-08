@@ -45,8 +45,8 @@ import java.util.stream.Collectors;
 /**
  * The delivery module's implementation of {@link DeliveryApi}; other modules only see the interface.
  *
- * <p>Built feature by feature: {@link #create}, the courier's read methods and {@link #changeStatus} work now. Until
- * their feature is done, the other methods answer {@code 503 SERVICE_UNAVAILABLE} ("This isn't available yet"), the
+ * <p>Built feature by feature: {@link #create}, the courier's read methods, {@link #changeStatus} and
+ * {@link #findByTrackingNumber} work now. Until their feature is done, the other methods answer {@code 503 SERVICE_UNAVAILABLE} ("This isn't available yet"), the
  * same answer the courier module gives when no DeliveryApi exists. So the bean already exists and modules that inject
  * DeliveryApi can start.
  */
@@ -126,12 +126,27 @@ class DeliveryService implements DeliveryApi {
         throw new IllegalStateException("No free tracking number after " + TRACKING_NUMBER_TRIES + " tries");
     }
 
-    // ---- Reading parcels (the courier screens use these) ----
+    // ---- Reading parcels ----
 
     @Override
     @Transactional(readOnly = true)
     public Optional<DeliverySnapshot> findById(UUID parcelId) {
         return parcels.findById(parcelId).map(Parcel::toSnapshot);
+    }
+
+    /**
+     * For tracking (WP8) and the courier's history search (WP9). The number is normalised the way it is stored, so
+     * " sd 2611 004817 " finds SD2611004817. A missing or blank number finds nothing, without asking the database.
+     * The snapshot holds personal data (phones, addresses): a public page must show only what it needs.
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<DeliverySnapshot> findByTrackingNumber(String trackingNumber) {
+        if (trackingNumber == null || trackingNumber.isBlank()) {
+            return Optional.empty();
+        }
+        return parcels.findByTrackingNumber(TrackingNumberGenerator.normalise(trackingNumber))
+                .map(Parcel::toSnapshot);
     }
 
     @Override
@@ -221,11 +236,6 @@ class DeliveryService implements DeliveryApi {
 
     @Override
     public DeliverySnapshot assignCourier(UUID parcelId, UUID courierId) {
-        throw notBuiltYet();
-    }
-
-    @Override
-    public Optional<DeliverySnapshot> findByTrackingNumber(String trackingNumber) {
         throw notBuiltYet();
     }
 
