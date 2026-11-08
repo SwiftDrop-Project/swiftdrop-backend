@@ -16,7 +16,7 @@ Every direct sub-package of `com.swiftdrop` is a module. `SwiftdropBackendApplic
 | `identity` | IdentityApi, UserSummary, CourierSummary, Role, UserStatus, MerchantProfiles (implemented by merchants) | `identity` | Viduranga |
 | `merchants` | MerchantApi, MerchantSummary, ApprovalStatus | `merchants` | Viduranga |
 | `pricing` | PricingApi, QuoteRequest, PriceQuote | `pricing` | TBD |
-| `delivery` | DeliveryApi, DeliveryOutboxApi, OutboxMessage, DeliverySnapshot, DeliveryContact, CreateDeliveryCommand, ChangeStatusCommand, ParcelStatus, ParcelStatusEntry, ParcelStatusChanged, FailureReason, ProofPhoto, ProofPhotoRef, DeliveryStats | `delivery` (incl. `outbox_events`) | Pasindu |
+| `delivery` | DeliveryApi, DeliveryOutboxApi, OutboxMessage, DeliverySnapshot, DeliveryContact, CreateDeliveryCommand, ChangeStatusCommand, ParcelStatus (incl. `AT_BRANCH`; branch = `District`), ParcelStatusEntry, ParcelStatusChanged, FailureReason, ProofPhoto, ProofPhotoRef, DeliveryStats | `delivery` (incl. `outbox_events`) | Pasindu |
 | `dispatch` | - | none | TBD |
 | `reporting` | - | none | TBD |
 | `tracking` | - | none | TBD |
@@ -54,7 +54,9 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
   delete it (and its property and tests) when delivery is implemented.
 - delivery must never depend on identity: identity -> notifications, and notifications will consume
   `ParcelStatusChanged` (notifications -> delivery), so that would be a cycle. User ids are plain UUIDs and roles are
-  plain names (e.g. `COURIER`); dispatch checks that a user is an active courier before calling `assignCourier`.
+  plain names (e.g. `COURIER`). Multi-branch: several couriers handle one parcel, so callers authorize
+  `changeStatus` (delivery checks only the role), and the single-courier members of `DeliveryApi` (`assignCourier`,
+  `findUnassigned`, `countActiveByCourier`, `findForCourier`, `findFinishedForCourier`) are `@Deprecated`.
 - Emails are sent only through `NotificationsApi.sendAccountEmail(AccountEmail)` (async, after the caller's
   transaction commits; templates in `resources/templates/email/`; outcome in `notifications.email_log`).
   notifications must never depend on identity (that would be a cycle): pass the recipient and name in `AccountEmail`.

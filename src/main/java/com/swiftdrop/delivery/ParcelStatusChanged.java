@@ -1,5 +1,7 @@
 package com.swiftdrop.delivery;
 
+import com.swiftdrop.shared.reference.District;
+
 import java.time.Instant;
 import java.util.UUID;
 
@@ -8,7 +10,7 @@ import java.util.UUID;
  * {@code parcel.events}, routing key {@code parcel.status.changed}). {@code customerId}, {@code merchantId} and
  * {@code actorId} are identity user ids; {@code actorRole} is the role name (e.g. COURIER). {@code fromStatus} is
  * null for a new parcel. {@code failureReason} is a {@link FailureReason} name, set only when {@code toStatus} is
- * FAILED.
+ * FAILED. {@code branch} is set only when {@code toStatus} is AT_BRANCH: the branch the parcel arrived at.
  *
  * <p>Delivery is at-least-once, so a consumer may get the same event twice, or an older one late: drop an event whose
  * {@code eventId} was already handled, and one whose {@code parcelVersion} is lower than the last one seen.
@@ -26,7 +28,8 @@ public record ParcelStatusChanged(
         String actorRole,
         String note,
         String failureReason,
-        Instant occurredAt) {
+        Instant occurredAt,
+        District branch) {
 
     /**
      * Leaves out the note: free text that may hold personal data. The failure reason is a fixed code, not free text,
@@ -36,6 +39,7 @@ public record ParcelStatusChanged(
     public String toString() {
         return "ParcelStatusChanged[eventId=" + eventId + ", parcelId=" + parcelId + ", parcelVersion=" + parcelVersion
                 + ", trackingNumber=" + trackingNumber + ", " + fromStatus + " -> " + toStatus
-                + ", failureReason=" + failureReason + ", actorRole=" + actorRole + ", occurredAt=" + occurredAt + "]";
+                + ", failureReason=" + failureReason + ", branch=" + branch + ", actorRole=" + actorRole
+                + ", occurredAt=" + occurredAt + "]";
     }
 }

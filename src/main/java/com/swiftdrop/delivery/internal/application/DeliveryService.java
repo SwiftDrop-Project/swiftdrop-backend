@@ -17,6 +17,7 @@ import com.swiftdrop.delivery.internal.persistence.ParcelRepository;
 import com.swiftdrop.delivery.internal.persistence.ParcelStatusHistoryRepository;
 import com.swiftdrop.shared.error.ApiException;
 import com.swiftdrop.shared.error.ErrorCode;
+import com.swiftdrop.shared.reference.District;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -26,6 +27,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -92,7 +94,7 @@ class DeliveryService implements DeliveryApi {
         DeliverySnapshot snapshot = parcel.toSnapshot();
         outbox.write(new ParcelStatusChanged(UUID.randomUUID(), parcel.getId(), snapshot.version(),
                 parcel.getTrackingNumber(), parcel.getCustomerId(), parcel.getMerchantId(), null,
-                ParcelStatus.CREATED, first.getActorId(), first.getActorRole(), null, null, now));
+                ParcelStatus.CREATED, first.getActorId(), first.getActorRole(), null, null, now, null));
         return snapshot;
     }
 
@@ -130,6 +132,16 @@ class DeliveryService implements DeliveryApi {
 
     @Override
     public Page<DeliverySnapshot> findByMerchant(UUID merchantId, ParcelStatus status, Pageable pageable) {
+        throw notBuiltYet();
+    }
+
+    @Override
+    public List<DeliverySnapshot> findAllById(Collection<UUID> parcelIds) {
+        throw notBuiltYet();
+    }
+
+    @Override
+    public List<DeliverySnapshot> findAtBranch(District branch) {
         throw notBuiltYet();
     }
 

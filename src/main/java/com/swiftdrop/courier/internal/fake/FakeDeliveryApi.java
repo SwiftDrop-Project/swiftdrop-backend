@@ -15,6 +15,7 @@ import com.swiftdrop.shared.error.ErrorCode;
 import com.swiftdrop.shared.error.FieldValidationException;
 import com.swiftdrop.shared.error.ForbiddenException;
 import com.swiftdrop.shared.error.NotFoundException;
+import com.swiftdrop.shared.reference.District;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Primary;
 import org.springframework.data.domain.Page;
@@ -26,6 +27,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -143,7 +145,8 @@ class FakeDeliveryApi implements DeliveryApi {
                 delivered ? command.recipientName() : null,
                 false,
                 failed ? command.failureReason() : null,
-                parcel.merchantOrderRef(), parcel.feeAmount(), parcel.currency(), parcel.version() + 1);
+                parcel.merchantOrderRef(), parcel.feeAmount(), parcel.currency(), parcel.version() + 1,
+                target == ParcelStatus.AT_BRANCH ? command.branch() : null);
 
         List<ParcelStatusEntry> history = new ArrayList<>();
         history.add(new ParcelStatusEntry(target, command.note(), failed ? command.failureReason() : null, role, now));
@@ -177,6 +180,16 @@ class FakeDeliveryApi implements DeliveryApi {
 
     @Override
     public Page<DeliverySnapshot> findByMerchant(UUID merchantId, ParcelStatus status, Pageable pageable) {
+        throw new UnsupportedOperationException(UNSUPPORTED);
+    }
+
+    @Override
+    public List<DeliverySnapshot> findAllById(Collection<UUID> parcelIds) {
+        throw new UnsupportedOperationException(UNSUPPORTED);
+    }
+
+    @Override
+    public List<DeliverySnapshot> findAtBranch(District branch) {
         throw new UnsupportedOperationException(UNSUPPORTED);
     }
 

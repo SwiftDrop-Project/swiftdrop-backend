@@ -1,13 +1,18 @@
 package com.swiftdrop.delivery;
 
+import com.swiftdrop.shared.reference.District;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.util.UUID;
 
+import static com.swiftdrop.delivery.ParcelStatus.AT_BRANCH;
 import static com.swiftdrop.delivery.ParcelStatus.DELIVERED;
 import static com.swiftdrop.delivery.ParcelStatus.FAILED;
 import static com.swiftdrop.delivery.ParcelStatus.PICKED_UP;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 
 class ChangeStatusCommandTest {
@@ -56,6 +61,42 @@ class ChangeStatusCommandTest {
                 .isThrownBy(() -> new ChangeStatusCommand(
                         PARCEL_ID, PICKED_UP, COURIER_ID, null, null, null, null, null))
                 .withMessage("actorRole");
+    }
+
+    @Test
+    void theShortConstructorLeavesTheBranchOut() {
+        var command = new ChangeStatusCommand(PARCEL_ID, PICKED_UP, COURIER_ID, "COURIER", null, null, null, null);
+
+        assertThat(command.branch()).isNull();
+    }
+
+    @Test
+    void atBranchKeepsTheBranch() {
+        var command = new ChangeStatusCommand(PARCEL_ID, AT_BRANCH, COURIER_ID, "COURIER", null, null, null, null,
+                District.GAMPAHA);
+
+        assertThat(command.branch()).isEqualTo(District.GAMPAHA);
+    }
+
+    @Test
+    void atBranchNeedsABranch() {
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> new ChangeStatusCommand(
+                        PARCEL_ID, AT_BRANCH, COURIER_ID, "COURIER", null, null, null, null, null))
+                .withMessage("branch is required for AT_BRANCH");
+        assertThatIllegalArgumentException()
+                .as("the short constructor has no branch, so it cannot make an AT_BRANCH change")
+                .isThrownBy(() -> new ChangeStatusCommand(
+                        PARCEL_ID, AT_BRANCH, COURIER_ID, "COURIER", null, null, null, null));
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = ParcelStatus.class, names = "AT_BRANCH", mode = EnumSource.Mode.EXCLUDE)
+    void aBranchIsOnlyForAtBranch(ParcelStatus status) {
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> new ChangeStatusCommand(
+                        PARCEL_ID, status, COURIER_ID, "COURIER", null, null, null, null, District.MATARA))
+                .withMessage("branch is only for AT_BRANCH");
     }
 
     @Test

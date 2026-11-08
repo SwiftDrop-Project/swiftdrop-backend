@@ -68,7 +68,7 @@ Change it in the same PR as the code, and tell the frontend team.
 | 409 | `EMAIL_ALREADY_REGISTERED` | Email already in use |
 | 409 | `PHONE_ALREADY_REGISTERED` | Mobile number already in use |
 | 409 | `PROFILE_ALREADY_COMPLETE` | `POST /auth/complete-profile` for an account that is not `PROFILE_INCOMPLETE` |
-| 409 | `INVALID_STATUS_TRANSITION` | The parcel can't move to that status from its current one, e.g. DELIVERED → PICKED_UP (see [Courier](#courier-role-courier-only)) |
+| 409 | `INVALID_STATUS_TRANSITION` | The parcel can't move to that status from its current one, e.g. DELIVERED → PICKED_UP or PICKED_UP → IN_TRANSIT (a picked-up parcel goes to a branch first). See [Parcel statuses](#parcel-statuses) |
 | 409 | `PARCEL_NOT_ASSIGNABLE` | Assigning a courier to a parcel that was already picked up or is finished |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | Request body is not `application/json` |
 | 429 | `TOO_MANY_REQUESTS` | Too many requests from this IP address; the `Retry-After` header says how many seconds to wait |
@@ -484,6 +484,28 @@ Response `200` — same shape as **Create**, with the new `rawKey` shown once.
 ---
 
 ## Deliveries (WP3)
+
+### Parcel statuses
+A parcel passes through SwiftDrop branches on its way, and several couriers handle it: one collects it, others move
+it between branches, and one delivers it. Finishing a courier task does not mean the parcel was delivered.
+
+| Status | Meaning | May move to |
+|---|---|---|
+| `CREATED` | Booked, waiting for pickup | `PICKED_UP` |
+| `PICKED_UP` | Collected from the sender | `AT_BRANCH` |
+| `AT_BRANCH` | At a SwiftDrop branch; `currentBranch` says which (a district, e.g. `GAMPAHA`) | `IN_TRANSIT`, `OUT_FOR_DELIVERY` |
+| `IN_TRANSIT` | On the way to another branch | `AT_BRANCH` |
+| `OUT_FOR_DELIVERY` | With the courier who delivers it | `DELIVERED`, `FAILED` |
+| `FAILED` | Delivery attempt failed (`failureReason` says why) | `AT_BRANCH` (back at a branch for another try) |
+| `DELIVERED` | Handed to the recipient. Final | - |
+
+- Example: Delgoda → `PICKED_UP` → `AT_BRANCH` Gampaha → `IN_TRANSIT` → `AT_BRANCH` Matara → `OUT_FOR_DELIVERY` →
+  `DELIVERED` in Deniyaya.
+- `currentBranch` is set only while `AT_BRANCH`, and the branch is kept on that status history entry. The branch is
+  not personal data, so tracking may show it ("At Gampaha branch").
+- `failureReason` is set only while `FAILED`; when the parcel goes back to a branch it is cleared on the parcel and
+  kept in the history.
+- Any other move is `409` `INVALID_STATUS_TRANSITION`.
 
 ### Book a delivery
 `POST /deliveries` (logged-in `CUSTOMER`; merchants use `POST /merchant/orders`)
