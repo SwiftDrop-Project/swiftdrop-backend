@@ -1,6 +1,11 @@
 /**
- * Delivery: a parcel from booking to hand-over: creating it, assigning a courier, status changes, proof of delivery,
- * receipts, and the outbox that publishes every status change.
+ * Delivery: a parcel from booking to hand-over: creating it, status changes, proof of delivery, receipts, and the
+ * outbox that publishes every status change.
+ *
+ * <p>Multi-branch workflow: a parcel passes through SwiftDrop branches ({@code AT_BRANCH}, with the branch as a
+ * {@link com.swiftdrop.shared.reference.District}) and is handled by several couriers. Which courier handles which
+ * step is decided by dispatch (WP8) assignments, so callers authorize status changes; the single-courier members of
+ * {@code DeliveryApi} ({@code assignCourier} and the courier reads) are deprecated.
  *
  * <p>Public API: {@link com.swiftdrop.delivery.DeliveryApi} and the types it uses
  * ({@link com.swiftdrop.delivery.CreateDeliveryCommand}, {@link com.swiftdrop.delivery.ChangeStatusCommand},
@@ -14,9 +19,8 @@
  *
  * <p>Dependencies: shared only (pricing will be added, to price a new parcel). Delivery must never depend on
  * identity: identity depends on notifications, and notifications will consume {@code ParcelStatusChanged}, so that
- * would be a cycle. That is why user ids are plain UUIDs and roles are plain names (e.g. {@code COURIER}), and why
- * dispatch checks that a user is an active courier (through identity) before it calls {@code assignCourier}. The
- * assigned courier is stored on the parcel by this module, because dispatch owns no schema.
+ * would be a cycle. That is why user ids are plain UUIDs and roles are plain names (e.g. {@code COURIER}). Delivery
+ * does not depend on dispatch either: dispatch and courier call delivery, never the other way round.
  *
  * <p>Owner: Pasindu (WP3); the courier methods were agreed with WP9 (courier). Database schema: {@code delivery},
  * tables {@code parcels}, {@code parcel_status_history} and {@code outbox_events} (no foreign keys; user ids from

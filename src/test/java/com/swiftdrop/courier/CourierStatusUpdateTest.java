@@ -40,7 +40,7 @@ class CourierStatusUpdateTest extends CourierApiTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("PICKED_UP"))
                 .andExpect(jsonPath("$.stop").value("DELIVERY"))
-                .andExpect(jsonPath("$.nextStatuses[0]").value("IN_TRANSIT"))
+                .andExpect(jsonPath("$.nextStatuses[0]").value("AT_BRANCH"))
                 .andExpect(jsonPath("$.history[0].status").value("PICKED_UP"))
                 .andExpect(jsonPath("$.history[0].note").value("Collected from front desk"))
                 .andExpect(jsonPath("$.history[0].actorRole").doesNotExist());
@@ -136,6 +136,25 @@ class CourierStatusUpdateTest extends CourierApiTest {
         postStatus(parcel.id(), Map.of("status", "PICKED_UP"), courier.cookie())
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("INVALID_STATUS_TRANSITION"));
+    }
+
+    // ---- Known until PR (c) ----
+
+    /**
+     * Documents current behaviour, not the wanted one. nextStatuses offers AT_BRANCH after PICKED_UP, but this
+     * endpoint has no branch field, so ChangeStatusCommand rejects the change (branch is required for AT_BRANCH) and
+     * the courier gets a 500. Nothing changes. PR (c) replaces this endpoint with assignment handovers, which send the
+     * branch; delete this test then.
+     */
+    @Test
+    void atBranchWithoutABranchIs500AndNothingChanges() throws Exception {
+        Courier courier = registerCourier();
+        DeliverySnapshot parcel = given(parcel(courier.id(), ParcelStatus.PICKED_UP));
+
+        postStatus(parcel.id(), Map.of("status", "AT_BRANCH"), courier.cookie())
+                .andExpect(status().isInternalServerError())
+                .andExpect(jsonPath("$.code").value("INTERNAL_ERROR"));
+        verify(delivery, never()).changeStatus(any());
     }
 
     // ---- Request rules (400) ----

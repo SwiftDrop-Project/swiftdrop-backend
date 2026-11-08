@@ -1,5 +1,7 @@
 package com.swiftdrop.delivery;
 
+import com.swiftdrop.shared.reference.District;
+
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
@@ -7,8 +9,7 @@ import java.util.UUID;
 /**
  * Read-only copy of a parcel that other modules may use.
  *
- * <p>The assigned courier is stored on the parcel by delivery (dispatch owns no schema; it only asks delivery to
- * assign one). {@code customerId}, {@code merchantId} and {@code assignedCourierId} are identity user ids.
+ * <p>{@code customerId}, {@code merchantId} and {@code assignedCourierId} are identity user ids.
  *
  * <p>Contains personal data (the contacts, the proof recipient's name and the free-text instructions): never log it,
  * and never show it on the public tracking page, which may show only the status, city and district.
@@ -27,8 +28,9 @@ import java.util.UUID;
  * @param weightKg           parcel weight in kilograms
  * @param codAmount          cash to collect on delivery in rupees; null when already paid
  * @param instructions       delivery instructions from the sender, or null
- * @param assignedCourierId  the courier currently responsible, or null while unassigned
- * @param assignedAt         when that courier was assigned, or null while unassigned
+ * @param assignedCourierId  deprecated (single-courier model; dispatch assignments replace it): the courier set by
+ *                           {@link DeliveryApi#assignCourier}, or null
+ * @param assignedAt         deprecated, like {@code assignedCourierId}: when that courier was set, or null
  * @param createdAt          when the parcel was created
  * @param updatedAt          when the parcel last changed (status, assignment, proof)
  * @param proofRecipientName who received the parcel (only for DELIVERED), or null
@@ -39,6 +41,8 @@ import java.util.UUID;
  * @param currency           the fee's currency, e.g. {@code LKR}
  * @param version            goes up by one on every change, so a consumer can ignore an older update that arrives
  *                           late
+ * @param currentBranch      the branch the parcel is at (only for AT_BRANCH), or null. Not personal data: the public
+ *                           tracking page may show it
  */
 public record DeliverySnapshot(
         UUID id,
@@ -51,8 +55,8 @@ public record DeliverySnapshot(
         BigDecimal weightKg,
         BigDecimal codAmount,
         String instructions,
-        UUID assignedCourierId,
-        Instant assignedAt,
+        @Deprecated UUID assignedCourierId,
+        @Deprecated Instant assignedAt,
         Instant createdAt,
         Instant updatedAt,
         String proofRecipientName,
@@ -61,7 +65,23 @@ public record DeliverySnapshot(
         String merchantOrderRef,
         BigDecimal feeAmount,
         String currency,
-        long version) {
+        long version,
+        District currentBranch) {
+
+    /**
+     * A snapshot without a branch (any status except AT_BRANCH). Kept so callers written before branches still
+     * compile.
+     */
+    public DeliverySnapshot(UUID id, String trackingNumber, ParcelStatus status, UUID customerId, UUID merchantId,
+                            DeliveryContact pickup, DeliveryContact recipient, BigDecimal weightKg,
+                            BigDecimal codAmount, String instructions, UUID assignedCourierId, Instant assignedAt,
+                            Instant createdAt, Instant updatedAt, String proofRecipientName, boolean hasProofPhoto,
+                            FailureReason failureReason, String merchantOrderRef, BigDecimal feeAmount,
+                            String currency, long version) {
+        this(id, trackingNumber, status, customerId, merchantId, pickup, recipient, weightKg, codAmount, instructions,
+                assignedCourierId, assignedAt, createdAt, updatedAt, proofRecipientName, hasProofPhoto, failureReason,
+                merchantOrderRef, feeAmount, currency, version, null);
+    }
 
     /**
      * Every field except the proof recipient's name and the instructions; the contacts show only city and district.
@@ -77,6 +97,6 @@ public record DeliverySnapshot(
                 + ", createdAt=" + createdAt + ", updatedAt=" + updatedAt
                 + ", hasProofPhoto=" + hasProofPhoto + ", failureReason=" + failureReason
                 + ", merchantOrderRef=" + merchantOrderRef + ", feeAmount=" + feeAmount + ", currency=" + currency
-                + ", version=" + version + "]";
+                + ", version=" + version + ", currentBranch=" + currentBranch + "]";
     }
 }

@@ -15,6 +15,7 @@ import java.time.Instant;
 import java.util.UUID;
 
 import static com.swiftdrop.delivery.FailureReason.RECIPIENT_UNAVAILABLE;
+import static com.swiftdrop.delivery.ParcelStatus.AT_BRANCH;
 import static com.swiftdrop.delivery.ParcelStatus.CREATED;
 import static com.swiftdrop.delivery.ParcelStatus.DELIVERED;
 import static com.swiftdrop.delivery.ParcelStatus.FAILED;
@@ -134,6 +135,69 @@ class ParcelTest {
     }
 
     @Test
+    void arrivingAtABranchKeepsTheBranch() {
+        Parcel parcel = customerParcel();
+        parcel.changeStatus(move(parcel, PICKED_UP), LATER);
+
+        parcel.changeStatus(toBranch(parcel, District.GAMPAHA), LATER);
+
+        assertThat(parcel.getStatus()).isEqualTo(AT_BRANCH);
+        assertThat(parcel.getCurrentBranch()).isEqualTo(District.GAMPAHA);
+    }
+
+    @Test
+    void leavingABranchClearsItAndTheNextBranchReplacesIt() {
+        Parcel parcel = customerParcel();
+        parcel.changeStatus(move(parcel, PICKED_UP), LATER);
+        parcel.changeStatus(toBranch(parcel, District.GAMPAHA), LATER);
+
+        parcel.changeStatus(move(parcel, IN_TRANSIT), LATER);
+        assertThat(parcel.getCurrentBranch()).isNull();
+
+        parcel.changeStatus(toBranch(parcel, District.MATARA), LATER);
+        assertThat(parcel.getCurrentBranch()).isEqualTo(District.MATARA);
+    }
+
+    @Test
+    void aFailedParcelGoesBackToABranchAndLosesTheReason() {
+        Parcel parcel = outForDelivery();
+        parcel.changeStatus(new ChangeStatusCommand(parcel.getId(), FAILED, COURIER_ID, "COURIER",
+                "Called twice", RECIPIENT_UNAVAILABLE, null, null), LATER);
+
+        ParcelStatus from = parcel.changeStatus(toBranch(parcel, District.MATARA), LATER);
+
+        // the reason stays in the history row of the FAILED change; on the parcel it would break
+        // ck_parcels_failure_only_when_failed
+        assertThat(from).isEqualTo(FAILED);
+        assertThat(parcel.getStatus()).isEqualTo(AT_BRANCH);
+        assertThat(parcel.getFailureReason()).isNull();
+        assertThat(parcel.getCurrentBranch()).isEqualTo(District.MATARA);
+        assertThat(parcel.toSnapshot().failureReason()).isNull();
+    }
+
+    @Test
+    void aPickedUpParcelCannotSkipTheBranch() {
+        Parcel parcel = customerParcel();
+        parcel.changeStatus(move(parcel, PICKED_UP), LATER);
+
+        assertThatThrownBy(() -> parcel.changeStatus(move(parcel, IN_TRANSIT), LATER))
+                .isInstanceOfSatisfying(BusinessRuleException.class,
+                        e -> assertThat(e.code()).isEqualTo(ErrorCode.INVALID_STATUS_TRANSITION));
+        assertThat(parcel.getStatus()).isEqualTo(PICKED_UP);
+    }
+
+    @Test
+    void theSnapshotCopiesTheCurrentBranch() {
+        Parcel parcel = customerParcel();
+        assertThat(parcel.toSnapshot().currentBranch()).isNull();
+
+        parcel.changeStatus(move(parcel, PICKED_UP), LATER);
+        parcel.changeStatus(toBranch(parcel, District.GAMPAHA), LATER);
+
+        assertThat(parcel.toSnapshot().currentBranch()).isEqualTo(District.GAMPAHA);
+    }
+
+    @Test
     void theSnapshotCopiesEveryField() {
         // different values everywhere, so two swapped fields of the same type would be caught
         UUID merchantId = UUID.randomUUID();
@@ -167,6 +231,7 @@ class ParcelTest {
         assertThat(snapshot.feeAmount()).isEqualByComparingTo("380.00");
         assertThat(snapshot.currency()).isEqualTo("LKR");
         assertThat(snapshot.version()).isZero();
+        assertThat(snapshot.currentBranch()).isNull();
     }
 
     private static Parcel customerParcel() {
@@ -178,12 +243,17 @@ class ParcelTest {
     private static Parcel outForDelivery() {
         Parcel parcel = customerParcel();
         parcel.changeStatus(move(parcel, PICKED_UP), LATER);
-        parcel.changeStatus(move(parcel, IN_TRANSIT), LATER);
+        parcel.changeStatus(toBranch(parcel, District.KANDY), LATER);
         parcel.changeStatus(move(parcel, OUT_FOR_DELIVERY), LATER);
         return parcel;
     }
 
     private static ChangeStatusCommand move(Parcel parcel, ParcelStatus to) {
         return new ChangeStatusCommand(parcel.getId(), to, COURIER_ID, "COURIER", null, null, null, null);
+    }
+
+    private static ChangeStatusCommand toBranch(Parcel parcel, District branch) {
+        return new ChangeStatusCommand(parcel.getId(), AT_BRANCH, COURIER_ID, "COURIER", null, null, null, null,
+                branch);
     }
 }

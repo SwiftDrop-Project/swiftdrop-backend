@@ -12,6 +12,7 @@ import com.swiftdrop.shared.error.ErrorCode;
 import com.swiftdrop.shared.error.FieldValidationException;
 import com.swiftdrop.shared.error.ForbiddenException;
 import com.swiftdrop.shared.error.NotFoundException;
+import com.swiftdrop.shared.reference.District;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.domain.Page;
@@ -44,13 +45,14 @@ class FakeDeliveryApiTest {
     }
 
     @Test
-    void todayHasTheOpenParcelsAndTheOneDeliveredTodayButNotYesterdaysFailure() {
+    void todayHasTheOpenParcelsTheOneDeliveredTodayAndYesterdaysFailure() {
         List<DeliverySnapshot> today = fake.findForCourier(courier, START_OF_TODAY);
 
-        assertThat(today).hasSize(6).allMatch(parcel -> courier.equals(parcel.assignedCourierId()));
+        // FAILED is not finished any more (it goes back to a branch), so yesterday's failure is still open
+        assertThat(today).hasSize(7).allMatch(parcel -> courier.equals(parcel.assignedCourierId()));
         assertThat(today).extracting(DeliverySnapshot::status).containsExactlyInAnyOrder(
                 ParcelStatus.CREATED, ParcelStatus.CREATED, ParcelStatus.PICKED_UP, ParcelStatus.IN_TRANSIT,
-                ParcelStatus.OUT_FOR_DELIVERY, ParcelStatus.DELIVERED);
+                ParcelStatus.OUT_FOR_DELIVERY, ParcelStatus.DELIVERED, ParcelStatus.FAILED);
         assertThat(fake.findForCourier(otherCourier, START_OF_TODAY)).hasSize(1);
     }
 
@@ -58,14 +60,16 @@ class FakeDeliveryApiTest {
     void finishedParcelsAreNewestFirstAndCanBeFilteredByTrackingNumber() {
         Page<DeliverySnapshot> finished = fake.findFinishedForCourier(courier, null, PageRequest.of(0, 20));
 
-        assertThat(finished.getTotalElements()).isEqualTo(2);
+        // only DELIVERED is finished now
+        assertThat(finished.getTotalElements()).isEqualTo(1);
         assertThat(finished.getContent()).extracting(DeliverySnapshot::status)
-                .containsExactly(ParcelStatus.DELIVERED, ParcelStatus.FAILED);
-        String failedNumber = finished.getContent().get(1).trackingNumber();
-        assertThat(fake.findFinishedForCourier(courier, failedNumber, PageRequest.of(0, 20)).getContent())
-                .singleElement().extracting(DeliverySnapshot::status).isEqualTo(ParcelStatus.FAILED);
-        assertThat(fake.findFinishedForCourier(courier, null, PageRequest.of(1, 1)).getContent())
-                .singleElement().extracting(DeliverySnapshot::status).isEqualTo(ParcelStatus.FAILED);
+                .containsExactly(ParcelStatus.DELIVERED);
+        String deliveredNumber = finished.getContent().get(0).trackingNumber();
+        assertThat(fake.findFinishedForCourier(courier, deliveredNumber, PageRequest.of(0, 20)).getContent())
+                .singleElement().extracting(DeliverySnapshot::status).isEqualTo(ParcelStatus.DELIVERED);
+        String failedNumber = only(ParcelStatus.FAILED).trackingNumber();
+        assertThat(fake.findFinishedForCourier(courier, failedNumber, PageRequest.of(0, 20)).getContent()).isEmpty();
+        assertThat(fake.findFinishedForCourier(courier, null, PageRequest.of(1, 1)).getContent()).isEmpty();
     }
 
     @Test
@@ -73,7 +77,7 @@ class FakeDeliveryApiTest {
         DeliverySnapshot outForDelivery = only(ParcelStatus.OUT_FOR_DELIVERY);
 
         assertThat(fake.history(outForDelivery.id())).extracting(ParcelStatusEntry::status).containsExactly(
-                ParcelStatus.OUT_FOR_DELIVERY, ParcelStatus.IN_TRANSIT, ParcelStatus.PICKED_UP, ParcelStatus.CREATED);
+                ParcelStatus.OUT_FOR_DELIVERY, ParcelStatus.AT_BRANCH, ParcelStatus.PICKED_UP, ParcelStatus.CREATED);
         assertThat(outForDelivery.version()).isEqualTo(4);
         assertThat(outForDelivery.codAmount()).isNotNull();
         assertThat(outForDelivery.trackingNumber()).matches("SD\\d{10}");
@@ -109,7 +113,13 @@ class FakeDeliveryApiTest {
         assertThat(delivered.failureReason()).isNull();
 
         DeliverySnapshot inTransit = only(ParcelStatus.IN_TRANSIT);
-        fake.changeStatus(command(inTransit.id(), ParcelStatus.OUT_FOR_DELIVERY, courier, "COURIER", null, null, null));
+        // a transfer ends at a branch before final delivery
+        DeliverySnapshot atBranch = fake.changeStatus(new ChangeStatusCommand(inTransit.id(), ParcelStatus.AT_BRANCH,
+                courier, "COURIER", null, null, null, null, District.KURUNEGALA));
+        assertThat(atBranch.currentBranch()).isEqualTo(District.KURUNEGALA);
+        DeliverySnapshot out = fake.changeStatus(command(inTransit.id(), ParcelStatus.OUT_FOR_DELIVERY, courier,
+                "COURIER", null, null, null));
+        assertThat(out.currentBranch()).isNull();
         DeliverySnapshot failed = fake.changeStatus(command(inTransit.id(), ParcelStatus.FAILED, courier, "COURIER",
                 "Gate locked", FailureReason.OTHER, null));
         assertThat(failed.failureReason()).isEqualTo(FailureReason.OTHER);
@@ -155,6 +165,8 @@ class FakeDeliveryApiTest {
                 () -> fake.findByTrackingNumber("SD2611060001"),
                 () -> fake.findByCustomer(id, null, PageRequest.of(0, 20)),
                 () -> fake.findByMerchant(id, null, PageRequest.of(0, 20)),
+                () -> fake.findAllById(List.of(id)),
+                () -> fake.findAtBranch(District.GAMPAHA),
                 () -> fake.findUnassigned(),
                 () -> fake.countActiveByCourier(),
                 () -> fake.stats(LocalDate.of(2026, 11, 1), LocalDate.of(2026, 11, 6)),

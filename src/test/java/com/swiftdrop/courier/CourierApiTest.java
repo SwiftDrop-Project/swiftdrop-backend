@@ -69,7 +69,8 @@ abstract class CourierApiTest extends IntegrationTest {
                 assignedAt.minus(1, ChronoUnit.HOURS), updatedAt,
                 status == ParcelStatus.DELIVERED ? "Nimal Perera" : null, false,
                 status == ParcelStatus.FAILED ? FailureReason.RECIPIENT_UNAVAILABLE : null,
-                "ORDER-1", new BigDecimal("450.00"), "LKR", 3);
+                "ORDER-1", new BigDecimal("450.00"), "LKR", 3,
+                status == ParcelStatus.AT_BRANCH ? District.COLOMBO : null);
     }
 
     protected static DeliverySnapshot parcel(UUID courierId, ParcelStatus status) {
