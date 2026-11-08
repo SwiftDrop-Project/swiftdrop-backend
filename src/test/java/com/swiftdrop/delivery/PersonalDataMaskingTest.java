@@ -74,7 +74,7 @@ class PersonalDataMaskingTest {
     void statusEventShowsTheFailureCodeButHidesTheNote() {
         var event = new ParcelStatusChanged(UUID.randomUUID(), UUID.randomUUID(), 3, "SD2611004817",
                 UUID.randomUUID(), null, OUT_FOR_DELIVERY, FAILED, UUID.randomUUID(), "COURIER",
-                "Kamala Silva did not answer +94719876543", RECIPIENT_UNAVAILABLE.name(), Instant.now());
+                "Kamala Silva did not answer +94719876543", RECIPIENT_UNAVAILABLE.name(), Instant.now(), null);
 
         assertThat(event.toString())
                 .contains("SD2611004817", "OUT_FOR_DELIVERY -> FAILED", "parcelVersion=3",

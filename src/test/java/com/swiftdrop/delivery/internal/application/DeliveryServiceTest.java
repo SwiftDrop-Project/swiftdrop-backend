@@ -31,7 +31,6 @@ import java.util.UUID;
 
 import static com.swiftdrop.delivery.ParcelStatus.CREATED;
 import static com.swiftdrop.delivery.ParcelStatus.DELIVERED;
-import static com.swiftdrop.delivery.ParcelStatus.FAILED;
 import static com.swiftdrop.delivery.ParcelStatus.PICKED_UP;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
@@ -164,8 +163,9 @@ class DeliveryServiceTest {
     // ---- Reading parcels ----
 
     @Test
-    void finishedMeansDeliveredOrFailed() {
-        assertThat(DeliveryService.FINISHED).containsExactlyInAnyOrder(DELIVERED, FAILED);
+    void finishedFollowsParcelStatus() {
+        // a FAILED parcel goes back to a branch, so only DELIVERED is finished
+        assertThat(DeliveryService.FINISHED).containsExactly(DELIVERED);
     }
 
     @Test

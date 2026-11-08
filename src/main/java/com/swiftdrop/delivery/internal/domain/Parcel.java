@@ -7,6 +7,7 @@ import com.swiftdrop.delivery.FailureReason;
 import com.swiftdrop.delivery.ParcelStatus;
 import com.swiftdrop.shared.error.BusinessRuleException;
 import com.swiftdrop.shared.error.ErrorCode;
+import com.swiftdrop.shared.reference.District;
 import jakarta.persistence.AttributeOverride;
 import jakarta.persistence.Column;
 import jakarta.persistence.Embedded;
@@ -105,6 +106,11 @@ public class Parcel {
     @Column(name = "failure_reason", length = 30)
     private FailureReason failureReason;
 
+    /** The branch the parcel is at: set only while AT_BRANCH. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "current_branch", length = 30)
+    private District currentBranch;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -160,8 +166,10 @@ public class Parcel {
     }
 
     /**
-     * Moves the parcel to {@code command.toStatus()} and keeps the failure reason (FAILED) or the proof of delivery
-     * (DELIVERED). Who may make the change, and which fields each status needs, are checked by the caller.
+     * Moves the parcel to {@code command.toStatus()} and keeps the failure reason (FAILED), the branch (AT_BRANCH) or
+     * the proof of delivery (DELIVERED). The branch is cleared on every other status, and the failure reason when the
+     * parcel leaves FAILED (the history keeps it), so the table's CHECK constraints hold. Who may make the change,
+     * and which fields each status needs, are checked by the caller; ChangeStatusCommand checks the branch.
      *
      * @return the status before the change, for the history row and the event
      * @throws BusinessRuleException INVALID_STATUS_TRANSITION when the current status cannot move there
@@ -172,9 +180,8 @@ public class Parcel {
             throw new BusinessRuleException(ErrorCode.INVALID_STATUS_TRANSITION);
         }
         this.status = command.toStatus();
-        if (this.status == ParcelStatus.FAILED) {
-            this.failureReason = command.failureReason();
-        }
+        this.failureReason = this.status == ParcelStatus.FAILED ? command.failureReason() : null;
+        this.currentBranch = this.status == ParcelStatus.AT_BRANCH ? command.branch() : null;
         if (this.status == ParcelStatus.DELIVERED) {
             this.proofRecipientName = command.recipientName();
             this.proofPhotoId = command.proofPhotoId();
@@ -192,6 +199,6 @@ public class Parcel {
         return new DeliverySnapshot(id, trackingNumber, status, customerId, merchantId, pickup.toContact(),
                 recipient.toContact(), weightKg, codAmount, instructions, assignedCourierId, assignedAt, createdAt,
                 updatedAt, proofRecipientName, proofPhotoId != null, failureReason, merchantOrderRef, feeAmount,
-                currency, version == null ? 0L : version);
+                currency, version == null ? 0L : version, currentBranch);
     }
 }

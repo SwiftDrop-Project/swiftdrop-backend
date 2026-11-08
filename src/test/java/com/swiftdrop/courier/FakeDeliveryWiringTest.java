@@ -30,18 +30,19 @@ class FakeDeliveryWiringTest extends IntegrationTest {
     private static final String BASE = "/api/v1/courier/deliveries";
 
     @Test
-    void demoCourierWalksSeededParcelsToDeliveredAndFailed() throws Exception {
+    void demoCourierWalksASeededParcelToDelivered() throws Exception {
         Cookie courier = tokenCookie(login("courier@swiftdrop.lk", DEMO_PASSWORD, false)
                 .andExpect(status().isOk()).andReturn());
 
+        // FAILED is not finished any more (it goes back to a branch), so yesterday's failure is still to do
         JsonNode today = read(mvc.perform(get(BASE + "/today").cookie(courier))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.toDo").value(5))
+                .andExpect(jsonPath("$.toDo").value(6))
                 .andExpect(jsonPath("$.done").value(1))
-                .andExpect(jsonPath("$.items.length()").value(6))
+                .andExpect(jsonPath("$.items.length()").value(7))
                 .andExpect(jsonPath("$.items[0].stop").value("PICKUP"))
                 .andExpect(jsonPath("$.items[1].stop").value("PICKUP"))
-                .andExpect(jsonPath("$.items[5].status").value("DELIVERED")));
+                .andExpect(jsonPath("$.items[6].status").value("DELIVERED")));
 
         String outForDelivery = idWithStatus(today, "OUT_FOR_DELIVERY");
         postStatus(outForDelivery, Map.of("status", "DELIVERED", "recipientName", "Kasun Wickramasinghe"), courier)
@@ -51,23 +52,23 @@ class FakeDeliveryWiringTest extends IntegrationTest {
                 .andExpect(jsonPath("$.history[0].status").value("DELIVERED"))
                 .andExpect(jsonPath("$.history.length()").value(5));
 
-        String inTransit = idWithStatus(today, "IN_TRANSIT");
-        postStatus(inTransit, Map.of("status", "OUT_FOR_DELIVERY"), courier).andExpect(status().isOk());
-        postStatus(inTransit, Map.of("status", "FAILED", "failureReason", "WRONG_ADDRESS",
-                "note", "No such house number"), courier)
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.failureReason").value("WRONG_ADDRESS"));
         // Pressing the button twice: the second change is no longer allowed.
-        postStatus(inTransit, Map.of("status", "FAILED", "failureReason", "WRONG_ADDRESS"), courier)
+        postStatus(outForDelivery, Map.of("status", "DELIVERED", "recipientName", "Kasun Wickramasinghe"), courier)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("INVALID_STATUS_TRANSITION"));
+
+        // A transfer now ends at a branch; this endpoint can't send one (assignments replace it in PR (c)).
+        String inTransit = idWithStatus(today, "IN_TRANSIT");
+        postStatus(inTransit, Map.of("status", "OUT_FOR_DELIVERY"), courier)
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("INVALID_STATUS_TRANSITION"));
 
         mvc.perform(get(BASE + "/today").cookie(courier))
-                .andExpect(jsonPath("$.toDo").value(3))
-                .andExpect(jsonPath("$.done").value(3));
+                .andExpect(jsonPath("$.toDo").value(5))
+                .andExpect(jsonPath("$.done").value(2));
         mvc.perform(get(BASE + "/history").cookie(courier))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.totalElements").value(4));
+                .andExpect(jsonPath("$.totalElements").value(2));
     }
 
     private org.springframework.test.web.servlet.ResultActions postStatus(String parcelId, Map<String, ?> body,

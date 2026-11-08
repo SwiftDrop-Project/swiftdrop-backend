@@ -1,10 +1,12 @@
 package com.swiftdrop.delivery;
 
+import com.swiftdrop.shared.reference.District;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -15,8 +17,14 @@ import java.util.UUID;
  * photos, read parcels and count them for reports. The only way into the delivery module from outside it.
  *
  * <p>Reads do not check who is asking: the calling module knows the logged-in user and must check ownership itself,
- * using {@code customerId}, {@code merchantId} or {@code assignedCourierId} in the snapshot. Writes check their own
- * rules and throw {@code shared.error} exceptions, which reach the client in the API.md error shape.
+ * using {@code customerId} or {@code merchantId} in the snapshot, or (for couriers) the dispatch assignments. Writes
+ * check their own rules and throw {@code shared.error} exceptions, which reach the client in the API.md error shape.
+ *
+ * <p>Multi-branch workflow: one parcel is handled by several couriers (pickup, transfer between branches, final
+ * delivery), and who handles which step is decided by dispatch (WP8) assignments, not by this module. The
+ * single-courier members ({@link #assignCourier}, {@link #findUnassigned}, {@link #countActiveByCourier},
+ * {@link #findForCourier}, {@link #findFinishedForCourier}, and {@code assignedCourierId} and {@code assignedAt} in
+ * {@link DeliverySnapshot}) are deprecated and will not be built.
  *
  * <p>Contract owned by delivery (WP3); the courier methods were agreed with WP9 (courier).
  */
@@ -41,7 +49,10 @@ public interface DeliveryApi {
      * @throws com.swiftdrop.shared.error.NotFoundException     NOT_FOUND for an unknown parcel
      * @throws com.swiftdrop.shared.error.BusinessRuleException PARCEL_NOT_ASSIGNABLE when the parcel was already
      *                                                          picked up or is finished
+     * @deprecated one courier no longer owns a parcel from pickup to delivery; dispatch (WP8) assignments say who
+     *             handles each step. Will not be built.
      */
+    @Deprecated
     DeliverySnapshot assignCourier(UUID parcelId, UUID courierId);
 
     // ---- Reading parcels ----
@@ -61,27 +72,52 @@ public interface DeliveryApi {
     /** A merchant's orders, newest first. Same filter and paging rules as {@link #findByCustomer}. */
     Page<DeliverySnapshot> findByMerchant(UUID merchantId, ParcelStatus status, Pageable pageable);
 
-    /** Parcels in {@link ParcelStatus#CREATED} with no courier, oldest first, for the dispatcher to assign. */
+    /**
+     * The parcels with these ids, in any order. Unknown ids are left out, so the result may be shorter than the
+     * input. One call instead of one {@link #findById} per parcel (courier assignment lists).
+     */
+    List<DeliverySnapshot> findAllById(Collection<UUID> parcelIds);
+
+    /**
+     * Parcels in {@link ParcelStatus#AT_BRANCH} at this branch, oldest status change first, for dispatch (WP8) to
+     * plan the next step.
+     */
+    List<DeliverySnapshot> findAtBranch(District branch);
+
+    /**
+     * Parcels in {@link ParcelStatus#CREATED} with no courier, oldest first, for the dispatcher to assign.
+     *
+     * @deprecated dispatch (WP8) assignments replace the single assigned courier. Will not be built.
+     */
+    @Deprecated
     List<DeliverySnapshot> findUnassigned();
 
     /**
      * The number of unfinished parcels per courier id (courier workloads). Couriers with none are not in the map,
      * so read it with {@code getOrDefault(courierId, 0L)}.
+     *
+     * @deprecated courier workloads come from dispatch (WP8) assignments. Will not be built.
      */
+    @Deprecated
     Map<UUID, Long> countActiveByCourier();
 
     /**
-     * Parcels assigned to the courier that are not finished (not DELIVERED or FAILED), plus the finished ones whose
-     * last status change happened at or after {@code finishedSince}. Any order.
+     * Parcels assigned to the courier that are not finished, plus the finished ones whose last status change
+     * happened at or after {@code finishedSince}. Any order.
+     *
+     * @deprecated a courier's parcels come from their dispatch (WP8) assignments. Will not be built.
      */
+    @Deprecated
     List<DeliverySnapshot> findForCourier(UUID courierId, Instant finishedSince);
 
     /**
-     * DELIVERED and FAILED parcels assigned to the courier, newest status change first.
+     * Finished parcels assigned to the courier, newest status change first.
      *
      * @param trackingNumber optional; when not null, only the parcel with exactly this normalised tracking number
      *                       (no spaces, upper case, e.g. {@code SD2611004817})
+     * @deprecated a courier's history comes from their dispatch (WP8) assignments. Will not be built.
      */
+    @Deprecated
     Page<DeliverySnapshot> findFinishedForCourier(UUID courierId, String trackingNumber, Pageable pageable);
 
     /** The parcel's status history, newest first. Empty for an unknown id. */
@@ -94,15 +130,19 @@ public interface DeliveryApi {
      * reason) and writes {@link ParcelStatusChanged} to the outbox, all in one transaction.
      *
      * <p>Which fields are present for the target status is checked by the caller (see {@link ChangeStatusCommand}).
+     * Moving to AT_BRANCH sets {@link DeliverySnapshot#currentBranch()} to {@code command.branch()}; any other move
+     * clears it. Leaving FAILED clears the failure reason (it stays in the history).
+     *
+     * <p>The caller authorizes the change: delivery does not check which courier makes it (the courier module checks
+     * the courier's dispatch assignment first). Delivery only checks the role.
      *
      * @return the parcel after the change
      * @throws com.swiftdrop.shared.error.NotFoundException          NOT_FOUND for an unknown parcel
      * @throws com.swiftdrop.shared.error.BusinessRuleException      INVALID_STATUS_TRANSITION when
      *                                                               {@link ParcelStatus#canMoveTo} is false for the
      *                                                               parcel's current status
-     * @throws com.swiftdrop.shared.error.ForbiddenException         FORBIDDEN when {@code actorRole} is COURIER and
-     *                                                               {@code actorId} is not the assigned courier, or
-     *                                                               when it is neither COURIER nor ADMIN
+     * @throws com.swiftdrop.shared.error.ForbiddenException         FORBIDDEN when {@code actorRole} is neither
+     *                                                               COURIER nor ADMIN
      * @throws com.swiftdrop.shared.error.FieldValidationException   field {@code proofPhotoId} when the photo was not
      *                                                               stored for this parcel
      */

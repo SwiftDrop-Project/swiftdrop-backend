@@ -25,7 +25,7 @@ class OutboxWriterTest {
     void writesTheEventAsJsonToTheOutbox() {
         Instant now = Instant.parse("2026-11-06T04:00:00Z");
         var event = new ParcelStatusChanged(UUID.randomUUID(), UUID.randomUUID(), 0, "SD2611004817",
-                UUID.randomUUID(), null, null, CREATED, UUID.randomUUID(), "CUSTOMER", null, null, now);
+                UUID.randomUUID(), null, null, CREATED, UUID.randomUUID(), "CUSTOMER", null, null, now, null);
 
         writer.write(event);
 

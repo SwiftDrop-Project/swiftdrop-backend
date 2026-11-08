@@ -4,6 +4,7 @@ import com.swiftdrop.delivery.ChangeStatusCommand;
 import com.swiftdrop.delivery.FailureReason;
 import com.swiftdrop.delivery.ParcelStatus;
 import com.swiftdrop.delivery.ParcelStatusEntry;
+import com.swiftdrop.shared.reference.District;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -58,6 +59,11 @@ public class ParcelStatusHistory implements Persistable<UUID> {
     @Column(name = "failure_reason", length = 30)
     private FailureReason failureReason;
 
+    /** Only for AT_BRANCH: the branch the parcel arrived at. */
+    @Enumerated(EnumType.STRING)
+    @Column(length = 30)
+    private District branch;
+
     @Column(name = "occurred_at", nullable = false)
     private Instant occurredAt;
 
@@ -86,7 +92,7 @@ public class ParcelStatusHistory implements Persistable<UUID> {
 
     /**
      * A later change, after Parcel.changeStatus: {@code from} is the status that it returned. The failure reason
-     * is kept only for FAILED, like on the parcel.
+     * is kept only for FAILED and the branch only for AT_BRANCH, like on the parcel.
      */
     public static ParcelStatusHistory forChange(UUID id, ParcelStatus from, ChangeStatusCommand command, Instant at) {
         ParcelStatusHistory entry = new ParcelStatusHistory();
@@ -98,13 +104,14 @@ public class ParcelStatusHistory implements Persistable<UUID> {
         entry.actorRole = command.actorRole();
         entry.note = command.note();
         entry.failureReason = command.toStatus() == ParcelStatus.FAILED ? command.failureReason() : null;
+        entry.branch = command.toStatus() == ParcelStatus.AT_BRANCH ? command.branch() : null;
         entry.occurredAt = at;
         return entry;
     }
 
     /** The public view for DeliveryApi.history(). The from status and the actor id stay inside delivery. */
     public ParcelStatusEntry toEntry() {
-        return new ParcelStatusEntry(toStatus, note, failureReason, actorRole, occurredAt);
+        return new ParcelStatusEntry(toStatus, note, failureReason, actorRole, occurredAt, branch);
     }
 
     @Override

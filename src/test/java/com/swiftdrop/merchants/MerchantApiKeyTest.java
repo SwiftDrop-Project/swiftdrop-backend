@@ -2,6 +2,7 @@ package com.swiftdrop.merchants;
 
 import com.swiftdrop.IntegrationTest;
 import jakarta.servlet.http.Cookie;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -208,5 +209,43 @@ class MerchantApiKeyTest extends IntegrationTest {
         assert !rawKey.equals(storedHash);
         // The stored value must be a 64-char hex SHA-256 hash
         assert storedHash != null && storedHash.length() == 64;
+    }
+
+    @Test
+    @Disabled("Remove when SecurityConfig wires ApiKeyAuthenticationFilter before BearerTokenAuthenticationFilter")
+    void revokedKeyFailsApiKeyAuth() throws Exception {
+        Cookie merchant = approveAndLogin(uniqueEmail(), uniquePhone());
+
+        String body = postJson(KEYS_PATH, Map.of("name", "revoke-me"), merchant)
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        String rawKey = json.readTree(body).get("rawKey").asString();
+        String id = json.readTree(body).get("id").asString();
+
+        mvc.perform(delete(KEYS_PATH + "/{id}", id).cookie(merchant)).andExpect(status().isOk());
+
+        mvc.perform(get(KEYS_PATH).header("X-Api-Key", rawKey))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("API_KEY_REVOKED"));
+    }
+
+    @Test
+    @Disabled("Remove when SecurityConfig wires ApiKeyAuthenticationFilter before BearerTokenAuthenticationFilter")
+    void unapprovedMerchantKeyRejected() throws Exception {
+        String email = uniqueEmail();
+        String userId = registerMerchant(email, uniquePhone());
+        mvc.perform(post("/api/v1/admin/merchants/{id}/approve", userId).cookie(loginAsAdmin()))
+                .andExpect(status().isOk());
+        Cookie merchant = tokenCookie(login(email, PASSWORD, false).andExpect(status().isOk()).andReturn());
+
+        String body = postJson(KEYS_PATH, Map.of("name", "downgrade-me"), merchant)
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString();
+        String rawKey = json.readTree(body).get("rawKey").asString();
+
+        jdbc.update("UPDATE merchants.merchant_profiles SET approval_status = 'PENDING' WHERE user_id = ?::uuid",
+                userId);
+
+        mvc.perform(get(KEYS_PATH).header("X-Api-Key", rawKey))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("MERCHANT_NOT_APPROVED"));
     }
 }

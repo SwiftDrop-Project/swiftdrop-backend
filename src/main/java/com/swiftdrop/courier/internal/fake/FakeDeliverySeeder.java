@@ -25,9 +25,13 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Deque;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -160,20 +164,35 @@ class FakeDeliverySeeder implements ApplicationRunner {
             }
             entries.add(new ParcelStatusEntry(status, null,
                     status == ParcelStatus.FAILED ? parcel.failureReason() : null,
-                    first ? "MERCHANT" : "COURIER", at));
+                    first ? "MERCHANT" : "COURIER", at,
+                    status == ParcelStatus.AT_BRANCH ? parcel.pickup().district() : null));
         }
         Collections.reverse(entries);
         return entries;
     }
 
-    /** CREATED, PICKED_UP, ... up to {@code target}, following {@link ParcelStatus#next()}. */
+    /**
+     * The shortest way from CREATED to {@code target} following {@link ParcelStatus#next()}, CREATED included. A
+     * breadth-first search, because the transitions now have loops (AT_BRANCH ↔ IN_TRANSIT, FAILED → AT_BRANCH).
+     */
     private static List<ParcelStatus> pathTo(ParcelStatus target) {
-        List<ParcelStatus> path = new ArrayList<>(List.of(ParcelStatus.CREATED));
-        ParcelStatus current = ParcelStatus.CREATED;
-        while (current != target) {
-            current = current.next().contains(target) ? target : current.next().iterator().next();
-            path.add(current);
+        Map<ParcelStatus, ParcelStatus> previous = new EnumMap<>(ParcelStatus.class);
+        Deque<ParcelStatus> queue = new ArrayDeque<>(List.of(ParcelStatus.CREATED));
+        previous.put(ParcelStatus.CREATED, ParcelStatus.CREATED);
+        while (!queue.isEmpty() && !previous.containsKey(target)) {
+            ParcelStatus current = queue.removeFirst();
+            for (ParcelStatus next : current.next()) {
+                if (previous.putIfAbsent(next, current) == null) {
+                    queue.addLast(next);
+                }
+            }
         }
+        List<ParcelStatus> path = new ArrayList<>();
+        for (ParcelStatus step = target; step != ParcelStatus.CREATED; step = previous.get(step)) {
+            path.add(step);
+        }
+        path.add(ParcelStatus.CREATED);
+        Collections.reverse(path);
         return path;
     }
 
