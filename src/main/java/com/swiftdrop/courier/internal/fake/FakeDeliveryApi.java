@@ -19,7 +19,6 @@ import com.swiftdrop.shared.reference.District;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Primary;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Component;
 
@@ -28,9 +27,10 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Comparator;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -38,10 +38,11 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * TEMPORARY in-memory {@link DeliveryApi} for courier demos, on only with {@code SWIFTDROP_FAKE_DELIVERY=true}.
  *
- * <p>Only the methods the courier screens use are real ({@code findById}, {@code findForCourier},
- * {@code findFinishedForCourier}, {@code history}, {@code changeStatus}); they follow the {@code DeliveryApi} Javadoc
- * so behaviour stays the same when WP3's implementation replaces this. Every other method throws
- * {@link UnsupportedOperationException}. Nothing is written to the database and no events are published.
+ * <p>Only the methods the courier screens use are real ({@code findById}, {@code findByTrackingNumber},
+ * {@code findAllById}, {@code history}, {@code changeStatus}); they follow the {@code DeliveryApi} Javadoc so
+ * behaviour stays the same when WP3's implementation replaces this. Every other method, including the deprecated
+ * single-courier reads, throws {@link UnsupportedOperationException}. Nothing is written to the database and no
+ * events are published. Changes made inside a transaction are undone when it rolls back ({@link FakeTransactions}).
  *
  * <p>{@code @Primary}: if a real implementation exists while the flag is still on, this one wins and
  * {@link FakeDeliverySeeder} logs a warning, instead of the app failing on two beans.
@@ -84,27 +85,19 @@ class FakeDeliveryApi implements DeliveryApi {
     }
 
     @Override
-    public List<DeliverySnapshot> findForCourier(UUID courierId, Instant finishedSince) {
+    public Optional<DeliverySnapshot> findByTrackingNumber(String trackingNumber) {
+        if (trackingNumber == null) {
+            return Optional.empty();
+        }
+        String normalized = trackingNumber.replaceAll("\\s+", "").toUpperCase(Locale.ROOT);
         return parcels.values().stream()
-                .filter(parcel -> courierId.equals(parcel.assignedCourierId()))
-                .filter(parcel -> !parcel.status().isFinished() || !parcel.updatedAt().isBefore(finishedSince))
-                .toList();
+                .filter(parcel -> parcel.trackingNumber().equals(normalized))
+                .findFirst();
     }
 
     @Override
-    public Page<DeliverySnapshot> findFinishedForCourier(UUID courierId, String trackingNumber, Pageable pageable) {
-        List<DeliverySnapshot> finished = parcels.values().stream()
-                .filter(parcel -> courierId.equals(parcel.assignedCourierId()))
-                .filter(parcel -> parcel.status().isFinished())
-                .filter(parcel -> trackingNumber == null || trackingNumber.equals(parcel.trackingNumber()))
-                .sorted(Comparator.comparing(DeliverySnapshot::updatedAt).reversed())
-                .toList();
-        if (pageable.isUnpaged()) {
-            return new PageImpl<>(finished, pageable, finished.size());
-        }
-        int from = (int) Math.min(pageable.getOffset(), finished.size());
-        int to = Math.min(from + pageable.getPageSize(), finished.size());
-        return new PageImpl<>(finished.subList(from, to), pageable, finished.size());
+    public List<DeliverySnapshot> findAllById(Collection<UUID> parcelIds) {
+        return parcelIds.stream().distinct().map(parcels::get).filter(Objects::nonNull).toList();
     }
 
     @Override
@@ -118,12 +111,9 @@ class FakeDeliveryApi implements DeliveryApi {
         if (parcel == null) {
             throw new NotFoundException(ErrorCode.NOT_FOUND);
         }
+        // Multi-branch: the caller checked the courier's assignment; delivery checks only the role.
         String role = command.actorRole();
-        boolean courier = "COURIER".equals(role);
-        if (!courier && !"ADMIN".equals(role)) {
-            throw new ForbiddenException(ErrorCode.FORBIDDEN);
-        }
-        if (courier && !command.actorId().equals(parcel.assignedCourierId())) {
+        if (!"COURIER".equals(role) && !"ADMIN".equals(role)) {
             throw new ForbiddenException(ErrorCode.FORBIDDEN);
         }
         ParcelStatus target = command.toStatus();
@@ -148,12 +138,20 @@ class FakeDeliveryApi implements DeliveryApi {
                 parcel.merchantOrderRef(), parcel.feeAmount(), parcel.currency(), parcel.version() + 1,
                 target == ParcelStatus.AT_BRANCH ? command.branch() : null);
 
+        List<ParcelStatusEntry> previousHistory = history(parcel.id());
         List<ParcelStatusEntry> history = new ArrayList<>();
-        history.add(new ParcelStatusEntry(target, command.note(), failed ? command.failureReason() : null, role, now));
-        history.addAll(history(parcel.id()));
+        history.add(new ParcelStatusEntry(target, command.note(), failed ? command.failureReason() : null, role, now,
+                command.branch()));
+        history.addAll(previousHistory);
         histories.put(parcel.id(), List.copyOf(history));
         parcels.put(parcel.id(), updated);
+        FakeTransactions.onRollback(this, () -> restore(parcel, previousHistory));
         return updated;
+    }
+
+    private synchronized void restore(DeliverySnapshot parcel, List<ParcelStatusEntry> history) {
+        histories.put(parcel.id(), history);
+        parcels.put(parcel.id(), parcel);
     }
 
     // ---- Not supported by the fake ----
@@ -169,7 +167,12 @@ class FakeDeliveryApi implements DeliveryApi {
     }
 
     @Override
-    public Optional<DeliverySnapshot> findByTrackingNumber(String trackingNumber) {
+    public List<DeliverySnapshot> findForCourier(UUID courierId, Instant finishedSince) {
+        throw new UnsupportedOperationException(UNSUPPORTED);
+    }
+
+    @Override
+    public Page<DeliverySnapshot> findFinishedForCourier(UUID courierId, String trackingNumber, Pageable pageable) {
         throw new UnsupportedOperationException(UNSUPPORTED);
     }
 
@@ -180,11 +183,6 @@ class FakeDeliveryApi implements DeliveryApi {
 
     @Override
     public Page<DeliverySnapshot> findByMerchant(UUID merchantId, ParcelStatus status, Pageable pageable) {
-        throw new UnsupportedOperationException(UNSUPPORTED);
-    }
-
-    @Override
-    public List<DeliverySnapshot> findAllById(Collection<UUID> parcelIds) {
         throw new UnsupportedOperationException(UNSUPPORTED);
     }
 

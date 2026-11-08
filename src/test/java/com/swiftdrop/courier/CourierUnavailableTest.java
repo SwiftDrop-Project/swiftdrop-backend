@@ -1,4 +1,4 @@
-// TEMPORARY - delete when WP3 implements DeliveryApi (then there is always an implementation).
+// TEMPORARY - delete when WP3 and WP8 implement DeliveryApi and AssignmentApi (then there is always an implementation).
 package com.swiftdrop.courier;
 
 import com.swiftdrop.IntegrationTest;
@@ -8,40 +8,34 @@ import com.swiftdrop.identity.UserStatus;
 import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder;
 
-import java.util.UUID;
-
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/** The normal test context has no DeliveryApi at all (no fake, no mock): the app starts and courier answers 503. */
+/**
+ * The normal test context has no DeliveryApi and no AssignmentApi at all (no fakes, no mocks): the app starts and
+ * every courier endpoint answers 503.
+ */
 class CourierUnavailableTest extends IntegrationTest {
 
     @Autowired
     IdentityApi identity;
 
     @Test
-    void withoutADeliveryImplementationCourierEndpointsAnswer503() throws Exception {
+    void withoutImplementationsEveryCourierEndpointAnswers503() throws Exception {
         String email = uniqueEmail();
         identity.registerUser("Kamal Jayawardena", email, stored(uniquePhone()), PASSWORD, Role.COURIER,
                 UserStatus.ACTIVE);
         Cookie courier = tokenCookie(login(email, PASSWORD, false).andExpect(status().isOk()).andReturn());
-        UUID parcelId = UUID.randomUUID();
 
-        mvc.perform(get("/api/v1/courier/deliveries/today").cookie(courier))
-                .andExpect(status().isServiceUnavailable())
-                .andExpect(jsonPath("$.status").value(503))
-                .andExpect(jsonPath("$.code").value("SERVICE_UNAVAILABLE"))
-                .andExpect(jsonPath("$.message").value("This isn't available yet. Please try again later."));
-        mvc.perform(get("/api/v1/courier/deliveries/history").cookie(courier))
-                .andExpect(status().isServiceUnavailable());
-        mvc.perform(get("/api/v1/courier/deliveries/{id}", parcelId).cookie(courier))
-                .andExpect(status().isServiceUnavailable());
-        mvc.perform(post("/api/v1/courier/deliveries/{id}/status", parcelId).cookie(courier)
-                        .contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"PICKED_UP\"}"))
-                .andExpect(status().isServiceUnavailable());
+        for (MockHttpServletRequestBuilder request
+                : CourierAccessTest.endpoints("/api/v1/courier/assignments", "/api/v1/courier/parcels")) {
+            mvc.perform(request.cookie(courier))
+                    .andExpect(status().isServiceUnavailable())
+                    .andExpect(jsonPath("$.status").value(503))
+                    .andExpect(jsonPath("$.code").value("SERVICE_UNAVAILABLE"))
+                    .andExpect(jsonPath("$.message").value("This isn't available yet. Please try again later."));
+        }
     }
 }

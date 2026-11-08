@@ -54,8 +54,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "swiftdrop.mail.from=no-reply@test.swiftdrop.lk",
         "swiftdrop.security.verification-codes.secret=test-only-code-secret-0123456789-abcdefghijklmnop",
         "swiftdrop.email-checks.mx-enabled=true",
-        // TEMPORARY (courier demo data): a local .env with SWIFTDROP_FAKE_DELIVERY=true must not change the tests.
-        "swiftdrop.dev.fake-delivery=false"
+        // TEMPORARY (courier demo data): a local .env with SWIFTDROP_FAKE_DELIVERY / SWIFTDROP_FAKE_DISPATCH=true must
+        // not change the tests.
+        "swiftdrop.dev.fake-delivery=false",
+        "swiftdrop.dev.fake-dispatch=false"
 })
 @AutoConfigureMockMvc
 @Import({TestcontainersConfiguration.class, TestDoublesConfiguration.class})

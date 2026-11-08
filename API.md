@@ -583,115 +583,226 @@ Authenticated with either the `SD_TOKEN` cookie **or** an `X-Api-Key: <rawKey>` 
 
 ## Courier (role `COURIER` only)
 
-The logged-in courier's parcels (WP9). No login → `401 UNAUTHENTICATED`; any other role (including `ADMIN`) →
-`403 FORBIDDEN`. A courier only sees parcels assigned to them: another courier's parcel, an unknown id, or a parcel
-that was reassigned to someone else → `404 NOT_FOUND`. "Today" is the current day in Sri Lankan time (Asia/Colombo).
+The logged-in courier's tasks (WP9). A dispatcher (WP8) gives couriers **tasks** of three types, each holding one or
+more parcels:
 
-Until parcels exist on the server (the delivery module is not implemented yet), every courier endpoint answers
-`503 SERVICE_UNAVAILABLE`. For local demos, `SWIFTDROP_FAKE_DELIVERY=true` (with `SEED_DEMO_USERS=true`) gives
-`courier@swiftdrop.lk` a few in-memory demo parcels; they are not saved and a restart resets them (temporary).
+| Type | The courier… | Branches |
+|---|---|---|
+| `PICKUP` | collects parcels from their senders and hands them over at a branch | `destinationBranch` |
+| `TRANSFER` | takes parcels from one branch to another | `originBranch` → `destinationBranch` |
+| `DELIVERY` | takes parcels from a branch to their recipients; failed ones go back to that branch | `originBranch` |
 
-### Courier delivery (response)
+A parcel passes through several tasks and couriers. **Completing a task does not mean its parcels were delivered**:
+the task status (`ASSIGNED` → `IN_PROGRESS` → `COMPLETED`, or `CANCELLED` by the dispatcher) is separate from the
+parcel status ([Parcel statuses](#parcel-statuses)). Every step the courier records also moves the parcel status, in
+the same transaction (both are saved, or neither).
+
+- No login → `401 UNAUTHENTICATED`; any other role (including `ADMIN`) → `403 FORBIDDEN`.
+- A courier sees only their own tasks and the parcels in them: another courier's task or parcel, or an unknown id →
+  `404 NOT_FOUND`. A non-UUID id → `400 VALIDATION_FAILED`.
+- "Today" is the current day in Sri Lankan time (Asia/Colombo).
+- Until dispatch (WP8) and delivery (WP3) are implemented, every courier endpoint answers `503 SERVICE_UNAVAILABLE`.
+  For local demos (temporary): `SWIFTDROP_FAKE_DELIVERY=true`, `SWIFTDROP_FAKE_DISPATCH=true` and
+  `SEED_DEMO_USERS=true` give `courier@swiftdrop.lk` one task of each type in memory (Delgoda → Gampaha branch →
+  Matara branch → Deniyaya, tracking numbers `SD2611060001`-`SD2611060008`). Nothing is saved; a restart resets
+  them. With only one of the two flags, the endpoints still answer `503`.
+
+### Item outcomes (what happened to one parcel in one task)
+
+Every parcel in a task starts as `PENDING`.
+
+| Type | Outcome | May follow | Parcel moves | Closes the item |
+|---|---|---|---|---|
+| `PICKUP` | `COLLECTED` | `PENDING` | `CREATED` → `PICKED_UP` | no |
+| `PICKUP` | `NOT_COLLECTED` (+ `problem`) | `PENDING` | no change | yes |
+| `PICKUP` | `HANDED_OVER` (handover) | `COLLECTED` | `PICKED_UP` → `AT_BRANCH` (destination) | yes |
+| `TRANSFER` | `LOADED` | `PENDING` | `AT_BRANCH` (origin) → `IN_TRANSIT` | no |
+| `TRANSFER` | `NOT_LOADED` (+ `problem`) | `PENDING` | no change | yes |
+| `TRANSFER` | `HANDED_OVER` (handover) | `LOADED` | `IN_TRANSIT` → `AT_BRANCH` (destination) | yes |
+| `DELIVERY` | `LOADED` | `PENDING` | `AT_BRANCH` (origin) → `OUT_FOR_DELIVERY` | no |
+| `DELIVERY` | `NOT_LOADED` (+ `problem`) | `PENDING` | no change | yes |
+| `DELIVERY` | `DELIVERED` (+ `recipientName`) | `LOADED` | `OUT_FOR_DELIVERY` → `DELIVERED` | yes |
+| `DELIVERY` | `FAILED` (+ `failureReason`) | `LOADED` | `OUT_FOR_DELIVERY` → `FAILED` | no: the courier still holds it |
+| `DELIVERY` | `RETURNED` (handover) | `FAILED` | `FAILED` → `AT_BRANCH` (origin) | yes |
+
+- `problem` (couldn't take the parcel): `SENDER_UNAVAILABLE` | `PARCEL_NOT_READY` | `PARCEL_MISSING` |
+  `PARCEL_DAMAGED` | `ADDRESS_UNREACHABLE` | `OTHER`
+- `failureReason` (delivery failed): `RECIPIENT_UNAVAILABLE` | `WRONG_ADDRESS` | `RECIPIENT_REFUSED` |
+  `ADDRESS_UNREACHABLE` | `PARCEL_DAMAGED` | `OTHER`
+- A task can be completed once every item is closed, even when some parcels were never taken.
+- Customers see only the parcel status (e.g. "At Gampaha branch"). Outcomes, problems, `receivedBy` and courier
+  notes stay internal.
+
+### Task (summary)
 ```json
 {
-  "parcelId": "0b6c7c1e-5d0f-4a51-9d2e-3a4f5b6c7d8e",
-  "trackingNumber": "SD2611004817",
-  "status": "OUT_FOR_DELIVERY",
-  "stop": "DELIVERY",
-  "pickup": { "name": "Lanka Crafts", "phone": "+94712345678", "address": "12 High Level Road",
-              "city": "Nugegoda", "district": "COLOMBO" },
-  "recipient": { "name": "Nimal Perera", "phone": "+94771234567", "address": "45 Peradeniya Road",
-                 "city": "Kandy", "district": "KANDY" },
-  "weightKg": 1.2,
-  "codAmount": 2450.00,
-  "instructions": "Call before you arrive.",
-  "assignedAt": "2026-11-05T02:30:00Z",
-  "updatedAt": "2026-11-05T05:10:00Z",
-  "nextStatuses": ["DELIVERED", "FAILED"]
+  "assignmentId": "c6dd7fdd-ecf6-48b7-8eb5-253117887001",
+  "type": "PICKUP",
+  "status": "IN_PROGRESS",
+  "originBranch": null,
+  "destinationBranch": "GAMPAHA",
+  "scheduledFor": "2026-11-09",
+  "note": "Morning round around Delgoda. Hand everything over at the Gampaha branch.",
+  "assignedAt": "2026-11-09T02:30:00Z",
+  "completedAt": null,
+  "counts": { "total": 3, "open": 1, "closed": 2, "problems": 1 },
+  "canComplete": false
 }
 ```
-- `stop`: `PICKUP` while `status` is `CREATED`, otherwise `DELIVERY`.
-- `codAmount`: cash to collect in rupees; `null` when already paid. `instructions` may be `null`.
-- `nextStatuses`: what this courier may set now, in life-cycle order (empty once `DELIVERED` or `FAILED`).
+- `counts.problems`: items not collected or not loaded, and failed deliveries (also after they were returned).
+- `canComplete`: the task is open and every item is closed.
 
-| From | Allowed next |
-|---|---|
-| `CREATED` | `PICKED_UP` |
-| `PICKED_UP` | `IN_TRANSIT` |
-| `IN_TRANSIT` | `OUT_FOR_DELIVERY` |
-| `OUT_FOR_DELIVERY` | `DELIVERED`, `FAILED` |
-| `DELIVERED`, `FAILED` | none |
-
-`failureReason`: `RECIPIENT_UNAVAILABLE` | `WRONG_ADDRESS` | `RECIPIENT_REFUSED` | `ADDRESS_UNREACHABLE` |
-`PARCEL_DAMAGED` | `OTHER`
-
-### `GET /courier/deliveries/today`
+### Task item (one parcel in the task detail)
 ```json
-{ "date": "2026-11-05", "toDo": 5, "done": 2, "items": [ /* Courier delivery */ ] }
+{
+  "parcelId": "ab598d39-d554-42f5-b609-6fa90f3a5357",
+  "trackingNumber": "SD2611060001",
+  "sequence": 1,
+  "parcelStatus": "CREATED",
+  "outcome": "PENDING",
+  "allowedOutcomes": ["COLLECTED", "NOT_COLLECTED"],
+  "readyForHandover": false,
+  "contact": { "name": "Delgoda Spice Traders", "phone": "+94760000101", "address": "14 Kandy Road",
+               "city": "Delgoda", "district": "GAMPAHA" },
+  "from": { "city": "Delgoda", "district": "GAMPAHA" },
+  "to": { "city": "Deniyaya", "district": "MATARA" },
+  "weightKg": 1.20,
+  "codAmount": null,
+  "instructions": null,
+  "problem": null,
+  "failureReason": null,
+  "recipientName": null,
+  "receivedBy": null,
+  "note": null,
+  "updatedAt": "2026-11-09T02:30:00Z"
+}
 ```
-Every open parcel assigned to the courier (whatever day it was assigned), plus the ones they finished today.
-Order: pickups (`CREATED`, oldest `assignedAt` first), then the other open parcels (oldest `assignedAt` first), then
-finished ones (newest first). `toDo` = not finished, `done` = finished today.
+- `contact`: only while the item and the task are open. The sender for `PICKUP`, the recipient for `DELIVERY`, never
+  for `TRANSFER`.
+- `codAmount` (cash to collect, rupees) and `instructions`: only for `DELIVERY`.
+- `allowedOutcomes`: what the courier may record now with the outcome endpoint, in life-cycle order (empty once the
+  task is closed). `HANDED_OVER` and `RETURNED` are never in it: they go through the handover.
+- `readyForHandover`: `COLLECTED` (PICKUP) or `LOADED` (TRANSFER), or `FAILED` (DELIVERY, back to the origin branch).
+- `note`: the courier's own last note on this item.
+
+### `GET /courier/assignments/today`
+```json
+{ "date": "2026-11-09", "open": 2, "completedToday": 1, "assignments": [ /* Task (summary) */ ] }
+```
+Every open task (whatever day it was assigned), plus the tasks completed or cancelled today. Order: `IN_PROGRESS`,
+then `ASSIGNED` (oldest `assignedAt` first), then closed ones (newest first). `open` = not completed or cancelled,
+`completedToday` = completed today.
 - `200` · `401` · `403` · `503`
 
-### `GET /courier/deliveries/history?page=0&size=20&trackingNumber=SD2611004817`
-Parcels this courier delivered or marked failed, newest first, as a page of Courier delivery:
+### `GET /courier/assignments/history?page=0&size=20&trackingNumber=SD2611060007`
+Completed and cancelled tasks, newest first, as a page of Task (summary):
 ```json
-{ "content": [ /* Courier delivery */ ], "page": 0, "size": 20, "totalElements": 42, "totalPages": 3 }
+{ "content": [ /* Task (summary) */ ], "page": 0, "size": 20, "totalElements": 42, "totalPages": 3 }
 ```
-`page` from 0 (default 0); `size` 1-100 (default 20); `trackingNumber` optional, spaces and case ignored.
+`page` from 0 (default 0); `size` 1-100 (default 20); `trackingNumber` optional (spaces and case ignored): only the
+tasks that held that parcel; an unknown number gives an empty page.
 - `200` · `400` `VALIDATION_FAILED` (`fieldErrors.page` / `fieldErrors.size`) · `401` · `403` · `503`
 
-### `GET /courier/deliveries/{parcelId}`
-All Courier delivery fields, plus:
-```json
-{
-  "history": [
-    { "status": "OUT_FOR_DELIVERY", "note": null, "failureReason": null, "occurredAt": "2026-11-05T05:10:00Z" },
-    { "status": "PICKED_UP", "note": "Collected from front desk", "failureReason": null, "occurredAt": "2026-11-05T03:00:00Z" }
-  ],
-  "proof": null,
-  "failureReason": null
-}
-```
-- `history`: newest first. `proof`: `{ "recipientName": "Nimal Perera", "hasPhoto": false }` once `DELIVERED`,
-  otherwise `null`. `failureReason`: only once `FAILED`.
+### `GET /courier/assignments/{assignmentId}`
+All Task (summary) fields, plus `"items": [ /* Task item */ ]` ordered by `sequence`.
 - `200` · `400` (non-UUID id) · `401` · `403` · `404` `NOT_FOUND` · `503`
 
-### `POST /courier/deliveries/{parcelId}/status`
+### `POST /courier/assignments/{assignmentId}/items/{parcelId}/outcome`
+Records what happened to one parcel (everything except the handover):
 ```json
-{ "status": "PICKED_UP", "note": "Collected from front desk" }
+{ "outcome": "COLLECTED", "note": "From the front desk" }
 ```
 ```json
-{ "status": "DELIVERED", "recipientName": "Nimal Perera", "note": "Left with the guard" }
+{ "outcome": "NOT_COLLECTED", "problem": "SENDER_UNAVAILABLE", "note": "Shop closed until 2 pm" }
 ```
 ```json
-{ "status": "FAILED", "failureReason": "RECIPIENT_UNAVAILABLE", "note": "No answer, called twice" }
+{ "outcome": "DELIVERED", "recipientName": "Nimal Perera" }
 ```
-- `DELIVERED` needs `recipientName`. `FAILED` needs `failureReason`; `OTHER` also needs a `note`.
-- `recipientName` only with `DELIVERED`; `failureReason` only with `FAILED`. `note` is optional otherwise.
-- `200`: the updated parcel (same shape as `GET /courier/deliveries/{parcelId}`). Customers, merchants and the
-  tracking page are told through the delivery module's `ParcelStatusChanged` event (`actorRole: COURIER`).
-- `400` `VALIDATION_FAILED` · `401` · `403` · `404` `NOT_FOUND` · `503`
-- `409` `INVALID_STATUS_TRANSITION`: not allowed from the parcel's current status (e.g. a skipped step, the button
-  pressed twice, or the dispatcher changed it). The frontend reloads the parcel.
-- Checked in this order: the request (400), the parcel is yours (404), the step is allowed (409).
+```json
+{ "outcome": "FAILED", "failureReason": "RECIPIENT_UNAVAILABLE", "note": "No answer, called twice" }
+```
+- `200`: the task detail after the change. Customers, merchants and the tracking page are told through delivery's
+  `ParcelStatusChanged` event (`actorRole: COURIER`).
+- `400` `VALIDATION_FAILED` · `401` · `403` · `404` `NOT_FOUND` (not your task, or the parcel is not in it) · `503`
+- `409` `ASSIGNMENT_CLOSED`: the task is completed or cancelled.
+- `409` `TASK_STEP_NOT_ALLOWED`: the outcome doesn't follow the item's current one (e.g. `DELIVERED` before `LOADED`,
+  or the button pressed twice), or someone changed the task at the same moment. The frontend reloads the task.
+- `409` `INVALID_STATUS_TRANSITION`: the parcel itself can't make the move (e.g. it is no longer at the task's
+  origin branch).
+
+### `POST /courier/assignments/{assignmentId}/handover`
+Hands parcels over at a branch: `HANDED_OVER` at the destination (PICKUP, TRANSFER), or `RETURNED` to the origin
+(failed DELIVERY parcels). **All or nothing**: every listed parcel must be `readyForHandover`, or nothing changes.
+```json
+{ "parcelIds": ["ab598d39-d554-42f5-b609-6fa90f3a5357", "4d15dee6-ad98-4ac0-91a5-fb8d08659571"],
+  "receivedBy": "S. Silva", "note": "Counter 2" }
+```
+`receivedBy` is the name of the person at the branch who took the parcels (there is no branch-staff login yet).
+- `200`: the task detail after the change.
+- `400` · `401` · `403` · `404` (not your task, or a parcel not in it) · `503`
+- `409` `ASSIGNMENT_CLOSED` · `409` `TASK_STEP_NOT_ALLOWED` (a parcel is not ready) · `409`
+  `INVALID_STATUS_TRANSITION`
+
+### `POST /courier/assignments/{assignmentId}/complete`
+No body. Completes the task once every item is closed. No parcel status changes.
+- `200`: the Task (summary), `status: COMPLETED`.
+- `401` · `403` · `404` · `503`
+- `409` `ASSIGNMENT_NOT_FINISHED`: a parcel is still pending, collected, loaded or failed-but-not-returned.
+- `409` `ASSIGNMENT_CLOSED`: already completed or cancelled.
+
+### `GET /courier/parcels/{parcelId}`
+One parcel the courier handles or handled (it must be in one of their tasks):
+```json
+{
+  "parcelId": "ab598d39-d554-42f5-b609-6fa90f3a5357",
+  "trackingNumber": "SD2611060001",
+  "status": "AT_BRANCH",
+  "currentBranch": "GAMPAHA",
+  "from": { "city": "Delgoda", "district": "GAMPAHA" },
+  "to": { "city": "Deniyaya", "district": "MATARA" },
+  "myItems": [ { "assignmentId": "c6dd7fdd-ecf6-48b7-8eb5-253117887001", "type": "PICKUP", "outcome": "HANDED_OVER" } ],
+  "contact": null,
+  "history": [
+    { "status": "AT_BRANCH", "branch": "GAMPAHA", "failureReason": null, "occurredAt": "2026-11-09T05:10:00Z" },
+    { "status": "PICKED_UP", "branch": null, "failureReason": null, "occurredAt": "2026-11-09T03:00:00Z" },
+    { "status": "CREATED", "branch": null, "failureReason": null, "occurredAt": "2026-11-09T01:30:00Z" }
+  ]
+}
+```
+- `myItems`: this courier's items for the parcel, newest task first. `contact`: only while the courier has an open
+  item (sender for PICKUP, recipient for DELIVERY, none for TRANSFER).
+- `history`: newest first, **without notes** (several couriers write on one parcel; your own notes are on your task
+  items).
+- `200` · `400` (non-UUID id) · `401` · `403` · `404` `NOT_FOUND` · `503`
 
 Proof-of-delivery photos (upload and download) come in a later version.
+
+### Checks, in this order (writes)
+1. The request (`400`).
+2. The task is yours, and the parcel is in it (`404`).
+3. The task is open (`409` `ASSIGNMENT_CLOSED`).
+4. The step is allowed for the item (`409` `TASK_STEP_NOT_ALLOWED`).
+5. The parcel can make the move (`409` `INVALID_STATUS_TRANSITION`).
+6. The parcel status and the outcome are saved together. A clash with another change → `409` `TASK_STEP_NOT_ALLOWED`.
 
 ### Validation rules (courier)
 
 | Field | Rule | Error message |
 |---|---|---|
-| `status` | Required, one of the parcel statuses | Select the new status. |
+| `outcome` | Required, a value from [Item outcomes](#item-outcomes-what-happened-to-one-parcel-in-one-task), not `PENDING` | Select what happened. |
+| `outcome` `HANDED_OVER` / `RETURNED` | Not on the outcome endpoint | Use Hand over for this step. |
+| `problem` (`NOT_COLLECTED` / `NOT_LOADED`) | Required | Select why you couldn't take the parcel. |
+| `problem` with another outcome | Not allowed | Only when a parcel couldn't be collected or loaded. |
+| `note` (`problem: OTHER` or `failureReason: OTHER`) | Required, 3-500 chars | Describe what went wrong. |
 | `note` | Optional, max 500 chars | Keep the note under 500 characters. |
-| `note` (`failureReason: OTHER`) | Required, 3-500 chars | Describe what went wrong. |
 | `recipientName` (`DELIVERED`) | Required, 2-100 chars | Enter the name of the person who received the parcel. |
-| `recipientName` with another status | Not allowed | Only for delivered parcels. |
-| `failureReason` (`FAILED`) | Required, one of the values above | Select why the delivery failed. |
-| `failureReason` with another status | Not allowed | Only for failed deliveries. |
+| `recipientName` with another outcome | Not allowed | Only for delivered parcels. |
+| `failureReason` (`FAILED`) | Required | Select why the delivery failed. |
+| `failureReason` with another outcome | Not allowed | Only for failed deliveries. |
+| `parcelIds` (handover) | 1-100 | Select at least one parcel. / Hand over at most 100 parcels at a time. |
+| `parcelIds` (handover) | No duplicates | Select each parcel only once. |
+| `receivedBy` (handover) | Required, 2-100 chars | Enter the name of the person at the branch who received the parcels. |
 | `page` (history) | 0 or more | Use a page number of 0 or more. |
 | `size` (history) | 1-100 | Use a page size from 1 to 100. |
 
-An unknown `status` or `failureReason` value gives `400` with that field in `fieldErrors`.
-
+An unknown `outcome`, `problem` or `failureReason` value gives `400` with that field in `fieldErrors`.

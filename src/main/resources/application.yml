@@ -116,8 +116,10 @@ swiftdrop:
     admin-password: ${ADMIN_PASSWORD:}
     demo-users: ${SEED_DEMO_USERS:false}
     demo-password: ${DEMO_PASSWORD:}
-  # TEMPORARY - delete when WP3 implements DeliveryApi.
-  # true: courier endpoints use an in-memory FakeDeliveryApi with demo parcels for courier@swiftdrop.lk
-  # (needs SEED_DEMO_USERS=true). Nothing is written to the database. Local demos only, never on shared servers.
+  # TEMPORARY - delete each flag when WP3 implements DeliveryApi / WP8 implements AssignmentApi.
+  # true: courier endpoints use an in-memory FakeDeliveryApi (parcels) / FakeAssignmentApi (courier tasks). With both
+  # on (and SEED_DEMO_USERS=true), courier@swiftdrop.lk gets demo PICKUP, TRANSFER and DELIVERY tasks.
+  # Nothing is written to the database. Local demos only, never on shared servers.
   dev:
     fake-delivery: ${SWIFTDROP_FAKE_DELIVERY:false}
+    fake-dispatch: ${SWIFTDROP_FAKE_DISPATCH:false}

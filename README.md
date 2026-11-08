@@ -35,13 +35,13 @@ architecture diagram). `SwiftdropBackendApplication` stays at the root.
 | `merchants` | Merchant business profiles and the admin approval workflow (API keys later) | `merchants` | Viduranga | Built |
 | `pricing` | Delivery rates and price quotes | `pricing` | TBD | Placeholder |
 | `delivery` | Parcels, status changes, proof of delivery, receipts, outbox events | `delivery` | Pasindu | Contracts ready |
-| `dispatch` | Assigning parcels to couriers by zone | - | TBD | Placeholder |
+| `dispatch` | Courier tasks (PICKUP, TRANSFER between branches, DELIVERY) with their parcels | - (tables proposed) | TBD (WP8) | Contract only: `AssignmentApi` |
 | `reporting` | Delivery and cash-on-delivery reports | - | TBD | Placeholder |
 | `tracking` | Parcel tracking by tracking number, live updates (SSE) | - | TBD | Placeholder |
 | `notifications` | Emails (and later SMS) to users | `notifications` | TBD | Placeholder |
 | `webhooks` | Merchant webhooks | `webhooks` | TBD | Placeholder |
 | `outbox` | Relays delivery's outbox events to RabbitMQ | - | TBD | Placeholder |
-| `courier` | The courier's parcels: today's pickups and deliveries, status updates, delivery history (through `DeliveryApi`) | - | Kalpani | Built (answers 503 until delivery is implemented) |
+| `courier` | The courier's tasks: today's tasks, what happened to each parcel, branch handovers, completing a task, task history, one parcel (through `AssignmentApi` and `DeliveryApi`) | - | Kalpani | Built (answers 503 until dispatch and delivery are implemented) |
 
 Each module's `package-info.java` describes its purpose, owner, schema and the events it publishes and consumes.
 Placeholder modules already have their public contract types (for example `DeliveryApi`, `ParcelStatusChanged`)
@@ -188,7 +188,8 @@ secrets in the code.
 | `DEMO_PASSWORD` | empty | No | Password for the demo accounts |
 | `GOOGLE_CLIENT_ID` | empty | No | Google OAuth client ID. Google sign-in is on only when both Google values are set. |
 | `GOOGLE_CLIENT_SECRET` | empty | No | Google OAuth client secret. Never commit it. |
-| `SWIFTDROP_FAKE_DELIVERY` | `false` | No | **Temporary**, local demos only: `true` gives the courier endpoints in-memory demo parcels for `courier@swiftdrop.lk` (needs `SEED_DEMO_USERS=true`). Nothing is saved. Removed once delivery is implemented. |
+| `SWIFTDROP_FAKE_DELIVERY` | `false` | No | **Temporary**, local demos only: `true` gives the courier endpoints an in-memory delivery module. Use it with `SWIFTDROP_FAKE_DISPATCH`. Removed once delivery is implemented. |
+| `SWIFTDROP_FAKE_DISPATCH` | `false` | No | **Temporary**, local demos only: `true` gives the courier endpoints in-memory courier tasks. With both fake flags and `SEED_DEMO_USERS=true`, `courier@swiftdrop.lk` gets one PICKUP, one TRANSFER and one DELIVERY task (Delgoda → Gampaha → Matara → Deniyaya). With only one flag the courier endpoints answer 503. Nothing is saved. Removed once dispatch is implemented. |
 
 The connection pool is small on purpose (at most 3 connections, none kept while idle), because the
 whole team shares one Neon database. These values are fixed in `application.yml`.
@@ -351,8 +352,8 @@ PowerShell: `.\mvnw.cmd test`
 | `merchants/AdminMerchantTest` | Admin list, approve, reject, and access rules |
 | `merchants/internal/...` | Demo merchant seeding (approved, can log in, parallel-safe) |
 | `infrastructure/...` | Districts, correlation ID, RabbitMQ exchange and queues |
-| `courier/Courier*Test` | Courier endpoints with `DeliveryApi` mocked: access (401/403), ownership (404), today's list and order, status changes and their rules (400/409), history paging; 503 without a delivery implementation |
-| `courier/FakeDeliveryWiringTest`, `courier/internal/...` | Temporary demo fake: starts with the flag on, seeded parcels, its rules; "today" in Sri Lankan time |
+| `courier/Courier*Test` | Courier endpoints with `AssignmentApi` and `DeliveryApi` mocked: access (401/403), ownership (404), today's list and order, item outcomes and the parcel move per task type, handovers (all or nothing), completing, check order and request rules (400/409), history; 503 without implementations; `CourierRollbackTest` (both fakes, real transaction): nothing is kept when dispatch fails |
+| `courier/OnlyFakeDeliveryTest`, `courier/internal/...` | Temporary demo fakes: `FakeDeliveryWiringTest` walks all three seeded tasks over HTTP with both flags on; with only the delivery flag the app starts and answers 503; the fakes' rules and rollback; "today" in Sri Lankan time |
 | `shared/validation/...` | Phone number rules |
 | `SwiftdropBackendApplicationTests` | App starts, health, Swagger, Google off without credentials |
 

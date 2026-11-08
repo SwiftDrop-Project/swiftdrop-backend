@@ -48,14 +48,18 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
 - A module's public URLs: implement `shared.web.PublicEndpoints` as a bean in the module. Never edit identity's SecurityConfig for that.
 - Unbuilt modules have placeholder contracts ("Contract owned by <module> - extend in Phase 0"); the owner extends them.
 - Current dependencies: identity -> notifications, shared; merchants -> identity, shared; delivery -> shared;
-  dispatch -> delivery, shared; courier -> delivery, identity, shared; infrastructure -> shared. Nothing depends on
-  courier. Planned: courier -> dispatch (courier tasks); dispatch -> identity (active couriers).
+  dispatch -> delivery, shared; courier -> dispatch, delivery, identity, shared; infrastructure -> shared. Nothing
+  depends on courier. Planned: dispatch -> identity (active couriers).
 - dispatch: `AssignmentApi` is a contract only (WP8 implements it later; no tables or dispatcher endpoints yet).
   Assignment status and item outcomes are separate from the parcel status: a courier's task can be completed while
   its parcels are still on their way.
-- courier gets `DeliveryApi` through an `ObjectProvider` and answers 503 SERVICE_UNAVAILABLE while nothing implements
-  it. TEMPORARY: `courier/internal/fake` (`SWIFTDROP_FAKE_DELIVERY=true`) is an in-memory `DeliveryApi` for demos;
-  delete it (and its property and tests) when delivery is implemented.
+- courier gets `AssignmentApi` and `DeliveryApi` through `ObjectProvider`s and answers 503 SERVICE_UNAVAILABLE while
+  either has no implementation. Courier writes are `@Transactional`: the parcel status (delivery) and the item outcome
+  (dispatch) are saved together (`ParcelMoves` has the outcome → parcel status table).
+  TEMPORARY: `courier/internal/fake` holds in-memory `FakeDeliveryApi` (`SWIFTDROP_FAKE_DELIVERY=true`) and
+  `FakeAssignmentApi` (`SWIFTDROP_FAKE_DISPATCH=true`) for demos; with both on (and `SEED_DEMO_USERS=true`) the
+  seeder gives `courier@swiftdrop.lk` the Delgoda → Gampaha → Matara → Deniyaya demo. The fakes undo their changes
+  when a transaction rolls back. Delete each fake (and its property and tests) when its module is implemented.
 - delivery must never depend on identity: identity -> notifications, and notifications will consume
   `ParcelStatusChanged` (notifications -> delivery), so that would be a cycle. User ids are plain UUIDs and roles are
   plain names (e.g. `COURIER`). Multi-branch: several couriers handle one parcel, so callers authorize
