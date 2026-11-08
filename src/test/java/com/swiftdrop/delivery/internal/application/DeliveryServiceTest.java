@@ -4,6 +4,8 @@ import com.swiftdrop.delivery.ChangeStatusCommand;
 import com.swiftdrop.delivery.CreateDeliveryCommand;
 import com.swiftdrop.delivery.DeliveryContact;
 import com.swiftdrop.delivery.DeliverySnapshot;
+import com.swiftdrop.delivery.FailureReason;
+import com.swiftdrop.delivery.ParcelStatus;
 import com.swiftdrop.delivery.ParcelStatusChanged;
 import com.swiftdrop.delivery.ParcelStatusEntry;
 import com.swiftdrop.delivery.internal.domain.Parcel;
@@ -12,14 +14,20 @@ import com.swiftdrop.delivery.internal.domain.TrackingNumberGenerator;
 import com.swiftdrop.delivery.internal.persistence.ParcelRepository;
 import com.swiftdrop.delivery.internal.persistence.ParcelStatusHistoryRepository;
 import com.swiftdrop.shared.error.ApiException;
+import com.swiftdrop.shared.error.BusinessRuleException;
 import com.swiftdrop.shared.error.ErrorCode;
+import com.swiftdrop.shared.error.FieldValidationException;
+import com.swiftdrop.shared.error.ForbiddenException;
+import com.swiftdrop.shared.error.NotFoundException;
 import com.swiftdrop.shared.reference.District;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -29,13 +37,17 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import static com.swiftdrop.delivery.ParcelStatus.AT_BRANCH;
 import static com.swiftdrop.delivery.ParcelStatus.CREATED;
 import static com.swiftdrop.delivery.ParcelStatus.DELIVERED;
+import static com.swiftdrop.delivery.ParcelStatus.FAILED;
+import static com.swiftdrop.delivery.ParcelStatus.OUT_FOR_DELIVERY;
 import static com.swiftdrop.delivery.ParcelStatus.PICKED_UP;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -243,6 +255,188 @@ class DeliveryServiceTest {
                 DeliveryService.FINISHED, page);
         verify(parcels).findByAssignedCourierIdAndStatusInAndTrackingNumberOrderByStatusChangedAtDesc(COURIER_ID,
                 DeliveryService.FINISHED, "SD2611000777", page);
+    }
+
+    // ---- Changing status ----
+
+    @Test
+    void aPickUpSavesTheParcelThenItsHistoryRowAndTheEvent() {
+        Parcel parcel = stored(aParcel());
+
+        DeliverySnapshot snapshot = service.changeStatus(new ChangeStatusCommand(parcel.getId(), PICKED_UP,
+                COURIER_ID, "COURIER", "At the shop", null, null, null));
+
+        assertThat(snapshot.status()).isEqualTo(PICKED_UP);
+        // flushed first, so the event carries the parcel's new version
+        InOrder order = inOrder(parcels, statusHistory, outbox);
+        order.verify(parcels).saveAndFlush(parcel);
+        ArgumentCaptor<ParcelStatusHistory> row = ArgumentCaptor.forClass(ParcelStatusHistory.class);
+        order.verify(statusHistory).save(row.capture());
+        ArgumentCaptor<ParcelStatusChanged> event = ArgumentCaptor.forClass(ParcelStatusChanged.class);
+        order.verify(outbox).write(event.capture());
+
+        assertThat(row.getValue().getParcelId()).isEqualTo(parcel.getId());
+        assertThat(row.getValue().getFromStatus()).isEqualTo(CREATED);
+        assertThat(row.getValue().getToStatus()).isEqualTo(PICKED_UP);
+        assertThat(row.getValue().getActorId()).isEqualTo(COURIER_ID);
+        assertThat(row.getValue().getActorRole()).isEqualTo("COURIER");
+        assertThat(row.getValue().getNote()).isEqualTo("At the shop");
+        assertThat(row.getValue().getOccurredAt()).isEqualTo(NOW);
+
+        assertThat(event.getValue().parcelId()).isEqualTo(parcel.getId());
+        assertThat(event.getValue().parcelVersion()).isEqualTo(snapshot.version());
+        assertThat(event.getValue().trackingNumber()).isEqualTo("SD2611000777");
+        assertThat(event.getValue().customerId()).isEqualTo(parcel.getCustomerId());
+        assertThat(event.getValue().fromStatus()).isEqualTo(CREATED);
+        assertThat(event.getValue().toStatus()).isEqualTo(PICKED_UP);
+        assertThat(event.getValue().actorId()).isEqualTo(COURIER_ID);
+        assertThat(event.getValue().actorRole()).isEqualTo("COURIER");
+        assertThat(event.getValue().note()).isEqualTo("At the shop");
+        assertThat(event.getValue().failureReason()).isNull();
+        assertThat(event.getValue().branch()).isNull();
+        assertThat(event.getValue().occurredAt()).isEqualTo(NOW);
+    }
+
+    @Test
+    void arrivingAtABranchPutsTheBranchOnTheParcelAndTheEvent() {
+        Parcel parcel = stored(aParcelMovedTo(PICKED_UP));
+
+        DeliverySnapshot snapshot = service.changeStatus(new ChangeStatusCommand(parcel.getId(), AT_BRANCH,
+                COURIER_ID, "COURIER", null, null, null, null, District.GAMPAHA));
+
+        assertThat(snapshot.status()).isEqualTo(AT_BRANCH);
+        assertThat(snapshot.currentBranch()).isEqualTo(District.GAMPAHA);
+        assertThat(writtenEvent().branch()).isEqualTo(District.GAMPAHA);
+    }
+
+    @Test
+    void aFailedDeliveryNamesTheReasonInTheEvent() {
+        Parcel parcel = stored(aParcelMovedTo(PICKED_UP, AT_BRANCH, OUT_FOR_DELIVERY));
+
+        DeliverySnapshot snapshot = service.changeStatus(new ChangeStatusCommand(parcel.getId(), FAILED,
+                COURIER_ID, "COURIER", "Nobody at home", FailureReason.RECIPIENT_UNAVAILABLE, null, null));
+
+        assertThat(snapshot.status()).isEqualTo(FAILED);
+        assertThat(snapshot.failureReason()).isEqualTo(FailureReason.RECIPIENT_UNAVAILABLE);
+        ParcelStatusChanged event = writtenEvent();
+        assertThat(event.fromStatus()).isEqualTo(OUT_FOR_DELIVERY);
+        assertThat(event.failureReason()).isEqualTo("RECIPIENT_UNAVAILABLE");
+        assertThat(event.branch()).isNull();
+    }
+
+    @Test
+    void aDeliveryKeepsTheRecipientName() {
+        Parcel parcel = stored(aParcelMovedTo(PICKED_UP, AT_BRANCH, OUT_FOR_DELIVERY));
+
+        DeliverySnapshot snapshot = service.changeStatus(new ChangeStatusCommand(parcel.getId(), DELIVERED,
+                COURIER_ID, "COURIER", null, null, "Kamala Silva", null));
+
+        assertThat(snapshot.status()).isEqualTo(DELIVERED);
+        assertThat(snapshot.proofRecipientName()).isEqualTo("Kamala Silva");
+        assertThat(snapshot.hasProofPhoto()).isFalse();
+    }
+
+    @Test
+    void anAdminMayChangeTheStatusToo() {
+        Parcel parcel = stored(aParcel());
+        UUID adminId = UUID.randomUUID();
+
+        DeliverySnapshot snapshot = service.changeStatus(new ChangeStatusCommand(parcel.getId(), PICKED_UP,
+                adminId, "ADMIN", null, null, null, null));
+
+        assertThat(snapshot.status()).isEqualTo(PICKED_UP);
+        assertThat(writtenEvent().actorRole()).isEqualTo("ADMIN");
+    }
+
+    @Test
+    void anUnknownParcelIsNotFound() {
+        assertThatThrownBy(() -> service.changeStatus(pickUp(UUID.randomUUID(), "COURIER")))
+                .isInstanceOfSatisfying(NotFoundException.class,
+                        e -> assertThat(e.code()).isEqualTo(ErrorCode.NOT_FOUND));
+
+        verifyNothingSaved();
+    }
+
+    @Test
+    void onlyCouriersAndAdminsMayChangeTheStatus() {
+        Parcel parcel = stored(aParcel());
+
+        assertThatThrownBy(() -> service.changeStatus(pickUp(parcel.getId(), "CUSTOMER")))
+                .isInstanceOfSatisfying(ForbiddenException.class,
+                        e -> assertThat(e.code()).isEqualTo(ErrorCode.FORBIDDEN));
+
+        assertThat(parcel.getStatus()).isEqualTo(CREATED);
+        verifyNothingSaved();
+    }
+
+    @Test
+    void aMoveTheCurrentStatusDoesNotAllowIsAConflict() {
+        Parcel parcel = stored(aParcel());
+
+        assertThatThrownBy(() -> service.changeStatus(new ChangeStatusCommand(parcel.getId(), DELIVERED,
+                COURIER_ID, "COURIER", null, null, "Kamala Silva", null)))
+                .isInstanceOfSatisfying(BusinessRuleException.class,
+                        e -> assertThat(e.code()).isEqualTo(ErrorCode.INVALID_STATUS_TRANSITION));
+
+        verifyNothingSaved();
+    }
+
+    @Test
+    void aProofPhotoIsRefusedUntilPhotosCanBeStored() {
+        Parcel parcel = stored(aParcelMovedTo(PICKED_UP, AT_BRANCH, OUT_FOR_DELIVERY));
+
+        assertThatThrownBy(() -> service.changeStatus(new ChangeStatusCommand(parcel.getId(), DELIVERED,
+                COURIER_ID, "COURIER", null, null, "Kamala Silva", UUID.randomUUID())))
+                .isInstanceOfSatisfying(FieldValidationException.class,
+                        e -> assertThat(e.fieldErrors()).containsOnlyKeys("proofPhotoId"));
+
+        verifyNothingSaved();
+    }
+
+    @Test
+    void aChangeSomeoneElseMadeInTheMeantimeIsAConflict() {
+        Parcel parcel = stored(aParcel());
+        when(parcels.saveAndFlush(parcel))
+                .thenThrow(new ObjectOptimisticLockingFailureException(Parcel.class, parcel.getId()));
+
+        assertThatThrownBy(() -> service.changeStatus(pickUp(parcel.getId(), "COURIER")))
+                .isInstanceOfSatisfying(BusinessRuleException.class,
+                        e -> assertThat(e.code()).isEqualTo(ErrorCode.INVALID_STATUS_TRANSITION));
+
+        verify(statusHistory, never()).save(any());
+        verify(outbox, never()).write(any());
+    }
+
+    private Parcel stored(Parcel parcel) {
+        when(parcels.findById(parcel.getId())).thenReturn(Optional.of(parcel));
+        return parcel;
+    }
+
+    private ParcelStatusChanged writtenEvent() {
+        ArgumentCaptor<ParcelStatusChanged> event = ArgumentCaptor.forClass(ParcelStatusChanged.class);
+        verify(outbox).write(event.capture());
+        return event.getValue();
+    }
+
+    private void verifyNothingSaved() {
+        verify(parcels, never()).saveAndFlush(any());
+        verify(statusHistory, never()).save(any());
+        verify(outbox, never()).write(any());
+    }
+
+    private static ChangeStatusCommand pickUp(UUID parcelId, String actorRole) {
+        return new ChangeStatusCommand(parcelId, PICKED_UP, COURIER_ID, actorRole, null, null, null, null);
+    }
+
+    /** A new parcel moved through {@code steps}; AT_BRANCH is the Colombo branch. */
+    private static Parcel aParcelMovedTo(ParcelStatus... steps) {
+        Parcel parcel = aParcel();
+        for (ParcelStatus step : steps) {
+            District branch = step == AT_BRANCH ? District.COLOMBO : null;
+            parcel.changeStatus(new ChangeStatusCommand(parcel.getId(), step, COURIER_ID, "COURIER", null, null,
+                    null, null, branch), NOW);
+        }
+        return parcel;
     }
 
     private static Parcel aParcel() {

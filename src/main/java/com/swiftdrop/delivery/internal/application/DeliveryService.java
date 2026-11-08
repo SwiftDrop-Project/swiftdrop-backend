@@ -16,9 +16,14 @@ import com.swiftdrop.delivery.internal.domain.TrackingNumberGenerator;
 import com.swiftdrop.delivery.internal.persistence.ParcelRepository;
 import com.swiftdrop.delivery.internal.persistence.ParcelStatusHistoryRepository;
 import com.swiftdrop.shared.error.ApiException;
+import com.swiftdrop.shared.error.BusinessRuleException;
 import com.swiftdrop.shared.error.ErrorCode;
+import com.swiftdrop.shared.error.FieldValidationException;
+import com.swiftdrop.shared.error.ForbiddenException;
+import com.swiftdrop.shared.error.NotFoundException;
 import com.swiftdrop.shared.reference.District;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -40,9 +45,10 @@ import java.util.stream.Collectors;
 /**
  * The delivery module's implementation of {@link DeliveryApi}; other modules only see the interface.
  *
- * <p>Built feature by feature: {@link #create} and the courier's read methods work now. Until their feature is done,
- * the other methods answer {@code 503 SERVICE_UNAVAILABLE} ("This isn't available yet"), the same answer the courier
- * module gives when no DeliveryApi exists. So the bean already exists and modules that inject DeliveryApi can start.
+ * <p>Built feature by feature: {@link #create}, the courier's read methods and {@link #changeStatus} work now. Until
+ * their feature is done, the other methods answer {@code 503 SERVICE_UNAVAILABLE} ("This isn't available yet"), the
+ * same answer the courier module gives when no DeliveryApi exists. So the bean already exists and modules that inject
+ * DeliveryApi can start.
  */
 @Service
 class DeliveryService implements DeliveryApi {
@@ -54,6 +60,9 @@ class DeliveryService implements DeliveryApi {
     static final Set<ParcelStatus> FINISHED = Arrays.stream(ParcelStatus.values())
             .filter(ParcelStatus::isFinished)
             .collect(Collectors.toCollection(() -> EnumSet.noneOf(ParcelStatus.class)));
+
+    /** The roles that may change a parcel's status. Plain names, because delivery never depends on identity. */
+    static final Set<String> STATUS_CHANGE_ROLES = Set.of("COURIER", "ADMIN");
 
     private final ParcelRepository parcels;
     private final ParcelStatusHistoryRepository statusHistory;
@@ -169,6 +178,45 @@ class DeliveryService implements DeliveryApi {
         return finished.map(Parcel::toSnapshot);
     }
 
+    // ---- Changing status (the courier module calls this) ----
+
+    /**
+     * Moves the parcel to the new status, in one transaction with its history row and the event in the outbox.
+     * Checks in this order: the parcel exists (404), the role may change status (403), the current status may move
+     * there (409), the proof photo (400). Which courier may change this parcel is checked by the caller.
+     */
+    @Override
+    @Transactional
+    public DeliverySnapshot changeStatus(ChangeStatusCommand command) {
+        Parcel parcel = parcels.findById(command.parcelId())
+                .orElseThrow(() -> new NotFoundException(ErrorCode.NOT_FOUND));
+        if (!STATUS_CHANGE_ROLES.contains(command.actorRole())) {
+            throw new ForbiddenException(ErrorCode.FORBIDDEN);
+        }
+        Instant now = clock.instant();
+        ParcelStatus from = parcel.changeStatus(command, now);
+        if (command.proofPhotoId() != null) {
+            // storeProofPhoto is not built yet, so no photo belongs to this parcel. The exception rolls the
+            // transaction back: the change above is never saved.
+            throw new FieldValidationException("proofPhotoId", "Add the photo again.");
+        }
+        try {
+            // Flush now: the version goes up here, and the event must carry the new one.
+            parcels.saveAndFlush(parcel);
+        } catch (OptimisticLockingFailureException ex) {
+            // Someone changed the parcel after we read it, so this move may no longer be allowed.
+            throw new BusinessRuleException(ErrorCode.INVALID_STATUS_TRANSITION);
+        }
+        statusHistory.save(ParcelStatusHistory.forChange(UUID.randomUUID(), from, command, now));
+        DeliverySnapshot snapshot = parcel.toSnapshot();
+        outbox.write(new ParcelStatusChanged(UUID.randomUUID(), parcel.getId(), snapshot.version(),
+                parcel.getTrackingNumber(), parcel.getCustomerId(), parcel.getMerchantId(), from, parcel.getStatus(),
+                command.actorId(), command.actorRole(), command.note(),
+                parcel.getFailureReason() == null ? null : parcel.getFailureReason().name(), now,
+                parcel.getCurrentBranch()));
+        return snapshot;
+    }
+
     // ---- Not built yet: each feature replaces its methods below ----
 
     @Override
@@ -198,11 +246,6 @@ class DeliveryService implements DeliveryApi {
 
     @Override
     public Map<UUID, Long> countActiveByCourier() {
-        throw notBuiltYet();
-    }
-
-    @Override
-    public DeliverySnapshot changeStatus(ChangeStatusCommand command) {
         throw notBuiltYet();
     }
 
