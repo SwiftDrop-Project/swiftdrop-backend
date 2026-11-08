@@ -17,7 +17,7 @@ Every direct sub-package of `com.swiftdrop` is a module. `SwiftdropBackendApplic
 | `merchants` | MerchantApi, MerchantSummary, ApprovalStatus | `merchants` | Viduranga |
 | `pricing` | PricingApi, QuoteRequest, PriceQuote | `pricing` | TBD |
 | `delivery` | DeliveryApi, DeliveryOutboxApi, OutboxMessage, DeliverySnapshot, DeliveryContact, CreateDeliveryCommand, ChangeStatusCommand, ParcelStatus (incl. `AT_BRANCH`; branch = `District`), ParcelStatusEntry, ParcelStatusChanged, FailureReason, ProofPhoto, ProofPhotoRef, DeliveryStats | `delivery` (incl. `outbox_events`) | Pasindu |
-| `dispatch` | - | none | TBD |
+| `dispatch` | AssignmentApi (courier-facing; implementation pending), AssignmentView, AssignmentItemView, RecordOutcomeCommand, AssignmentType, AssignmentStatus, ItemOutcome, TaskProblem | none yet (tables proposed in `dispatch/package-info.java`) | TBD (WP8) |
 | `reporting` | - | none | TBD |
 | `tracking` | - | none | TBD |
 | `notifications` | NotificationsApi, AccountEmail | `notifications` | TBD |
@@ -48,7 +48,11 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
 - A module's public URLs: implement `shared.web.PublicEndpoints` as a bean in the module. Never edit identity's SecurityConfig for that.
 - Unbuilt modules have placeholder contracts ("Contract owned by <module> - extend in Phase 0"); the owner extends them.
 - Current dependencies: identity -> notifications, shared; merchants -> identity, shared; delivery -> shared;
-  courier -> delivery, identity, shared; infrastructure -> shared. Nothing depends on courier.
+  dispatch -> delivery, shared; courier -> delivery, identity, shared; infrastructure -> shared. Nothing depends on
+  courier. Planned: courier -> dispatch (courier tasks); dispatch -> identity (active couriers).
+- dispatch: `AssignmentApi` is a contract only (WP8 implements it later; no tables or dispatcher endpoints yet).
+  Assignment status and item outcomes are separate from the parcel status: a courier's task can be completed while
+  its parcels are still on their way.
 - courier gets `DeliveryApi` through an `ObjectProvider` and answers 503 SERVICE_UNAVAILABLE while nothing implements
   it. TEMPORARY: `courier/internal/fake` (`SWIFTDROP_FAKE_DELIVERY=true`) is an in-memory `DeliveryApi` for demos;
   delete it (and its property and tests) when delivery is implemented.
