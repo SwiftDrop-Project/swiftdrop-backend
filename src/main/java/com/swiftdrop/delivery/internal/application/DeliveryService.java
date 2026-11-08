@@ -133,6 +133,24 @@ class DeliveryService implements DeliveryApi {
                 .toList();
     }
 
+    /** Unknown ids are left out, so the result may be shorter than the input. Any order. */
+    @Override
+    @Transactional(readOnly = true)
+    public List<DeliverySnapshot> findAllById(Collection<UUID> parcelIds) {
+        return parcels.findAllById(parcelIds).stream()
+                .map(Parcel::toSnapshot)
+                .toList();
+    }
+
+    /** For dispatch (WP8): the parcels waiting at this branch, oldest status change first. */
+    @Override
+    @Transactional(readOnly = true)
+    public List<DeliverySnapshot> findAtBranch(District branch) {
+        return parcels.findWaitingAtBranch(branch).stream()
+                .map(Parcel::toSnapshot)
+                .toList();
+    }
+
     @Override
     @Transactional(readOnly = true)
     public List<DeliverySnapshot> findForCourier(UUID courierId, Instant finishedSince) {
@@ -170,16 +188,6 @@ class DeliveryService implements DeliveryApi {
 
     @Override
     public Page<DeliverySnapshot> findByMerchant(UUID merchantId, ParcelStatus status, Pageable pageable) {
-        throw notBuiltYet();
-    }
-
-    @Override
-    public List<DeliverySnapshot> findAllById(Collection<UUID> parcelIds) {
-        throw notBuiltYet();
-    }
-
-    @Override
-    public List<DeliverySnapshot> findAtBranch(District branch) {
         throw notBuiltYet();
     }
 

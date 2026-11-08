@@ -2,6 +2,7 @@ package com.swiftdrop.delivery.internal.persistence;
 
 import com.swiftdrop.delivery.ParcelStatus;
 import com.swiftdrop.delivery.internal.domain.Parcel;
+import com.swiftdrop.shared.reference.District;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -35,6 +36,14 @@ public interface ParcelRepository extends JpaRepository<Parcel, UUID> {
     /** findFinishedForCourier, newest status change first. */
     Page<Parcel> findByAssignedCourierIdAndStatusInOrderByStatusChangedAtDesc(
             UUID courierId, Set<ParcelStatus> statuses, Pageable pageable);
+
+    /**
+     * findAtBranch: parcels waiting at this branch, oldest status change first. AT_BRANCH is written into the query
+     * (not passed as a parameter), so PostgreSQL can always use the partial index idx_parcels_at_branch.
+     */
+    @Query("select p from Parcel p where p.status = com.swiftdrop.delivery.ParcelStatus.AT_BRANCH"
+            + " and p.currentBranch = :branch order by p.statusChangedAt")
+    List<Parcel> findWaitingAtBranch(District branch);
 
     /** The same, only the parcel with this tracking number. */
     Page<Parcel> findByAssignedCourierIdAndStatusInAndTrackingNumberOrderByStatusChangedAtDesc(

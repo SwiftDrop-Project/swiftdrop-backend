@@ -195,6 +195,28 @@ class DeliveryServiceTest {
     }
 
     @Test
+    void findAllByIdGivesTheParcelsItFindsAndLeavesOutUnknownIds() {
+        Parcel parcel = aParcel();
+        List<UUID> ids = List.of(parcel.getId(), UUID.randomUUID());
+        when(parcels.findAllById(ids)).thenReturn(List.of(parcel));
+
+        assertThat(service.findAllById(ids))
+                .extracting(DeliverySnapshot::id)
+                .containsExactly(parcel.getId());
+    }
+
+    @Test
+    void findAtBranchAsksForTheParcelsWaitingThere() {
+        Parcel parcel = aParcel();
+        when(parcels.findWaitingAtBranch(District.GAMPAHA)).thenReturn(List.of(parcel));
+
+        assertThat(service.findAtBranch(District.GAMPAHA))
+                .extracting(DeliverySnapshot::id)
+                .containsExactly(parcel.getId());
+        assertThat(service.findAtBranch(District.MATARA)).isEmpty();
+    }
+
+    @Test
     void findForCourierAsksForUnfinishedAndRecentlyFinishedParcels() {
         Instant startOfDay = NOW.minusSeconds(3600);
         Parcel parcel = aParcel();
