@@ -29,6 +29,11 @@ public enum ErrorCode {
     INVALID_STATUS_TRANSITION(HttpStatus.CONFLICT,
             "This parcel can't move to that status now. Refresh to see its latest status."),
     PARCEL_NOT_ASSIGNABLE(HttpStatus.CONFLICT, "A courier can only be assigned before the parcel is picked up."),
+    /** The courier's step isn't allowed for this parcel in this assignment now (dispatch {@code ItemOutcome}). */
+    TASK_STEP_NOT_ALLOWED(HttpStatus.CONFLICT,
+            "This step isn't possible for this parcel now. Refresh to see your task."),
+    ASSIGNMENT_CLOSED(HttpStatus.CONFLICT, "This task is already completed or was cancelled."),
+    ASSIGNMENT_NOT_FINISHED(HttpStatus.CONFLICT, "Update every parcel in this task before you finish it."),
     UNSUPPORTED_MEDIA_TYPE(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "Send the request as JSON (application/json)."),
     INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "Something went wrong on our side. Please try again."),
     /** A part of SwiftDrop that another module provides is not running yet (e.g. no delivery implementation). */

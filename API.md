@@ -70,6 +70,9 @@ Change it in the same PR as the code, and tell the frontend team.
 | 409 | `PROFILE_ALREADY_COMPLETE` | `POST /auth/complete-profile` for an account that is not `PROFILE_INCOMPLETE` |
 | 409 | `INVALID_STATUS_TRANSITION` | The parcel can't move to that status from its current one, e.g. DELIVERED → PICKED_UP or PICKED_UP → IN_TRANSIT (a picked-up parcel goes to a branch first). See [Parcel statuses](#parcel-statuses) |
 | 409 | `PARCEL_NOT_ASSIGNABLE` | Assigning a courier to a parcel that was already picked up or is finished |
+| 409 | `TASK_STEP_NOT_ALLOWED` | A courier's step isn't allowed for this parcel in this task now (e.g. handing over a parcel that wasn't collected, or a step that was already done) |
+| 409 | `ASSIGNMENT_CLOSED` | Recording a step on, or completing, a courier task that is already completed or cancelled |
+| 409 | `ASSIGNMENT_NOT_FINISHED` | Completing a courier task while one of its parcels is still open |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | Request body is not `application/json` |
 | 429 | `TOO_MANY_REQUESTS` | Too many requests from this IP address; the `Retry-After` header says how many seconds to wait |
 | 500 | `INTERNAL_ERROR` | Anything unexpected (generic message only) |
@@ -86,6 +89,9 @@ Messages of the new codes (show them as-is):
 | `TOO_MANY_REQUESTS` | Too many attempts. Please wait a moment and try again. |
 | `INVALID_STATUS_TRANSITION` | This parcel can't move to that status now. Refresh to see its latest status. |
 | `PARCEL_NOT_ASSIGNABLE` | A courier can only be assigned before the parcel is picked up. |
+| `TASK_STEP_NOT_ALLOWED` | This step isn't possible for this parcel now. Refresh to see your task. |
+| `ASSIGNMENT_CLOSED` | This task is already completed or was cancelled. |
+| `ASSIGNMENT_NOT_FINISHED` | Update every parcel in this task before you finish it. |
 | `SERVICE_UNAVAILABLE` | This isn't available yet. Please try again later. |
 
 **Rate limits** (per client IP; over the limit → `429 TOO_MANY_REQUESTS` + `Retry-After: <seconds>`; CORS exposes
