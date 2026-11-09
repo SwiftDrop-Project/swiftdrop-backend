@@ -12,28 +12,21 @@
  * <p>Dependencies: delivery (parcels, {@code FailureReason}), identity (active couriers, when implemented), shared.
  * Delivery never depends on dispatch, and dispatch never depends on courier.
  *
- * <p>Owner: TBD (WP8). Contract owned by dispatch; agreed with WP9 (courier). Events published: none yet (assignment
- * events for WP7 are deferred). Events consumed: none.
+ * <p>Owner: D.M.A.I. Disanayaka (WP8). Contract owned by dispatch; agreed with WP9 (courier). Events published: none
+ * yet (assignment events for WP7 are deferred). Events consumed: none.
  *
- * <p>Status: contract only. Nothing implements {@code AssignmentApi} yet, there are no tables and no dispatcher
- * endpoints; the courier module answers 503 SERVICE_UNAVAILABLE until it is implemented, so mock it in tests.
+ * <p>Status: tables and domain model ({@code internal.domain}, {@code internal.persistence}). Nothing implements
+ * {@code AssignmentApi} yet and there are no dispatcher endpoints; the courier module answers 503
+ * SERVICE_UNAVAILABLE until it is implemented, so mock it in tests.
  *
- * <p>Proposed tables (NOT created; for WP8 to confirm in its own migration, schema {@code dispatch}, no foreign
- * keys):
+ * <p>Database schema {@code dispatch} (no foreign keys; courier, dispatcher and parcel ids are plain UUIDs):
  * <ul>
- *   <li>{@code dispatch.courier_assignments}: {@code id} PK, {@code courier_id}, {@code type} CHECK,
- *       {@code status} CHECK, {@code origin_branch} and {@code destination_branch} VARCHAR(30),
- *       {@code scheduled_for} DATE, {@code note} VARCHAR(500), {@code created_by}, {@code created_at},
- *       {@code started_at}, {@code completed_at}, {@code cancelled_at}, {@code version}. CHECK the branch rules per
- *       type (PICKUP: destination; TRANSFER: both, different; DELIVERY: origin) and
- *       {@code (completed_at IS NOT NULL) = (status = 'COMPLETED')}. Indexes {@code (courier_id, status)} and
- *       {@code (courier_id, completed_at DESC)}.</li>
- *   <li>{@code dispatch.assignment_items}: {@code id} PK, {@code assignment_id}, {@code parcel_id},
- *       {@code sequence}, {@code outcome} CHECK, {@code problem} VARCHAR(30), {@code failure_reason} VARCHAR(30),
- *       {@code note} VARCHAR(500), {@code received_by} VARCHAR(100), {@code recipient_name} VARCHAR(100),
- *       {@code updated_at}, {@code closed_at}, {@code version}. {@code UNIQUE (assignment_id, parcel_id)}; a partial
- *       unique index on {@code (parcel_id) WHERE closed_at IS NULL}, so a parcel is open in at most one assignment;
- *       index on {@code (parcel_id)}.</li>
+ *   <li>{@code dispatch.courier_assignments}: one row per assignment. CHECKs keep the branch rule per type (PICKUP:
+ *       destination; TRANSFER: both, different; DELIVERY: origin) and the timestamps in step with the status.
+ *       {@code updated_at} changes on every change, an item outcome included, so {@code version} always goes up.</li>
+ *   <li>{@code dispatch.assignment_items}: one row per parcel in an assignment. The partial unique index
+ *       {@code uk_assignment_items_open_parcel} on {@code (parcel_id) WHERE closed_at IS NULL} keeps a parcel open in
+ *       at most one assignment, even when two dispatchers assign it at the same moment.</li>
  * </ul>
  */
 @ApplicationModule(displayName = "Dispatch")

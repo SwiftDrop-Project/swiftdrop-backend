@@ -17,7 +17,7 @@ Every direct sub-package of `com.swiftdrop` is a module. `SwiftdropBackendApplic
 | `merchants` | MerchantApi, MerchantSummary, ApprovalStatus | `merchants` | Viduranga |
 | `pricing` | PricingApi, QuoteRequest, PriceQuote | `pricing` | TBD |
 | `delivery` | DeliveryApi, DeliveryOutboxApi, OutboxMessage, DeliverySnapshot, DeliveryContact, CreateDeliveryCommand, ChangeStatusCommand, ParcelStatus (incl. `AT_BRANCH`; branch = `District`), ParcelStatusEntry, ParcelStatusChanged, FailureReason, ProofPhoto, ProofPhotoRef, DeliveryStats | `delivery` (incl. `outbox_events`) | Pasindu |
-| `dispatch` | AssignmentApi (courier-facing; implementation pending), AssignmentView, AssignmentItemView, RecordOutcomeCommand, AssignmentType, AssignmentStatus, ItemOutcome, TaskProblem | none yet (tables proposed in `dispatch/package-info.java`) | TBD (WP8) |
+| `dispatch` | AssignmentApi (courier-facing; implementation pending), AssignmentView, AssignmentItemView, RecordOutcomeCommand, AssignmentType, AssignmentStatus, ItemOutcome, TaskProblem | `dispatch` (`courier_assignments`, `assignment_items`) | D.M.A.I. Disanayaka (WP8) |
 | `reporting` | - | none | TBD |
 | `tracking` | - | none | TBD |
 | `notifications` | NotificationsApi, AccountEmail | `notifications` | TBD |
@@ -50,7 +50,8 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
 - Current dependencies: identity -> notifications, shared; merchants -> identity, shared; delivery -> shared;
   dispatch -> delivery, shared; courier -> delivery, identity, shared; infrastructure -> shared. Nothing depends on
   courier. Planned: courier -> dispatch (courier tasks); dispatch -> identity (active couriers).
-- dispatch: `AssignmentApi` is a contract only (WP8 implements it later; no tables or dispatcher endpoints yet).
+- dispatch: tables and domain model exist; `AssignmentApi` is not implemented yet and there are no dispatcher
+  endpoints yet.
   Assignment status and item outcomes are separate from the parcel status: a courier's task can be completed while
   its parcels are still on their way.
 - courier gets `DeliveryApi` through an `ObjectProvider` and answers 503 SERVICE_UNAVAILABLE while nothing implements
@@ -83,8 +84,8 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
   Hikari pool: max 3, min idle 0, idle timeout 60 s, max lifetime 5 min, connection timeout 30 s.
 
 ## Database
-- One schema per stateful module: identity, merchants, pricing, delivery, webhooks, notifications.
-  dispatch, reporting, tracking, outbox and courier own no schema.
+- One schema per stateful module: identity, merchants, pricing, delivery, dispatch, webhooks, notifications.
+  reporting, tracking, outbox and courier own no schema.
 - Entities use `@Table(schema = "<module>")`. No foreign keys or joins across schemas; refer to other modules' rows by UUID only.
 - Schema changes ONLY through Flyway, in the module's folder: `src/main/resources/db/migration/<module>/`.
 - File name: `V<yyyyMMddHHmm>__<description>.sql` (current date and time, e.g. `V202611051430__add_parcels.sql`).
