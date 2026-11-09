@@ -4,6 +4,7 @@ import com.swiftdrop.delivery.ChangeStatusCommand;
 import com.swiftdrop.delivery.CreateDeliveryCommand;
 import com.swiftdrop.delivery.DeliveryContact;
 import com.swiftdrop.delivery.DeliverySnapshot;
+import com.swiftdrop.delivery.DeliveryStats;
 import com.swiftdrop.delivery.FailureReason;
 import com.swiftdrop.delivery.ParcelStatus;
 import com.swiftdrop.delivery.ParcelStatusChanged;
@@ -11,6 +12,7 @@ import com.swiftdrop.delivery.ParcelStatusEntry;
 import com.swiftdrop.delivery.internal.domain.Parcel;
 import com.swiftdrop.delivery.internal.domain.ParcelStatusHistory;
 import com.swiftdrop.delivery.internal.domain.TrackingNumberGenerator;
+import com.swiftdrop.delivery.internal.persistence.DailyTotal;
 import com.swiftdrop.delivery.internal.persistence.ParcelRepository;
 import com.swiftdrop.delivery.internal.persistence.ParcelStatusHistoryRepository;
 import com.swiftdrop.shared.error.ApiException;
@@ -34,6 +36,7 @@ import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
@@ -46,6 +49,7 @@ import static com.swiftdrop.delivery.ParcelStatus.FAILED;
 import static com.swiftdrop.delivery.ParcelStatus.OUT_FOR_DELIVERY;
 import static com.swiftdrop.delivery.ParcelStatus.PICKED_UP;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -495,6 +499,62 @@ class DeliveryServiceTest {
 
         verify(statusHistory, never()).save(any());
         verify(outbox, never()).write(any());
+    }
+
+    // ---- Reports ----
+
+    @Test
+    void statsHasEveryDayOfTheRangeWithItsCounts() {
+        LocalDate from = LocalDate.of(2026, 11, 1);
+        LocalDate to = LocalDate.of(2026, 11, 3);
+        // Sri Lanka midnight is 18:30 UTC the day before
+        Instant start = Instant.parse("2026-10-31T18:30:00Z");
+        Instant end = Instant.parse("2026-11-03T18:30:00Z");
+        when(parcels.countCreatedPerDay(start, end))
+                .thenReturn(List.of(total("2026-11-01", 4), total("2026-11-03", 2)));
+        when(statusHistory.countReachedPerDay("DELIVERED", start, end)).thenReturn(List.of(total("2026-11-03", 3)));
+        when(statusHistory.countReachedPerDay("FAILED", start, end)).thenReturn(List.of(total("2026-11-01", 1)));
+
+        DeliveryStats stats = service.stats(from, to);
+
+        assertThat(stats.perDay()).containsExactly(
+                new DeliveryStats.DailyCount(LocalDate.of(2026, 11, 1), 4, 0, 1),
+                new DeliveryStats.DailyCount(LocalDate.of(2026, 11, 2), 0, 0, 0),
+                new DeliveryStats.DailyCount(LocalDate.of(2026, 11, 3), 2, 3, 0));
+        assertThat(stats.totalCreated()).isEqualTo(6);
+    }
+
+    @Test
+    void statsForOneDayAndForTheLongestRange() {
+        LocalDate day = LocalDate.of(2026, 11, 9);
+
+        assertThat(service.stats(day, day).perDay()).hasSize(1);
+        assertThat(service.stats(day, day.plusDays(DeliveryService.MAX_STATS_DAYS - 1)).perDay())
+                .hasSize(DeliveryService.MAX_STATS_DAYS);
+    }
+
+    @Test
+    void aBadStatsRangeIsABug() {
+        LocalDate day = LocalDate.of(2026, 11, 9);
+
+        assertThatIllegalArgumentException().isThrownBy(() -> service.stats(day, day.minusDays(1)));
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> service.stats(day, day.plusDays(DeliveryService.MAX_STATS_DAYS)));
+        verifyNoInteractions(parcels, statusHistory);
+    }
+
+    private static DailyTotal total(String day, long count) {
+        return new DailyTotal() {
+            @Override
+            public String getDay() {
+                return day;
+            }
+
+            @Override
+            public long getTotal() {
+                return count;
+            }
+        };
     }
 
     private Parcel stored(Parcel parcel) {

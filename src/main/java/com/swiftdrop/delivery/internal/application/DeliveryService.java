@@ -13,6 +13,7 @@ import com.swiftdrop.delivery.ProofPhotoRef;
 import com.swiftdrop.delivery.internal.domain.Parcel;
 import com.swiftdrop.delivery.internal.domain.ParcelStatusHistory;
 import com.swiftdrop.delivery.internal.domain.TrackingNumberGenerator;
+import com.swiftdrop.delivery.internal.persistence.DailyTotal;
 import com.swiftdrop.delivery.internal.persistence.ParcelRepository;
 import com.swiftdrop.delivery.internal.persistence.ParcelStatusHistoryRepository;
 import com.swiftdrop.shared.error.ApiException;
@@ -34,6 +35,8 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.EnumSet;
@@ -48,11 +51,10 @@ import java.util.stream.Collectors;
 /**
  * The delivery module's implementation of {@link DeliveryApi}; other modules only see the interface.
  *
- * <p>Built feature by feature: {@link #create}, the courier's read methods, {@link #changeStatus},
- * {@link #findByTrackingNumber}, {@link #findByCustomer} and {@link #findByMerchant} work now. Until their feature is
- * done, the other methods answer {@code 503 SERVICE_UNAVAILABLE} ("This isn't available yet"), the same answer the
- * courier module gives when no DeliveryApi exists. So the bean already exists and modules that inject DeliveryApi can
- * start.
+ * <p>Built feature by feature: {@link #create}, the reads, {@link #changeStatus} and {@link #stats} work now. Proof
+ * photos wait for WP9, and the deprecated single-courier methods are not built. Those answer
+ * {@code 503 SERVICE_UNAVAILABLE} ("This isn't available yet"), the same answer the courier module gives when no
+ * DeliveryApi exists.
  */
 @Service
 class DeliveryService implements DeliveryApi {
@@ -76,6 +78,12 @@ class DeliveryService implements DeliveryApi {
      * what is read back from the database later.
      */
     static final Clock DATABASE_CLOCK = Clock.tick(Clock.systemUTC(), Duration.ofNanos(1_000));
+
+    /** The longest range stats() accepts (DeliveryApi: "at most 366 days", a leap year). */
+    static final int MAX_STATS_DAYS = 366;
+
+    /** Report days are Sri Lanka days. */
+    static final ZoneId SRI_LANKA = ZoneId.of("Asia/Colombo");
 
     private final ParcelRepository parcels;
     private final ParcelStatusHistoryRepository statusHistory;
@@ -285,6 +293,45 @@ class DeliveryService implements DeliveryApi {
         return snapshot;
     }
 
+    // ---- Reports (WP4) ----
+
+    /**
+     * Counts per Sri Lanka day, every day of the range included (0 when nothing happened). Created comes from the
+     * parcels; delivered and failed from the status history, because a FAILED parcel goes back to a branch and may
+     * fail again or be delivered later, so the parcel's current status would miss those days.
+     *
+     * @throws IllegalArgumentException when {@code from} is after {@code to} or the range is longer than
+     *                                  {@link #MAX_STATS_DAYS} days (the reporting module checks the admin's dates)
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public DeliveryStats stats(LocalDate from, LocalDate to) {
+        Objects.requireNonNull(from, "from");
+        Objects.requireNonNull(to, "to");
+        if (from.isAfter(to)) {
+            throw new IllegalArgumentException("from (" + from + ") is after to (" + to + ")");
+        }
+        long days = ChronoUnit.DAYS.between(from, to) + 1;
+        if (days > MAX_STATS_DAYS) {
+            throw new IllegalArgumentException("The range has " + days + " days; at most " + MAX_STATS_DAYS);
+        }
+        Instant start = from.atStartOfDay(SRI_LANKA).toInstant();
+        Instant end = to.plusDays(1).atStartOfDay(SRI_LANKA).toInstant();
+        Map<LocalDate, Long> created = byDay(parcels.countCreatedPerDay(start, end));
+        Map<LocalDate, Long> delivered = byDay(statusHistory.countReachedPerDay(ParcelStatus.DELIVERED.name(), start,
+                end));
+        Map<LocalDate, Long> failed = byDay(statusHistory.countReachedPerDay(ParcelStatus.FAILED.name(), start, end));
+        List<DeliveryStats.DailyCount> perDay = from.datesUntil(to.plusDays(1))
+                .map(day -> new DeliveryStats.DailyCount(day, created.getOrDefault(day, 0L),
+                        delivered.getOrDefault(day, 0L), failed.getOrDefault(day, 0L)))
+                .toList();
+        return new DeliveryStats(from, to, perDay);
+    }
+
+    private static Map<LocalDate, Long> byDay(List<DailyTotal> rows) {
+        return rows.stream().collect(Collectors.toMap(row -> LocalDate.parse(row.getDay()), DailyTotal::getTotal));
+    }
+
     // ---- Not built yet: each feature replaces its methods below ----
 
     @Override
@@ -309,11 +356,6 @@ class DeliveryService implements DeliveryApi {
 
     @Override
     public Optional<ProofPhoto> findProofPhoto(UUID parcelId) {
-        throw notBuiltYet();
-    }
-
-    @Override
-    public DeliveryStats stats(LocalDate from, LocalDate to) {
         throw notBuiltYet();
     }
 
