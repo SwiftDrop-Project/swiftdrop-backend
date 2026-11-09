@@ -31,6 +31,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Arrays;
@@ -70,6 +71,12 @@ class DeliveryService implements DeliveryApi {
     /** The largest page findByCustomer and findByMerchant return (DeliveryApi: "capped at 100"). */
     static final int MAX_PAGE_SIZE = 100;
 
+    /**
+     * UTC in whole microseconds, the precision PostgreSQL stores. Times kept in memory (snapshots, events) then match
+     * what is read back from the database later.
+     */
+    static final Clock DATABASE_CLOCK = Clock.tick(Clock.systemUTC(), Duration.ofNanos(1_000));
+
     private final ParcelRepository parcels;
     private final ParcelStatusHistoryRepository statusHistory;
     private final OutboxWriter outbox;
@@ -80,7 +87,7 @@ class DeliveryService implements DeliveryApi {
     @Autowired
     DeliveryService(ParcelRepository parcels, ParcelStatusHistoryRepository statusHistory, OutboxWriter outbox,
                     FeeQuoter feeQuoter, TrackingNumberGenerator trackingNumbers) {
-        this(parcels, statusHistory, outbox, feeQuoter, trackingNumbers, Clock.systemUTC());
+        this(parcels, statusHistory, outbox, feeQuoter, trackingNumbers, DATABASE_CLOCK);
     }
 
     /** For tests: a fixed clock. */
