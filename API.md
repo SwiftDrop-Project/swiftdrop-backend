@@ -537,7 +537,7 @@ tracking number.
 | `codAmount` | Optional: cash to collect on delivery; leave out when already paid. 0.01–500000, up to 2 decimals | "Enter an amount above 0, or leave it out." / "Cash on delivery can be up to Rs. 500,000." |
 | `instructions` | Optional, up to 500 characters (blank = none) | "Use 500 characters or fewer." |
 
-Response `201`:
+Response `201`: a Delivery.
 ```json
 {
   "id": "6f1c2b8e-3a4d-4c8e-9b1a-2f3e4d5c6b7a",
@@ -552,12 +552,48 @@ Response `201`:
   "instructions": "Call before coming",
   "feeAmount": 450.00,
   "currency": "LKR",
-  "createdAt": "2026-11-07T04:30:00Z"
+  "createdAt": "2026-11-07T04:30:00Z",
+  "updatedAt": "2026-11-07T04:30:00Z",
+  "currentBranch": null,
+  "failureReason": null,
+  "proof": null
 }
 ```
 - `feeAmount` is a flat 450.00 LKR until pricing (WP4) is connected.
+- `currentBranch`: set only while `AT_BRANCH` (a district, e.g. `GAMPAHA`). `failureReason`: only while `FAILED`.
+  `proof`: `{ "recipientName": "Kamala Silva", "hasPhoto": false }` once `DELIVERED`. Otherwise all three are `null`.
 - `400` `VALIDATION_FAILED` (keys like `pickup.phone`, `weightKg`) · `401` `UNAUTHENTICATED` · `403` `FORBIDDEN`
   (logged in, but not a `CUSTOMER`)
+
+### My deliveries
+`GET /deliveries?page=0&size=20&status=AT_BRANCH` (logged-in `CUSTOMER`)
+
+The customer's own deliveries, newest first, as a page of Delivery (the shape above):
+```json
+{ "content": [ /* Delivery */ ], "page": 0, "size": 20, "totalElements": 3, "totalPages": 1 }
+```
+- `page` from 0 (default 0); `size` 1-100 (default 20); `status` optional, one of the parcel statuses.
+- `200` · `400` `VALIDATION_FAILED` (`fieldErrors.page`: "Use a page number of 0 or more.", `fieldErrors.size`:
+  "Use a page size from 1 to 100."; an unknown `status` too) · `401` · `403` (not a `CUSTOMER`)
+
+### One delivery with its history
+`GET /deliveries/{id}` (logged-in `CUSTOMER`)
+```json
+{
+  "delivery": { /* Delivery */ },
+  "history": [
+    { "status": "AT_BRANCH", "branch": "GAMPAHA", "note": null, "failureReason": null,
+      "occurredAt": "2026-11-08T09:15:00Z" },
+    { "status": "PICKED_UP", "branch": null, "note": "Collected from front desk", "failureReason": null,
+      "occurredAt": "2026-11-08T07:40:00Z" },
+    { "status": "CREATED", "branch": null, "note": null, "failureReason": null,
+      "occurredAt": "2026-11-07T04:30:00Z" }
+  ]
+}
+```
+- `history`: newest first. `branch` only on `AT_BRANCH` entries, `failureReason` only on `FAILED` entries.
+- `200` · `400` (`id` is not a UUID) · `401` · `403` (not a `CUSTOMER`) · `404` `NOT_FOUND`: no such delivery, or it
+  isn't yours (the same answer, so ids can't be probed).
 
 ---
 
