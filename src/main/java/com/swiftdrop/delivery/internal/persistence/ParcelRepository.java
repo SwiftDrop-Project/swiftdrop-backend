@@ -48,4 +48,30 @@ public interface ParcelRepository extends JpaRepository<Parcel, UUID> {
     /** The same, only the parcel with this tracking number. */
     Page<Parcel> findByAssignedCourierIdAndStatusInAndTrackingNumberOrderByStatusChangedAtDesc(
             UUID courierId, Set<ParcelStatus> statuses, String trackingNumber, Pageable pageable);
+
+    /**
+     * findByCustomer, newest first. The id breaks ties between parcels booked at the same moment, so paging is
+     * stable (no parcel shown twice or skipped). Uses idx_parcels_customer_id.
+     */
+    Page<Parcel> findByCustomerIdOrderByCreatedAtDescIdDesc(UUID customerId, Pageable pageable);
+
+    /** The same, only parcels in this status. */
+    Page<Parcel> findByCustomerIdAndStatusOrderByCreatedAtDescIdDesc(UUID customerId, ParcelStatus status,
+                                                                     Pageable pageable);
+
+    /** findByMerchant, newest first, with the same tie-break. Uses idx_parcels_merchant_id. */
+    Page<Parcel> findByMerchantIdOrderByCreatedAtDescIdDesc(UUID merchantId, Pageable pageable);
+
+    /** The same, only orders in this status. */
+    Page<Parcel> findByMerchantIdAndStatusOrderByCreatedAtDescIdDesc(UUID merchantId, ParcelStatus status,
+                                                                     Pageable pageable);
+
+    /**
+     * stats: parcels booked per Sri Lanka day, booked at or after {@code from} and before {@code to}. Days with no
+     * parcels are missing; the caller fills them with 0. Uses idx_parcels_created_at.
+     */
+    @Query(value = "select to_char(created_at at time zone 'Asia/Colombo', 'YYYY-MM-DD') as day, count(*) as total"
+            + " from delivery.parcels where created_at >= :from and created_at < :to group by 1",
+            nativeQuery = true)
+    List<DailyTotal> countCreatedPerDay(Instant from, Instant to);
 }

@@ -4,6 +4,7 @@ import com.swiftdrop.delivery.ChangeStatusCommand;
 import com.swiftdrop.delivery.CreateDeliveryCommand;
 import com.swiftdrop.delivery.DeliveryContact;
 import com.swiftdrop.delivery.DeliverySnapshot;
+import com.swiftdrop.delivery.DeliveryStats;
 import com.swiftdrop.delivery.FailureReason;
 import com.swiftdrop.delivery.ParcelStatus;
 import com.swiftdrop.delivery.ParcelStatusChanged;
@@ -11,6 +12,7 @@ import com.swiftdrop.delivery.ParcelStatusEntry;
 import com.swiftdrop.delivery.internal.domain.Parcel;
 import com.swiftdrop.delivery.internal.domain.ParcelStatusHistory;
 import com.swiftdrop.delivery.internal.domain.TrackingNumberGenerator;
+import com.swiftdrop.delivery.internal.persistence.DailyTotal;
 import com.swiftdrop.delivery.internal.persistence.ParcelRepository;
 import com.swiftdrop.delivery.internal.persistence.ParcelStatusHistoryRepository;
 import com.swiftdrop.shared.error.ApiException;
@@ -24,14 +26,17 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
@@ -44,7 +49,9 @@ import static com.swiftdrop.delivery.ParcelStatus.FAILED;
 import static com.swiftdrop.delivery.ParcelStatus.OUT_FOR_DELIVERY;
 import static com.swiftdrop.delivery.ParcelStatus.PICKED_UP;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
+import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.inOrder;
@@ -191,6 +198,28 @@ class DeliveryServiceTest {
     }
 
     @Test
+    void findByTrackingNumberIgnoresSpacesAndCase() {
+        Parcel parcel = aParcel();
+        when(parcels.findByTrackingNumber("SD2611000777")).thenReturn(Optional.of(parcel));
+
+        assertThat(service.findByTrackingNumber(" sd 2611 000777 "))
+                .hasValueSatisfying(snapshot -> assertThat(snapshot.id()).isEqualTo(parcel.getId()));
+    }
+
+    @Test
+    void anUnknownTrackingNumberFindsNothing() {
+        assertThat(service.findByTrackingNumber("SD2611999999")).isEmpty();
+    }
+
+    @Test
+    void aMissingOrBlankTrackingNumberFindsNothingWithoutAskingTheDatabase() {
+        assertThat(service.findByTrackingNumber(null)).isEmpty();
+        assertThat(service.findByTrackingNumber("   ")).isEmpty();
+
+        verify(parcels, never()).findByTrackingNumber(any());
+    }
+
+    @Test
     void historyKeepsTheRepositoryOrderNewestFirst() {
         Parcel parcel = aParcel();
         ParcelStatusHistory created = ParcelStatusHistory.firstEntry(UUID.randomUUID(), parcel);
@@ -255,6 +284,71 @@ class DeliveryServiceTest {
                 DeliveryService.FINISHED, page);
         verify(parcels).findByAssignedCourierIdAndStatusInAndTrackingNumberOrderByStatusChangedAtDesc(COURIER_ID,
                 DeliveryService.FINISHED, "SD2611000777", page);
+    }
+
+    // ---- A customer's parcels and a merchant's orders ----
+
+    @Test
+    void aCustomersParcelsOfEveryStatusComeAsAPage() {
+        UUID customerId = UUID.randomUUID();
+        Pageable page = PageRequest.of(0, 20);
+        when(parcels.findByCustomerIdOrderByCreatedAtDescIdDesc(customerId, page))
+                .thenReturn(new PageImpl<>(List.of(aParcel()), page, 1));
+
+        Page<DeliverySnapshot> found = service.findByCustomer(customerId, null, page);
+
+        assertThat(found.getContent()).extracting(DeliverySnapshot::trackingNumber).containsExactly("SD2611000777");
+        assertThat(found.getTotalElements()).isEqualTo(1);
+    }
+
+    @Test
+    void aStatusFilterUsesTheStatusQuery() {
+        UUID customerId = UUID.randomUUID();
+        Pageable page = PageRequest.of(0, 20);
+        when(parcels.findByCustomerIdAndStatusOrderByCreatedAtDescIdDesc(customerId, PICKED_UP, page))
+                .thenReturn(Page.empty(page));
+
+        assertThat(service.findByCustomer(customerId, PICKED_UP, page)).isEmpty();
+
+        verify(parcels, never()).findByCustomerIdOrderByCreatedAtDescIdDesc(any(), any());
+    }
+
+    @Test
+    void aPageIsAtMostOneHundredAndKeepsNoCallerSort() {
+        Pageable asked = DeliveryService.cappedPage(PageRequest.of(3, 500, Sort.by("trackingNumber")));
+
+        assertThat(asked.getPageNumber()).isEqualTo(3);
+        assertThat(asked.getPageSize()).isEqualTo(DeliveryService.MAX_PAGE_SIZE);
+        assertThat(asked.getSort().isUnsorted()).isTrue();
+        assertThat(DeliveryService.cappedPage(PageRequest.of(0, 20))).isEqualTo(PageRequest.of(0, 20));
+        assertThat(DeliveryService.cappedPage(Pageable.unpaged()))
+                .isEqualTo(PageRequest.of(0, DeliveryService.MAX_PAGE_SIZE));
+    }
+
+    @Test
+    void aMerchantsOrdersFollowTheSameRules() {
+        UUID merchantId = UUID.randomUUID();
+        Parcel order = Parcel.create(UUID.randomUUID(), "SD2611000888", merchantOrder(merchantId, "ORDER-1001"),
+                new BigDecimal("450.00"), "LKR", NOW);
+        Pageable capped = PageRequest.of(1, DeliveryService.MAX_PAGE_SIZE);
+        when(parcels.findByMerchantIdAndStatusOrderByCreatedAtDescIdDesc(merchantId, CREATED, capped))
+                .thenReturn(new PageImpl<>(List.of(order), capped, 101));
+
+        // asks for 500, gets the capped page
+        Page<DeliverySnapshot> found = service.findByMerchant(merchantId, CREATED, PageRequest.of(1, 500));
+
+        assertThat(found.getContent()).extracting(DeliverySnapshot::merchantId).containsExactly(merchantId);
+    }
+
+    @Test
+    void aMissingOwnerIdIsABugAndNeverListsEveryParcel() {
+        // the query would turn null into "IS NULL": every merchant order, or every customer's parcel
+        Pageable page = PageRequest.of(0, 20);
+
+        assertThatNullPointerException().isThrownBy(() -> service.findByCustomer(null, null, page));
+        assertThatNullPointerException().isThrownBy(() -> service.findByMerchant(null, null, page));
+
+        verifyNoInteractions(parcels);
     }
 
     // ---- Changing status ----
@@ -405,6 +499,62 @@ class DeliveryServiceTest {
 
         verify(statusHistory, never()).save(any());
         verify(outbox, never()).write(any());
+    }
+
+    // ---- Reports ----
+
+    @Test
+    void statsHasEveryDayOfTheRangeWithItsCounts() {
+        LocalDate from = LocalDate.of(2026, 11, 1);
+        LocalDate to = LocalDate.of(2026, 11, 3);
+        // Sri Lanka midnight is 18:30 UTC the day before
+        Instant start = Instant.parse("2026-10-31T18:30:00Z");
+        Instant end = Instant.parse("2026-11-03T18:30:00Z");
+        when(parcels.countCreatedPerDay(start, end))
+                .thenReturn(List.of(total("2026-11-01", 4), total("2026-11-03", 2)));
+        when(statusHistory.countReachedPerDay("DELIVERED", start, end)).thenReturn(List.of(total("2026-11-03", 3)));
+        when(statusHistory.countReachedPerDay("FAILED", start, end)).thenReturn(List.of(total("2026-11-01", 1)));
+
+        DeliveryStats stats = service.stats(from, to);
+
+        assertThat(stats.perDay()).containsExactly(
+                new DeliveryStats.DailyCount(LocalDate.of(2026, 11, 1), 4, 0, 1),
+                new DeliveryStats.DailyCount(LocalDate.of(2026, 11, 2), 0, 0, 0),
+                new DeliveryStats.DailyCount(LocalDate.of(2026, 11, 3), 2, 3, 0));
+        assertThat(stats.totalCreated()).isEqualTo(6);
+    }
+
+    @Test
+    void statsForOneDayAndForTheLongestRange() {
+        LocalDate day = LocalDate.of(2026, 11, 9);
+
+        assertThat(service.stats(day, day).perDay()).hasSize(1);
+        assertThat(service.stats(day, day.plusDays(DeliveryService.MAX_STATS_DAYS - 1)).perDay())
+                .hasSize(DeliveryService.MAX_STATS_DAYS);
+    }
+
+    @Test
+    void aBadStatsRangeIsABug() {
+        LocalDate day = LocalDate.of(2026, 11, 9);
+
+        assertThatIllegalArgumentException().isThrownBy(() -> service.stats(day, day.minusDays(1)));
+        assertThatIllegalArgumentException()
+                .isThrownBy(() -> service.stats(day, day.plusDays(DeliveryService.MAX_STATS_DAYS)));
+        verifyNoInteractions(parcels, statusHistory);
+    }
+
+    private static DailyTotal total(String day, long count) {
+        return new DailyTotal() {
+            @Override
+            public String getDay() {
+                return day;
+            }
+
+            @Override
+            public long getTotal() {
+                return count;
+            }
+        };
     }
 
     private Parcel stored(Parcel parcel) {
