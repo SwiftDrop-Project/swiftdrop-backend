@@ -48,4 +48,21 @@ public interface ParcelRepository extends JpaRepository<Parcel, UUID> {
     /** The same, only the parcel with this tracking number. */
     Page<Parcel> findByAssignedCourierIdAndStatusInAndTrackingNumberOrderByStatusChangedAtDesc(
             UUID courierId, Set<ParcelStatus> statuses, String trackingNumber, Pageable pageable);
+
+    /**
+     * findByCustomer, newest first. The id breaks ties between parcels booked at the same moment, so paging is
+     * stable (no parcel shown twice or skipped). Uses idx_parcels_customer_id.
+     */
+    Page<Parcel> findByCustomerIdOrderByCreatedAtDescIdDesc(UUID customerId, Pageable pageable);
+
+    /** The same, only parcels in this status. */
+    Page<Parcel> findByCustomerIdAndStatusOrderByCreatedAtDescIdDesc(UUID customerId, ParcelStatus status,
+                                                                     Pageable pageable);
+
+    /** findByMerchant, newest first, with the same tie-break. Uses idx_parcels_merchant_id. */
+    Page<Parcel> findByMerchantIdOrderByCreatedAtDescIdDesc(UUID merchantId, Pageable pageable);
+
+    /** The same, only orders in this status. */
+    Page<Parcel> findByMerchantIdAndStatusOrderByCreatedAtDescIdDesc(UUID merchantId, ParcelStatus status,
+                                                                     Pageable pageable);
 }

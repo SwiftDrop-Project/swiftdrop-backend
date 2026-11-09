@@ -25,6 +25,7 @@ import com.swiftdrop.shared.reference.District;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -37,6 +38,7 @@ import java.util.Collection;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
@@ -45,10 +47,11 @@ import java.util.stream.Collectors;
 /**
  * The delivery module's implementation of {@link DeliveryApi}; other modules only see the interface.
  *
- * <p>Built feature by feature: {@link #create}, the courier's read methods, {@link #changeStatus} and
- * {@link #findByTrackingNumber} work now. Until their feature is done, the other methods answer {@code 503 SERVICE_UNAVAILABLE} ("This isn't available yet"), the
- * same answer the courier module gives when no DeliveryApi exists. So the bean already exists and modules that inject
- * DeliveryApi can start.
+ * <p>Built feature by feature: {@link #create}, the courier's read methods, {@link #changeStatus},
+ * {@link #findByTrackingNumber}, {@link #findByCustomer} and {@link #findByMerchant} work now. Until their feature is
+ * done, the other methods answer {@code 503 SERVICE_UNAVAILABLE} ("This isn't available yet"), the same answer the
+ * courier module gives when no DeliveryApi exists. So the bean already exists and modules that inject DeliveryApi can
+ * start.
  */
 @Service
 class DeliveryService implements DeliveryApi {
@@ -63,6 +66,9 @@ class DeliveryService implements DeliveryApi {
 
     /** The roles that may change a parcel's status. Plain names, because delivery never depends on identity. */
     static final Set<String> STATUS_CHANGE_ROLES = Set.of("COURIER", "ADMIN");
+
+    /** The largest page findByCustomer and findByMerchant return (DeliveryApi: "capped at 100"). */
+    static final int MAX_PAGE_SIZE = 100;
 
     private final ParcelRepository parcels;
     private final ParcelStatusHistoryRepository statusHistory;
@@ -193,6 +199,46 @@ class DeliveryService implements DeliveryApi {
         return finished.map(Parcel::toSnapshot);
     }
 
+    // ---- A customer's parcels and a merchant's orders ----
+
+    /**
+     * Newest first, optionally only one status, at most {@link #MAX_PAGE_SIZE} per page. A null customer id is a
+     * caller's bug: the query would turn it into "customer_id IS NULL" and return every merchant order.
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public Page<DeliverySnapshot> findByCustomer(UUID customerId, ParcelStatus status, Pageable pageable) {
+        Objects.requireNonNull(customerId, "customerId");
+        Pageable page = cappedPage(pageable);
+        Page<Parcel> found = status == null
+                ? parcels.findByCustomerIdOrderByCreatedAtDescIdDesc(customerId, page)
+                : parcels.findByCustomerIdAndStatusOrderByCreatedAtDescIdDesc(customerId, status, page);
+        return found.map(Parcel::toSnapshot);
+    }
+
+    /** The same rules as {@link #findByCustomer}; a null merchant id would return every customer's parcel. */
+    @Override
+    @Transactional(readOnly = true)
+    public Page<DeliverySnapshot> findByMerchant(UUID merchantId, ParcelStatus status, Pageable pageable) {
+        Objects.requireNonNull(merchantId, "merchantId");
+        Pageable page = cappedPage(pageable);
+        Page<Parcel> found = status == null
+                ? parcels.findByMerchantIdOrderByCreatedAtDescIdDesc(merchantId, page)
+                : parcels.findByMerchantIdAndStatusOrderByCreatedAtDescIdDesc(merchantId, status, page);
+        return found.map(Parcel::toSnapshot);
+    }
+
+    /**
+     * The caller's page number, at most MAX_PAGE_SIZE items, and no sort: the order is always newest first (it is in
+     * the repository method names). "Unpaged" becomes the first page.
+     */
+    static Pageable cappedPage(Pageable requested) {
+        if (requested.isUnpaged()) {
+            return PageRequest.of(0, MAX_PAGE_SIZE);
+        }
+        return PageRequest.of(requested.getPageNumber(), Math.min(requested.getPageSize(), MAX_PAGE_SIZE));
+    }
+
     // ---- Changing status (the courier module calls this) ----
 
     /**
@@ -236,16 +282,6 @@ class DeliveryService implements DeliveryApi {
 
     @Override
     public DeliverySnapshot assignCourier(UUID parcelId, UUID courierId) {
-        throw notBuiltYet();
-    }
-
-    @Override
-    public Page<DeliverySnapshot> findByCustomer(UUID customerId, ParcelStatus status, Pageable pageable) {
-        throw notBuiltYet();
-    }
-
-    @Override
-    public Page<DeliverySnapshot> findByMerchant(UUID merchantId, ParcelStatus status, Pageable pageable) {
         throw notBuiltYet();
     }
 

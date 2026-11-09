@@ -24,9 +24,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 
 import java.math.BigDecimal;
@@ -45,6 +47,7 @@ import static com.swiftdrop.delivery.ParcelStatus.OUT_FOR_DELIVERY;
 import static com.swiftdrop.delivery.ParcelStatus.PICKED_UP;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
+import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.inOrder;
@@ -277,6 +280,71 @@ class DeliveryServiceTest {
                 DeliveryService.FINISHED, page);
         verify(parcels).findByAssignedCourierIdAndStatusInAndTrackingNumberOrderByStatusChangedAtDesc(COURIER_ID,
                 DeliveryService.FINISHED, "SD2611000777", page);
+    }
+
+    // ---- A customer's parcels and a merchant's orders ----
+
+    @Test
+    void aCustomersParcelsOfEveryStatusComeAsAPage() {
+        UUID customerId = UUID.randomUUID();
+        Pageable page = PageRequest.of(0, 20);
+        when(parcels.findByCustomerIdOrderByCreatedAtDescIdDesc(customerId, page))
+                .thenReturn(new PageImpl<>(List.of(aParcel()), page, 1));
+
+        Page<DeliverySnapshot> found = service.findByCustomer(customerId, null, page);
+
+        assertThat(found.getContent()).extracting(DeliverySnapshot::trackingNumber).containsExactly("SD2611000777");
+        assertThat(found.getTotalElements()).isEqualTo(1);
+    }
+
+    @Test
+    void aStatusFilterUsesTheStatusQuery() {
+        UUID customerId = UUID.randomUUID();
+        Pageable page = PageRequest.of(0, 20);
+        when(parcels.findByCustomerIdAndStatusOrderByCreatedAtDescIdDesc(customerId, PICKED_UP, page))
+                .thenReturn(Page.empty(page));
+
+        assertThat(service.findByCustomer(customerId, PICKED_UP, page)).isEmpty();
+
+        verify(parcels, never()).findByCustomerIdOrderByCreatedAtDescIdDesc(any(), any());
+    }
+
+    @Test
+    void aPageIsAtMostOneHundredAndKeepsNoCallerSort() {
+        Pageable asked = DeliveryService.cappedPage(PageRequest.of(3, 500, Sort.by("trackingNumber")));
+
+        assertThat(asked.getPageNumber()).isEqualTo(3);
+        assertThat(asked.getPageSize()).isEqualTo(DeliveryService.MAX_PAGE_SIZE);
+        assertThat(asked.getSort().isUnsorted()).isTrue();
+        assertThat(DeliveryService.cappedPage(PageRequest.of(0, 20))).isEqualTo(PageRequest.of(0, 20));
+        assertThat(DeliveryService.cappedPage(Pageable.unpaged()))
+                .isEqualTo(PageRequest.of(0, DeliveryService.MAX_PAGE_SIZE));
+    }
+
+    @Test
+    void aMerchantsOrdersFollowTheSameRules() {
+        UUID merchantId = UUID.randomUUID();
+        Parcel order = Parcel.create(UUID.randomUUID(), "SD2611000888", merchantOrder(merchantId, "ORDER-1001"),
+                new BigDecimal("450.00"), "LKR", NOW);
+        Pageable capped = PageRequest.of(1, DeliveryService.MAX_PAGE_SIZE);
+        when(parcels.findByMerchantIdAndStatusOrderByCreatedAtDescIdDesc(merchantId, CREATED, capped))
+                .thenReturn(new PageImpl<>(List.of(order), capped, 101));
+
+        // asks for 500, gets the capped page
+        Page<DeliverySnapshot> found = service.findByMerchant(merchantId, CREATED, PageRequest.of(1, 500));
+
+        assertThat(found.getContent()).extracting(DeliverySnapshot::merchantId).containsExactly(merchantId);
+    }
+
+    @Test
+    void aMissingOwnerIdIsABugAndNeverListsEveryParcel() {
+        // the query would turn null into "IS NULL": every merchant order, or every customer's parcel
+        Pageable page = PageRequest.of(0, 20);
+
+        assertThatNullPointerException().isThrownBy(() -> service.findByCustomer(null, null, page));
+        assertThatNullPointerException().isThrownBy(() -> service.findByMerchant(null, null, page));
+
+        verifyNoInteractions(parcels);
     }
 
     // ---- Changing status ----
