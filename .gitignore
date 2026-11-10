@@ -32,4 +32,11 @@ build/
 ### VS Code ###
 .vscode/
 
+
+# Environment files (keep credentials private)
 .env
+.env.*
+!.env.example
+
+# Local log files
+*.log
