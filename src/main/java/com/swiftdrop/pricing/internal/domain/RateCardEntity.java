@@ -50,6 +50,10 @@ public class RateCardEntity {
     @Column(name = "cod_fee", nullable = false, precision = 10, scale = 2)
     private BigDecimal codFee;
 
+    /** For each kilometre between the pickup and drop-off district branches (added in rate card version 2). */
+    @Column(name = "linehaul_per_km", nullable = false, precision = 10, scale = 2)
+    private BigDecimal linehaulPerKm;
+
     @Column(name = "road_factor", nullable = false, precision = 4, scale = 2)
     private BigDecimal roadFactor;
 
@@ -61,8 +65,8 @@ public class RateCardEntity {
 
     /** For tests: rate cards are added by migrations. */
     public RateCardEntity(UUID id, int version, String currency, BigDecimal baseFee, int baseWeightKg,
-                          BigDecimal perKgFee, int volumetricDivisor, BigDecimal codFee, BigDecimal roadFactor,
-                          boolean active, Instant createdAt) {
+                          BigDecimal perKgFee, int volumetricDivisor, BigDecimal codFee, BigDecimal linehaulPerKm,
+                          BigDecimal roadFactor, boolean active, Instant createdAt) {
         this.id = id;
         this.version = version;
         this.currency = currency;
@@ -71,6 +75,7 @@ public class RateCardEntity {
         this.perKgFee = perKgFee;
         this.volumetricDivisor = volumetricDivisor;
         this.codFee = codFee;
+        this.linehaulPerKm = linehaulPerKm;
         this.roadFactor = roadFactor;
         this.active = active;
         this.createdAt = createdAt;
@@ -78,7 +83,7 @@ public class RateCardEntity {
 
     /** The rate card with its vehicles, for the calculator. */
     public RateCard toRateCard(List<VehicleRateEntity> vehicles) {
-        return new RateCard(version, currency, baseFee, baseWeightKg, perKgFee, volumetricDivisor, codFee, roadFactor,
-                vehicles.stream().map(VehicleRateEntity::toVehicleRate).toList());
+        return new RateCard(version, currency, baseFee, baseWeightKg, perKgFee, volumetricDivisor, codFee,
+                linehaulPerKm, roadFactor, vehicles.stream().map(VehicleRateEntity::toVehicleRate).toList());
     }
 }

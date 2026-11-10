@@ -8,11 +8,12 @@ import java.util.Arrays;
 import java.util.Objects;
 
 /**
- * One vehicle of a rate card (pricing.vehicle_rates): what it can take and what it costs.
+ * One vehicle of a rate card (pricing.vehicle_rates): what it can take, and the fixed price of one local leg (the
+ * pickup address to the branch, or the branch to the drop-off address).
  *
  * @param checkOrder  the smallest vehicle has the lowest; vehicles are tried in this order
  * @param maxWeightKg the heaviest actual weight it carries
- * @param includedKm  kilometres covered by the base fee; each kilometre after them costs {@code perKmFee}
+ * @param legFee      the price of one local leg, with no distance charge (column {@code surcharge})
  */
 public record VehicleRate(
         Vehicle vehicle,
@@ -21,16 +22,12 @@ public record VehicleRate(
         int maxWidthCm,
         int maxHeightCm,
         BigDecimal maxWeightKg,
-        BigDecimal surcharge,
-        BigDecimal includedKm,
-        BigDecimal perKmFee) {
+        BigDecimal legFee) {
 
     public VehicleRate {
         Objects.requireNonNull(vehicle, "vehicle");
         Objects.requireNonNull(maxWeightKg, "maxWeightKg");
-        Objects.requireNonNull(surcharge, "surcharge");
-        Objects.requireNonNull(includedKm, "includedKm");
-        Objects.requireNonNull(perKmFee, "perKmFee");
+        Objects.requireNonNull(legFee, "legFee");
     }
 
     /** It carries the parcel's actual weight and the parcel fits its cargo space. The parcel must have dimensions. */
@@ -52,15 +49,6 @@ public record VehicleRate(
         int[] sides = sorted(parcel.lengthCm(), parcel.widthCm(), parcel.heightCm());
         int[] space = sorted(maxLengthCm, maxWidthCm, maxHeightCm);
         return sides[0] <= space[0] && sides[1] <= space[1] && sides[2] <= space[2];
-    }
-
-    /** max(0, distance - included km) x the per-kilometre fee, in rupees and cents. */
-    public BigDecimal distanceCharge(BigDecimal distanceKm) {
-        BigDecimal extraKm = distanceKm.subtract(includedKm);
-        if (extraKm.signum() <= 0) {
-            return Money.ZERO;
-        }
-        return Money.of(extraKm.multiply(perKmFee));
     }
 
     private static int[] sorted(int... values) {

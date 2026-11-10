@@ -12,8 +12,8 @@ import java.util.Optional;
  *
  * @param volumetricWeightKg L x W x H / divisor, two decimals; null without dimensions
  * @param billableWeightKg   the greater of the actual and the volumetric weight, rounded up to a whole kilogram
- * @param vehicle            the smallest vehicle that takes the parcel; null unless COMPLETE
- * @param distanceKm         the estimated road distance; null unless COMPLETE
+ * @param vehicle            the smallest vehicle for the local legs; null unless COMPLETE
+ * @param distanceKm         the estimated road distance between the two district branches (0 inside one district)
  * @param lines              the fee components in the order they are shown
  * @param total              the sum of the lines; null for MANUAL_QUOTE
  */
@@ -31,21 +31,25 @@ public record FeeQuote(
     public enum QuoteStatus {
         /** Every component is known. */
         COMPLETE,
-        /** No dimensions yet: base, weight and service fees only; the vehicle and the distance come with them. */
+        /** No dimensions yet, so no vehicle: everything but the pickup and delivery legs. */
         PROVISIONAL,
-        /** No vehicle carries or fits the parcel: someone has to price it. */
+        /** No vehicle carries or fits the parcel for the local legs: someone has to price it. */
         MANUAL_QUOTE
     }
 
     public enum FeeComponent {
         BASE,
         WEIGHT,
-        VEHICLE_SURCHARGE,
-        DISTANCE,
+        /** Pickup address to the pickup district branch, by the vehicle. */
+        PICKUP,
+        /** Drop-off district branch to the drop-off address, by the vehicle. */
+        DELIVERY,
+        /** Between the two district branches. */
+        LINEHAUL,
         COD
     }
 
-    /** One line of the breakdown, e.g. WEIGHT 400.00. */
+    /** One line of the breakdown, e.g. LINEHAUL 245.20. */
     public record FeeLine(FeeComponent component, BigDecimal amount) {
     }
 

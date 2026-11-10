@@ -6,8 +6,6 @@ import java.math.RoundingMode;
 /** Rupee amounts always have two decimals, rounded half up. Never double: it can't hold cents exactly. */
 final class Money {
 
-    static final BigDecimal ZERO = new BigDecimal("0.00");
-
     private Money() {
     }
 

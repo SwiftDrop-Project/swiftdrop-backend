@@ -16,11 +16,15 @@ import java.util.Optional;
  * Works out the estimated delivery fee from a rate card. Plain Java: no database and no Spring, so every rule is
  * unit tested.
  *
+ * <p>A parcel goes pickup address → pickup district branch → drop-off district branch → drop-off address. Only the
+ * two local legs depend on the vehicle; between the branches SwiftDrop's own transport carries it.
+ *
  * <pre>
  * fee = base fee (includes the first base kg)
  *     + per-kg fee x billable kg above the base kg
- *     + the vehicle's surcharge
- *     + max(0, distance - the vehicle's included km) x its per-km fee
+ *     + the vehicle's leg fee for the pickup leg
+ *     + the vehicle's leg fee for the delivery leg
+ *     + linehaul per km x the distance between the branches (0 inside one district)
  *     + the COD fee, when the courier collects cash
  * </pre>
  *
@@ -30,45 +34,43 @@ import java.util.Optional;
 public class FeeCalculator {
 
     /**
-     * @param distanceKm     the estimated road distance from pickup to drop-off
-     * @param cashOnDelivery true when the courier collects cash, which adds the COD fee (the cash itself is not part
-     *                       of the fee)
+     * @param branchDistanceKm the estimated road distance between the pickup and drop-off district branches
+     * @param cashOnDelivery   true when the courier collects cash, which adds the COD fee (the cash itself is not
+     *                         part of the fee)
      */
-    public FeeQuote quote(RateCard card, ParcelMeasurements parcel, BigDecimal distanceKm, boolean cashOnDelivery) {
+    public FeeQuote quote(RateCard card, ParcelMeasurements parcel, BigDecimal branchDistanceKm,
+                          boolean cashOnDelivery) {
         Objects.requireNonNull(card, "card");
         Objects.requireNonNull(parcel, "parcel");
-        Objects.requireNonNull(distanceKm, "distanceKm");
+        Objects.requireNonNull(branchDistanceKm, "branchDistanceKm");
 
         BigDecimal volumetricKg = parcel.hasDimensions() ? volumetricWeight(card, parcel.dimensions()) : null;
         int billableKg = billableWeight(card, parcel);
-
-        List<FeeLine> lines = new ArrayList<>();
-        lines.add(new FeeLine(FeeComponent.BASE, Money.of(card.baseFee())));
-        lines.add(new FeeLine(FeeComponent.WEIGHT, weightCharge(card, billableKg)));
+        FeeLine base = new FeeLine(FeeComponent.BASE, Money.of(card.baseFee()));
+        FeeLine weight = new FeeLine(FeeComponent.WEIGHT, weightCharge(card, billableKg));
+        FeeLine linehaul = new FeeLine(FeeComponent.LINEHAUL,
+                Money.of(branchDistanceKm.multiply(card.linehaulPerKm())));
         FeeLine cod = cashOnDelivery ? new FeeLine(FeeComponent.COD, Money.of(card.codFee())) : null;
 
-        if (!parcel.hasDimensions()) {
-            // Without the size, neither the vehicle nor its distance rate is known yet.
-            addIfPresent(lines, cod);
-            return new FeeQuote(QuoteStatus.PROVISIONAL, card.version(), card.currency(), null, billableKg, null,
-                    null, lines, sum(lines));
-        }
-
-        Optional<VehicleRate> vehicle = card.vehicles().stream()
-                .filter(rate -> rate.canCarry(parcel))
-                .findFirst();
+        // Without the size the vehicle isn't known, so neither are the local legs; the rest is.
+        Optional<VehicleRate> vehicle = parcel.hasDimensions()
+                ? card.vehicles().stream().filter(rate -> rate.canCarry(parcel)).findFirst()
+                : Optional.empty();
         if (vehicle.isEmpty()) {
-            addIfPresent(lines, cod);
-            return new FeeQuote(QuoteStatus.MANUAL_QUOTE, card.version(), card.currency(), volumetricKg, billableKg,
-                    null, null, lines, null);
+            List<FeeLine> lines = lines(base, weight, null, null, linehaul, cod);
+            return parcel.hasDimensions()
+                    ? new FeeQuote(QuoteStatus.MANUAL_QUOTE, card.version(), card.currency(), volumetricKg,
+                            billableKg, null, branchDistanceKm, lines, null)
+                    : new FeeQuote(QuoteStatus.PROVISIONAL, card.version(), card.currency(), null, billableKg, null,
+                            branchDistanceKm, lines, sum(lines));
         }
 
         VehicleRate rate = vehicle.get();
-        lines.add(new FeeLine(FeeComponent.VEHICLE_SURCHARGE, Money.of(rate.surcharge())));
-        lines.add(new FeeLine(FeeComponent.DISTANCE, rate.distanceCharge(distanceKm)));
-        addIfPresent(lines, cod);
+        FeeLine pickup = new FeeLine(FeeComponent.PICKUP, Money.of(rate.legFee()));
+        FeeLine delivery = new FeeLine(FeeComponent.DELIVERY, Money.of(rate.legFee()));
+        List<FeeLine> lines = lines(base, weight, pickup, delivery, linehaul, cod);
         return new FeeQuote(QuoteStatus.COMPLETE, card.version(), card.currency(), volumetricKg, billableKg,
-                rate.vehicle(), distanceKm, lines, sum(lines));
+                rate.vehicle(), branchDistanceKm, lines, sum(lines));
     }
 
     /** L x W x H / divisor, shown with two decimals. */
@@ -98,10 +100,15 @@ public class FeeCalculator {
         return Money.of(card.perKgFee().multiply(BigDecimal.valueOf(extraKg)));
     }
 
-    private static void addIfPresent(List<FeeLine> lines, FeeLine line) {
-        if (line != null) {
-            lines.add(line);
+    /** The lines in the order they are shown, leaving out the ones that don't apply (null). */
+    private static List<FeeLine> lines(FeeLine... lines) {
+        List<FeeLine> present = new ArrayList<>();
+        for (FeeLine line : lines) {
+            if (line != null) {
+                present.add(line);
+            }
         }
+        return present;
     }
 
     private static BigDecimal sum(List<FeeLine> lines) {

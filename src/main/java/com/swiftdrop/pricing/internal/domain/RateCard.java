@@ -13,6 +13,8 @@ import java.util.Objects;
  * @param perKgFee           for every billable kilogram above them
  * @param volumetricDivisor  volumetric weight (kg) = length x width x height (cm) / this
  * @param codFee             handling fee when the courier collects cash on delivery
+ * @param linehaulPerKm      for each kilometre between the pickup and drop-off district branches (SwiftDrop's own
+ *                           transport, whatever the parcel's size)
  * @param roadFactor         straight-line distance x this = estimated road distance
  * @param vehicles           sorted by check order, smallest vehicle first
  */
@@ -24,6 +26,7 @@ public record RateCard(
         BigDecimal perKgFee,
         int volumetricDivisor,
         BigDecimal codFee,
+        BigDecimal linehaulPerKm,
         BigDecimal roadFactor,
         List<VehicleRate> vehicles) {
 
@@ -32,6 +35,7 @@ public record RateCard(
         Objects.requireNonNull(baseFee, "baseFee");
         Objects.requireNonNull(perKgFee, "perKgFee");
         Objects.requireNonNull(codFee, "codFee");
+        Objects.requireNonNull(linehaulPerKm, "linehaulPerKm");
         Objects.requireNonNull(roadFactor, "roadFactor");
         if (volumetricDivisor <= 0) {
             throw new IllegalArgumentException("volumetricDivisor must be more than 0");

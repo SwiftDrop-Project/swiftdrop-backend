@@ -1,6 +1,7 @@
 package com.swiftdrop.pricing.internal.controller;
 
 import com.swiftdrop.pricing.PriceQuote;
+import com.swiftdrop.pricing.PriceQuote.Component;
 import com.swiftdrop.pricing.PricingApi;
 import com.swiftdrop.pricing.QuoteRequest;
 import com.swiftdrop.pricing.Vehicle;
@@ -24,24 +25,27 @@ class PricingControllerTest {
 
     @Test
     void theEstimateIsTheQuoteWithItsBreakdown() {
-        QuoteRequest asked = new QuoteRequest(District.COLOMBO, District.GAMPAHA, new BigDecimal("1.8"), 40, 30, 12,
+        QuoteRequest asked = new QuoteRequest(District.COLOMBO, District.KANDY, new BigDecimal("1.8"), 40, 30, 12,
                 false, false);
-        when(pricing.quote(asked)).thenReturn(new PriceQuote(PriceQuote.Status.COMPLETE, 1, "LKR",
-                new BigDecimal("2.88"), 3, Vehicle.BIKE, new BigDecimal("12.0"),
-                List.of(new PriceQuote.Line(PriceQuote.Component.BASE, new BigDecimal("350.00")),
-                        new PriceQuote.Line(PriceQuote.Component.WEIGHT, new BigDecimal("400.00")),
-                        new PriceQuote.Line(PriceQuote.Component.VEHICLE_SURCHARGE, new BigDecimal("0.00")),
-                        new PriceQuote.Line(PriceQuote.Component.DISTANCE, new BigDecimal("210.00"))),
-                new BigDecimal("960.00")));
+        when(pricing.quote(asked)).thenReturn(new PriceQuote(PriceQuote.Status.COMPLETE, 2, "LKR",
+                new BigDecimal("2.88"), 3, Vehicle.BIKE, new BigDecimal("122.6"),
+                List.of(line(Component.BASE, "350.00"), line(Component.WEIGHT, "400.00"),
+                        line(Component.PICKUP, "150.00"), line(Component.DELIVERY, "150.00"),
+                        line(Component.LINEHAUL, "245.20")),
+                new BigDecimal("1295.20")));
 
-        FeeEstimateResponse response = controller.estimate(new FeeEstimateRequest(District.COLOMBO, District.GAMPAHA,
+        FeeEstimateResponse response = controller.estimate(new FeeEstimateRequest(District.COLOMBO, District.KANDY,
                 new BigDecimal("1.8"), 40, 30, 12, false, false));
 
         assertThat(response.status()).isEqualTo(PriceQuote.Status.COMPLETE);
-        assertThat(response.total()).isEqualByComparingTo("960.00");
+        assertThat(response.total()).isEqualByComparingTo("1295.20");
         assertThat(response.vehicle()).isEqualTo(Vehicle.BIKE);
+        assertThat(response.distanceKm()).isEqualByComparingTo("122.6");
         assertThat(response.lines()).extracting(FeeEstimateResponse.Line::component).containsExactly(
-                PriceQuote.Component.BASE, PriceQuote.Component.WEIGHT, PriceQuote.Component.VEHICLE_SURCHARGE,
-                PriceQuote.Component.DISTANCE);
+                Component.BASE, Component.WEIGHT, Component.PICKUP, Component.DELIVERY, Component.LINEHAUL);
+    }
+
+    private static PriceQuote.Line line(Component component, String amount) {
+        return new PriceQuote.Line(component, new BigDecimal(amount));
     }
 }
