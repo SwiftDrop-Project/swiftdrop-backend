@@ -561,6 +561,60 @@ Response `201`:
 
 ---
 
+## Pricing (WP4)
+
+### Estimate a delivery fee
+`POST /pricing/estimate` (logged-in `CUSTOMER` or `MERCHANT`). Nothing is saved.
+
+**Estimated fee = base fee (includes the first 1 kg) + weight charge + vehicle surcharge + distance charge + service
+fees**, from the active rate card:
+- Billable weight = the greater of the actual and the volumetric weight (L × W × H ÷ 5000), rounded up to a whole kg.
+  Weight charge = LKR 200 × billable kg above the first.
+- Vehicle = the first of Bike → Tuk-tuk → Lorry that carries the actual weight and fits the parcel (any orientation;
+  with `keepUpright` only length and width may swap). Each has a surcharge, included km and a per-km rate.
+- Distance = straight line between the district centres × 1.3 (0 inside one district). Distance charge =
+  max(0, distance − included km) × the vehicle's per-km rate.
+- Cash on delivery adds a COD handling fee (LKR 100). The COD amount itself is not part of the fee.
+
+Request:
+```json
+{ "pickupDistrict": "COLOMBO", "dropOffDistrict": "GAMPAHA", "weightKg": 1.8,
+  "lengthCm": 40, "widthCm": 30, "heightCm": 12, "keepUpright": false, "cashOnDelivery": false }
+```
+
+| Field | Rule | Message |
+|---|---|---|
+| `pickupDistrict`, `dropOffDistrict` | Required, one of `GET /meta/districts` | "Select the pickup district." / "Select the drop-off district." |
+| `weightKg` | 0.01–50, up to 2 decimals (the booking's rule) | Same messages as `POST /deliveries` |
+| `lengthCm`, `widthCm`, `heightCm` | Optional, whole cm 1–300; all three or none | "Use whole centimetres from 1 to 300." / "Enter all three measurements, or leave them all empty." (on the first empty one) |
+| `keepUpright`, `cashOnDelivery` | Optional, default `false` | |
+
+Response `200`:
+```json
+{
+  "status": "COMPLETE",
+  "total": 960.00,
+  "currency": "LKR",
+  "rateCardVersion": 1,
+  "billableWeightKg": 3,
+  "volumetricWeightKg": 2.88,
+  "vehicle": "BIKE",
+  "distanceKm": 12.0,
+  "lines": [
+    { "component": "BASE", "amount": 350.00 },
+    { "component": "WEIGHT", "amount": 400.00 },
+    { "component": "VEHICLE_SURCHARGE", "amount": 0.00 },
+    { "component": "DISTANCE", "amount": 210.00 }
+  ]
+}
+```
+- `status`: `COMPLETE`; `PROVISIONAL` without measurements (lines `BASE`, `WEIGHT`, `COD` only; `vehicle`,
+  `distanceKm` and `volumetricWeightKg` are `null`); `MANUAL_QUOTE` when no vehicle takes the parcel (`total` is
+  `null`). A `COD` line is added when `cashOnDelivery` is true.
+- `400` `VALIDATION_FAILED` · `401` `UNAUTHENTICATED` · `403` `FORBIDDEN` (not a `CUSTOMER` or `MERCHANT`)
+
+---
+
 ## Merchant Orders (WP5 — coming in PR 3, after WP3 merges)
 
 Authenticated with either the `SD_TOKEN` cookie **or** an `X-Api-Key: <rawKey>` header.

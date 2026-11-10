@@ -15,7 +15,7 @@ Every direct sub-package of `com.swiftdrop` is a module. `SwiftdropBackendApplic
 | `infrastructure` | none (only `internal/`: web, config, messaging) | - | TBD |
 | `identity` | IdentityApi, UserSummary, CourierSummary, Role, UserStatus, MerchantProfiles (implemented by merchants) | `identity` | Viduranga |
 | `merchants` | MerchantApi, MerchantSummary, ApprovalStatus | `merchants` | Viduranga |
-| `pricing` | PricingApi, QuoteRequest, PriceQuote | `pricing` | TBD |
+| `pricing` | PricingApi, QuoteRequest, PriceQuote, Vehicle | `pricing` (rate_cards, vehicle_rates, district_locations) | TBD (fee estimate: Pasindu) |
 | `delivery` | DeliveryApi, DeliveryOutboxApi, OutboxMessage, DeliverySnapshot, DeliveryContact, CreateDeliveryCommand, ChangeStatusCommand, ParcelStatus (incl. `AT_BRANCH`; branch = `District`), ParcelStatusEntry, ParcelStatusChanged, FailureReason, ProofPhoto, ProofPhotoRef, DeliveryStats | `delivery` (incl. `outbox_events`) | Pasindu |
 | `dispatch` | - | none | TBD |
 | `reporting` | - | none | TBD |
@@ -48,7 +48,7 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
 - A module's public URLs: implement `shared.web.PublicEndpoints` as a bean in the module. Never edit identity's SecurityConfig for that.
 - Unbuilt modules have placeholder contracts ("Contract owned by <module> - extend in Phase 0"); the owner extends them.
 - Current dependencies: identity -> notifications, shared; merchants -> identity, shared; delivery -> shared;
-  courier -> delivery, identity, shared; infrastructure -> shared. Nothing depends on courier.
+  courier -> delivery, identity, shared; pricing -> shared; infrastructure -> shared. Nothing depends on courier.
 - courier gets `DeliveryApi` through an `ObjectProvider` and answers 503 SERVICE_UNAVAILABLE while nothing implements
   it. TEMPORARY: `courier/internal/fake` (`SWIFTDROP_FAKE_DELIVERY=true`) is an in-memory `DeliveryApi` for demos;
   delete it (and its property and tests) when delivery is implemented.
