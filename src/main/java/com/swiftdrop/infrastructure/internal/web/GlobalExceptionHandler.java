@@ -37,11 +37,14 @@ public class GlobalExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     /** Messages for fields whose JSON value could not be read at all (bad enum value, wrong type). */
-    private static final Map<String, String> UNREADABLE_FIELD_MESSAGES = Map.of(
-            "accountType", "Select an account type.",
-            "pickupDistrict", "Select a district.",
-            "parcelsPerMonth", "Select a range.",
-            "acceptTerms", "Accept the terms to continue.");
+    private static final Map<String, String> UNREADABLE_FIELD_MESSAGES = Map.ofEntries(
+            Map.entry("accountType", "Select an account type."),
+            Map.entry("pickupDistrict", "Select a district."),
+            Map.entry("branch", "Select a branch."),
+            Map.entry("vehicleType", "Select a vehicle type."),
+            Map.entry("courierId", "Select a courier."),
+            Map.entry("parcelsPerMonth", "Select a range."),
+            Map.entry("acceptTerms", "Accept the terms to continue."));
 
     @ExceptionHandler(ApiException.class)
     ResponseEntity<ApiError> handleApi(ApiException ex) {

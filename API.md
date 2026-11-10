@@ -597,6 +597,67 @@ The customer's own deliveries, newest first, as a page of Delivery (the shape ab
 
 ---
 
+## Pricing (WP4)
+
+### Estimate a delivery fee
+`POST /pricing/estimate` (logged-in `CUSTOMER` or `MERCHANT`). Nothing is saved.
+
+A parcel goes pickup address → pickup district branch → drop-off district branch → drop-off address. Only the two
+local legs use a vehicle; between the branches SwiftDrop's own transport carries it, whatever its size.
+
+**Estimated fee = base fee (includes the first 1 kg) + weight charge + pickup leg + delivery leg + linehaul + COD
+fee**, from the active rate card (version 2):
+- Billable weight = the greater of the actual and the volumetric weight (L × W × H ÷ 5000), rounded up to a whole kg.
+  Weight charge = LKR 200 × billable kg above the first.
+- Vehicle = the first of Bike → Tuk-tuk → Lorry that carries the actual weight and fits the parcel (any orientation;
+  with `keepUpright` only length and width may swap). Each local leg costs the vehicle's fixed leg fee (Bike 150,
+  Tuk-tuk 300, Lorry 1,500), with no distance charge.
+- Linehaul = LKR 2.00 × the distance between the branches: the straight line between the district centres × 1.3
+  (0 inside one district).
+- Cash on delivery adds a COD handling fee (LKR 100). The COD amount itself is not part of the fee.
+
+Request:
+```json
+{ "pickupDistrict": "COLOMBO", "dropOffDistrict": "KANDY", "weightKg": 1.8,
+  "lengthCm": 40, "widthCm": 30, "heightCm": 12, "keepUpright": false, "cashOnDelivery": false }
+```
+
+| Field | Rule | Message |
+|---|---|---|
+| `pickupDistrict`, `dropOffDistrict` | Required, one of `GET /meta/districts` | "Select the pickup district." / "Select the drop-off district." |
+| `weightKg` | 0.01–50, up to 2 decimals (the booking's rule) | Same messages as `POST /deliveries` |
+| `lengthCm`, `widthCm`, `heightCm` | Optional, whole cm 1–300; all three or none | "Use whole centimetres from 1 to 300." / "Enter all three measurements, or leave them all empty." (on the first empty one) |
+| `keepUpright`, `cashOnDelivery` | Optional, default `false` | |
+
+Response `200`:
+```json
+{
+  "status": "COMPLETE",
+  "total": 1295.20,
+  "currency": "LKR",
+  "rateCardVersion": 2,
+  "billableWeightKg": 3,
+  "volumetricWeightKg": 2.88,
+  "vehicle": "BIKE",
+  "distanceKm": 122.6,
+  "lines": [
+    { "component": "BASE", "amount": 350.00 },
+    { "component": "WEIGHT", "amount": 400.00 },
+    { "component": "PICKUP", "amount": 150.00 },
+    { "component": "DELIVERY", "amount": 150.00 },
+    { "component": "LINEHAUL", "amount": 245.20 }
+  ]
+}
+```
+- `distanceKm`: between the two branches. `lines`: `BASE`, `WEIGHT`, `PICKUP`, `DELIVERY`, `LINEHAUL`, then `COD` when
+  `cashOnDelivery` is true.
+- `status`: `COMPLETE`; `PROVISIONAL` without measurements (no vehicle, so no `PICKUP` and `DELIVERY` lines;
+  `vehicle` and `volumetricWeightKg` are `null`); `MANUAL_QUOTE` when no vehicle takes the parcel for the local legs
+  (`total` is `null`).
+- `400` `VALIDATION_FAILED` · `401` `UNAUTHENTICATED` · `403` `FORBIDDEN` (not a `CUSTOMER` or `MERCHANT`)
+
+---
+
 ## Merchant Orders (WP5 — coming in PR 3, after WP3 merges)
 
 Authenticated with either the `SD_TOKEN` cookie **or** an `X-Api-Key: <rawKey>` header.
