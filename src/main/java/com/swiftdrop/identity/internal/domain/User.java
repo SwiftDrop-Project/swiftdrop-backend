@@ -2,6 +2,8 @@ package com.swiftdrop.identity.internal.domain;
 
 import com.swiftdrop.identity.Role;
 import com.swiftdrop.identity.UserStatus;
+import com.swiftdrop.shared.reference.District;
+import com.swiftdrop.shared.reference.VehicleType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -64,6 +66,24 @@ public class User {
     @Column(name = "token_version", nullable = false)
     private int tokenVersion;
 
+    /** True for admin-created staff until they choose their own password, and after an admin password reset. */
+    @Column(name = "must_change_password", nullable = false)
+    private boolean mustChangePassword;
+
+    /** Assigned district branch for couriers and dispatchers. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "branch", length = 30)
+    private District branch;
+
+    /** Assigned vehicle type for couriers. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "vehicle_type", length = 30)
+    private VehicleType vehicleType;
+
+    /** Timestamp when the account was soft-deleted (status = REMOVED). */
+    @Column(name = "deleted_at")
+    private Instant deletedAt;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -77,6 +97,25 @@ public class User {
         this.passwordHash = passwordHash;
         this.role = role;
         this.status = status;
+    }
+
+    /** Admin-provisioned courier: active, email trusted by admin creation, must change password on first login. */
+    public static User staffCourier(String fullName, String email, String phone, String passwordHash,
+                                    District branch, VehicleType vehicleType) {
+        User user = new User(fullName, email, phone, passwordHash, Role.COURIER, UserStatus.ACTIVE);
+        user.mustChangePassword = true;
+        user.branch = branch;
+        user.vehicleType = vehicleType;
+        return user;
+    }
+
+    /** Admin-provisioned dispatcher: active, email trusted by admin creation, must change password on first login. */
+    public static User staffDispatcher(String fullName, String email, String phone, String passwordHash,
+                                       District branch) {
+        User user = new User(fullName, email, phone, passwordHash, Role.DISPATCHER, UserStatus.ACTIVE);
+        user.mustChangePassword = true;
+        user.branch = branch;
+        return user;
     }
 
     /** A user created from a Google sign-in: no password and no phone yet. */
@@ -104,9 +143,59 @@ public class User {
         this.status = status;
     }
 
-    /** Sets a new BCrypt hash and ends every existing session. */
+    /** Sets a new BCrypt hash, clears any forced password-change flag, and ends every existing session. */
     public void changePassword(String passwordHash) {
         this.passwordHash = passwordHash;
+        this.mustChangePassword = false;
+        endSessions();
+    }
+
+    /** Sets an admin-issued replacement password, requires a change on next login, and ends every session. */
+    public void resetStaffPassword(String passwordHash) {
+        this.passwordHash = passwordHash;
+        this.mustChangePassword = true;
+        endSessions();
+    }
+
+    /**
+     * Updates courier profile fields. If the login email changed, unlinks any Google identity bound to the previous
+     * email and ends all existing sessions.
+     *
+     * @return true when the email address changed
+     */
+    public boolean updateCourierDetails(String fullName, String email, String phone, District branch,
+                                        VehicleType vehicleType) {
+        String normalizedEmail = email.toLowerCase(Locale.ROOT);
+        boolean emailChanged = !this.email.equals(normalizedEmail);
+        this.fullName = fullName;
+        this.email = normalizedEmail;
+        this.phone = phone;
+        this.branch = branch;
+        this.vehicleType = vehicleType;
+        if (emailChanged) {
+            this.googleSub = null;
+            endSessions();
+        }
+        return emailChanged;
+    }
+
+    /** Blocks the account and revokes all active sessions. */
+    public void block() {
+        this.status = UserStatus.DISABLED;
+        endSessions();
+    }
+
+    /** Restores a blocked account to ACTIVE and bumps tokenVersion so no stale pre-block token works. */
+    public void unblock() {
+        this.status = UserStatus.ACTIVE;
+        endSessions();
+    }
+
+    /** Soft-deletes the account permanently while keeping its UUID and profile history intact. */
+    public void remove(Instant deletedAt) {
+        this.status = UserStatus.REMOVED;
+        this.deletedAt = deletedAt;
+        this.googleSub = null;
         endSessions();
     }
 

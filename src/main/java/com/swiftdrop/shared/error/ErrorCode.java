@@ -13,6 +13,7 @@ public enum ErrorCode {
     ACCOUNT_REJECTED(HttpStatus.FORBIDDEN, "Your merchant application was not approved."),
     ACCOUNT_DISABLED(HttpStatus.FORBIDDEN, "Your account has been disabled. Please contact support."),
     PROFILE_INCOMPLETE(HttpStatus.FORBIDDEN, "Finish setting up your account to continue."),
+    PASSWORD_CHANGE_REQUIRED(HttpStatus.FORBIDDEN, "Change your temporary password to continue."),
     EMAIL_NOT_VERIFIED(HttpStatus.FORBIDDEN,
             "Confirm your email address to continue. Enter the 6-digit code we emailed you."),
     INVALID_CODE(HttpStatus.BAD_REQUEST, "That code isn't right. Check it and try again."),
@@ -29,6 +30,8 @@ public enum ErrorCode {
     INVALID_STATUS_TRANSITION(HttpStatus.CONFLICT,
             "This parcel can't move to that status now. Refresh to see its latest status."),
     PARCEL_NOT_ASSIGNABLE(HttpStatus.CONFLICT, "A courier can only be assigned before the parcel is picked up."),
+    COURIER_NOT_ASSIGNABLE(HttpStatus.CONFLICT, "This courier is not active and cannot be assigned parcels."),
+    ACCOUNT_REMOVED(HttpStatus.CONFLICT, "This account has been permanently removed and cannot be modified."),
     UNSUPPORTED_MEDIA_TYPE(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "Send the request as JSON (application/json)."),
     INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "Something went wrong on our side. Please try again."),
     /** A part of SwiftDrop that another module provides is not running yet (e.g. no delivery implementation). */
