@@ -1,5 +1,7 @@
 package com.swiftdrop.identity;
 
+import com.swiftdrop.shared.reference.District;
+
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -28,4 +30,19 @@ public interface IdentityApi {
      */
     UserSummary registerUser(String fullName, String email, String normalizedPhone, String rawPassword, Role role,
                              UserStatus status);
+
+    /** Active couriers across all branches, sorted by name. Blocked and removed couriers are excluded. */
+    List<CourierSummary> listActiveCouriers();
+
+    /** Active couriers assigned to {@code branch}, sorted by name. Blocked and removed couriers are excluded. */
+    List<CourierSummary> listActiveCouriersByBranch(District branch);
+
+    /**
+     * Verifies that {@code courierId} refers to an {@link UserStatus#ACTIVE} {@link Role#COURIER} eligible for new
+     * parcel assignments.
+     *
+     * @throws com.swiftdrop.shared.error.NotFoundException     NOT_FOUND when the user does not exist or is not a courier
+     * @throws com.swiftdrop.shared.error.BusinessRuleException COURIER_NOT_ASSIGNABLE when the courier is blocked or removed
+     */
+    CourierSummary requireAssignableCourier(UUID courierId);
 }

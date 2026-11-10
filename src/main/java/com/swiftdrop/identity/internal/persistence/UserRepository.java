@@ -1,15 +1,20 @@
 package com.swiftdrop.identity.internal.persistence;
 
+import com.swiftdrop.identity.Role;
+import com.swiftdrop.identity.UserStatus;
 import com.swiftdrop.identity.internal.domain.User;
+import com.swiftdrop.shared.reference.District;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-public interface UserRepository extends JpaRepository<User, UUID> {
+public interface UserRepository extends JpaRepository<User, UUID>, JpaSpecificationExecutor<User> {
 
     Optional<User> findByEmail(String email);
 
@@ -20,6 +25,10 @@ public interface UserRepository extends JpaRepository<User, UUID> {
     boolean existsByEmail(String email);
 
     boolean existsByPhone(String phone);
+
+    List<User> findByRoleAndStatusOrderByFullNameAsc(Role role, UserStatus status);
+
+    List<User> findByRoleAndStatusAndBranchOrderByFullNameAsc(Role role, UserStatus status, District branch);
 
     /** Row lock, so two parallel requests for the same user run one after the other. */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
