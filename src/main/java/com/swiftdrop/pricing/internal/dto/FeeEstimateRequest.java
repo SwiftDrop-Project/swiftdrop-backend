@@ -35,14 +35,16 @@ public record FeeEstimateRequest(
         @Min(value = 1, message = MEASUREMENT) @Max(value = 300, message = MEASUREMENT) Integer widthCm,
         @Schema(example = "12", nullable = true)
         @Min(value = 1, message = MEASUREMENT) @Max(value = 300, message = MEASUREMENT) Integer heightCm,
-        boolean keepUpright,
-        boolean cashOnDelivery) {
+        // Boolean, not boolean: Jackson 3 refuses a missing value for a primitive, and these are optional.
+        @Schema(defaultValue = "false", nullable = true) Boolean keepUpright,
+        @Schema(defaultValue = "false", nullable = true) Boolean cashOnDelivery) {
 
     static final String MEASUREMENT = "Use whole centimetres from 1 to 300.";
     static final String ALL_OR_NONE = "Enter all three measurements, or leave them all empty.";
 
     /**
-     * The quote request. Some measurements without the others are a 400 on the first empty one.
+     * The quote request; a missing {@code keepUpright} or {@code cashOnDelivery} is false. Some measurements without
+     * the others are a 400 on the first empty one.
      *
      * @throws FieldValidationException when only some of the measurements are given
      */
@@ -60,7 +62,7 @@ public record FeeEstimateRequest(
                         throw new FieldValidationException(missing.getKey(), ALL_OR_NONE);
                     });
         }
-        return new QuoteRequest(pickupDistrict, dropOffDistrict, weightKg, lengthCm, widthCm, heightCm, keepUpright,
-                cashOnDelivery);
+        return new QuoteRequest(pickupDistrict, dropOffDistrict, weightKg, lengthCm, widthCm, heightCm,
+                Boolean.TRUE.equals(keepUpright), Boolean.TRUE.equals(cashOnDelivery));
     }
 }

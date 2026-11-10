@@ -7,6 +7,7 @@ import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validation;
 import jakarta.validation.Validator;
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.math.BigDecimal;
 import java.util.Map;
@@ -37,6 +38,20 @@ class FeeEstimateRequestTest {
 
         assertThat(VALIDATOR.validate(request)).isEmpty();
         assertThat(request.toQuoteRequest().hasDimensions()).isFalse();
+    }
+
+    @Test
+    void jsonWithoutTheOptionalFieldsReadsAsFalseAndNoMeasurements() {
+        // Read with Jackson as the endpoint does: a primitive boolean here once made a missing field a 400
+        var request = JsonMapper.builder().build().readValue(
+                "{\"pickupDistrict\":\"COLOMBO\",\"dropOffDistrict\":\"KANDY\",\"weightKg\":1.8}",
+                FeeEstimateRequest.class);
+
+        assertThat(VALIDATOR.validate(request)).isEmpty();
+        QuoteRequest quote = request.toQuoteRequest();
+        assertThat(quote.keepUpright()).isFalse();
+        assertThat(quote.cashOnDelivery()).isFalse();
+        assertThat(quote.hasDimensions()).isFalse();
     }
 
     @Test
