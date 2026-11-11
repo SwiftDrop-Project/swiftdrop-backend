@@ -3,6 +3,7 @@ package com.swiftdrop.dispatch.internal.domain;
 import com.swiftdrop.dispatch.AssignmentStatus;
 import com.swiftdrop.dispatch.AssignmentType;
 import com.swiftdrop.dispatch.AssignmentView;
+import com.swiftdrop.dispatch.ItemOutcome;
 import com.swiftdrop.dispatch.RecordOutcomeCommand;
 import com.swiftdrop.shared.error.BusinessRuleException;
 import com.swiftdrop.shared.error.ErrorCode;
@@ -192,6 +193,96 @@ public class CourierAssignment {
         updatedAt = now;
     }
 
+    /**
+     * Adds parcels at the end of an open assignment (dispatcher). Checking that each parcel suits the type and is
+     * in no other open assignment is the caller's job.
+     *
+     * @throws BusinessRuleException    ASSIGNMENT_CLOSED when the assignment is COMPLETED or CANCELLED
+     * @throws FieldValidationException parcelIds when the list is empty or holds a parcel twice, when a parcel is
+     *                                  already in this assignment, or when the assignment would go over
+     *                                  {@link #MAX_ITEMS}
+     */
+    public void addParcels(List<UUID> parcelIds, Instant now) {
+        requireOpen();
+        checkParcels(parcelIds);
+        if (parcelIds.stream().anyMatch(this::holds)) {
+            throw new FieldValidationException("parcelIds", "A parcel you selected is already in this task.");
+        }
+        if (items.size() + parcelIds.size() > MAX_ITEMS) {
+            throw new FieldValidationException("parcelIds",
+                    "A task can hold up to " + MAX_ITEMS + " parcels.");
+        }
+        int sequence = items.stream().mapToInt(AssignmentItem::getSequence).max().orElse(0) + 1;
+        for (UUID parcelId : parcelIds) {
+            items.add(AssignmentItem.pending(UUID.randomUUID(), this, parcelId, sequence++, now));
+        }
+        updatedAt = now;
+    }
+
+    /**
+     * Takes a parcel the courier hasn't touched yet out of an open assignment (dispatcher). The parcel goes back to
+     * the dispatcher's queue.
+     *
+     * @throws NotFoundException     NOT_FOUND when the parcel is not in the assignment
+     * @throws BusinessRuleException ASSIGNMENT_CLOSED when the assignment is COMPLETED or CANCELLED;
+     *                               TASK_STEP_NOT_ALLOWED when the courier already recorded something for it;
+     *                               ASSIGNMENT_NEEDS_PARCEL when it is the last parcel (cancel the task instead)
+     */
+    public void removeParcel(UUID parcelId, Instant now) {
+        AssignmentItem item = item(parcelId);
+        requireOpen();
+        if (item.getOutcome() != ItemOutcome.PENDING) {
+            throw new BusinessRuleException(ErrorCode.TASK_STEP_NOT_ALLOWED,
+                    "The courier has already updated this parcel, so it can't be taken out of the task.");
+        }
+        if (items.size() == 1) {
+            throw new BusinessRuleException(ErrorCode.ASSIGNMENT_NEEDS_PARCEL);
+        }
+        items.remove(item);
+        updatedAt = now;
+    }
+
+    /**
+     * Gives an assignment the courier hasn't started to another courier (dispatcher). Checking that the new courier
+     * is active is the caller's job. The same courier again changes nothing.
+     *
+     * @throws BusinessRuleException ASSIGNMENT_CLOSED when it is COMPLETED or CANCELLED; ASSIGNMENT_STARTED when
+     *                               the courier already recorded an outcome
+     */
+    public void reassign(UUID newCourierId, Instant now) {
+        Objects.requireNonNull(newCourierId, "newCourierId");
+        requireNotStarted();
+        if (!courierId.equals(newCourierId)) {
+            courierId = newCourierId;
+            updatedAt = now;
+        }
+    }
+
+    /**
+     * Cancels an assignment the courier hasn't started (dispatcher). Every item closes, so its parcels go back to
+     * the dispatcher's queue.
+     *
+     * @throws BusinessRuleException ASSIGNMENT_CLOSED when it is COMPLETED or CANCELLED; ASSIGNMENT_STARTED when
+     *                               the courier already recorded an outcome
+     */
+    public void cancel(Instant now) {
+        requireNotStarted();
+        items.forEach(item -> item.closeForCancel(now));
+        status = AssignmentStatus.CANCELLED;
+        cancelledAt = now;
+        updatedAt = now;
+    }
+
+    /** Whether the parcel is in this assignment (open or closed). */
+    public boolean holds(UUID parcelId) {
+        return items.stream().anyMatch(item -> item.getParcelId().equals(parcelId));
+    }
+
+    /** How many items are still open. */
+    public long openItemCount() {
+        return items.stream().filter(item -> !item.isClosed()).count();
+    }
+
     /** The item for this parcel. @throws NotFoundException NOT_FOUND when the parcel is not in the assignment */
     public AssignmentItem item(UUID parcelId) {
         return items.stream()
@@ -221,6 +312,13 @@ public class CourierAssignment {
     private void requireOpen() {
         if (status.isClosed()) {
             throw new BusinessRuleException(ErrorCode.ASSIGNMENT_CLOSED);
+        }
+    }
+
+    private void requireNotStarted() {
+        requireOpen();
+        if (status != AssignmentStatus.ASSIGNED) {
+            throw new BusinessRuleException(ErrorCode.ASSIGNMENT_STARTED);
         }
     }
 

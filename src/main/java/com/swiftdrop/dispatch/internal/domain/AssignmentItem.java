@@ -130,12 +130,28 @@ public class AssignmentItem {
         this.closedAt = target.closes(type) ? now : null;
     }
 
+    /**
+     * Closes a still open item because the dispatcher cancelled its assignment. The outcome stays as it is (PENDING,
+     * since only untouched assignments can be cancelled), so the parcel goes back to the dispatcher's queue.
+     */
+    void closeForCancel(Instant now) {
+        if (closedAt == null) {
+            closedAt = now;
+            updatedAt = now;
+        }
+    }
+
     public boolean isClosed() {
         return closedAt != null;
     }
 
     public UUID getAssignmentId() {
         return assignment.getId();
+    }
+
+    /** The assignment this item belongs to (read-only use: change items only through it). */
+    public CourierAssignment assignment() {
+        return assignment;
     }
 
     public AssignmentItemView toView() {

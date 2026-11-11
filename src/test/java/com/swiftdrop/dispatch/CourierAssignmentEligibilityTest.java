@@ -153,12 +153,12 @@ class CourierAssignmentEligibilityTest extends IntegrationTest {
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("NOT_FOUND"));
 
-        // Submitting an active courier on an open parcel passes eligibility and parcel validation, then answers 503
-        // until WP8 multi-branch leg persistence is implemented (without rewriting delivery's deprecated workflow).
+        // Submitting an active courier on an open parcel passes eligibility and parcel validation and creates the
+        // parcel's next WP8 task (a pickup for a new parcel), without touching delivery's deprecated workflow.
         postJson("/api/v1/dispatch/parcels/" + parcelId + "/assign",
                 Map.of("courierId", activeCourierId), dispatcher)
-                .andExpect(status().isServiceUnavailable())
-                .andExpect(jsonPath("$.code").value("SERVICE_UNAVAILABLE"));
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.assignmentType").value("PICKUP"));
 
         // Record real courier delivery activity + existing assignment, then block & soft-remove that courier
         UUID courierUuid = UUID.fromString(activeCourierId);
