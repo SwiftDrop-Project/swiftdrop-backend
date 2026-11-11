@@ -59,11 +59,13 @@ class DatabaseIsolationTest extends IntegrationTest {
         assertThat(schemaOf("verification_codes")).containsExactly("identity");
         assertThat(schemaOf("merchant_profiles")).containsExactly("merchants");
         assertThat(schemaOf("email_log")).containsExactly("notifications");
+        assertThat(schemaOf("courier_assignments")).containsExactly("dispatch");
+        assertThat(schemaOf("assignment_items")).containsExactly("dispatch");
         assertThat(schemaOf("flyway_schema_history")).containsExactly("public");
         assertThat(jdbc.queryForObject("""
                 select count(*) from information_schema.table_constraints
                 where constraint_type = 'FOREIGN KEY'
-                  and table_schema in ('identity', 'merchants', 'notifications')""", Long.class))
+                  and table_schema in ('identity', 'merchants', 'notifications', 'dispatch')""", Long.class))
                 .isZero();
     }
 

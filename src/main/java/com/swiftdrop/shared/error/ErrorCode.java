@@ -30,6 +30,23 @@ public enum ErrorCode {
     INVALID_STATUS_TRANSITION(HttpStatus.CONFLICT,
             "This parcel can't move to that status now. Refresh to see its latest status."),
     PARCEL_NOT_ASSIGNABLE(HttpStatus.CONFLICT, "A courier can only be assigned before the parcel is picked up."),
+    /** The courier's step isn't allowed for this parcel in this assignment now (dispatch {@code ItemOutcome}). */
+    TASK_STEP_NOT_ALLOWED(HttpStatus.CONFLICT,
+            "This step isn't possible for this parcel now. Refresh to see your task."),
+    ASSIGNMENT_CLOSED(HttpStatus.CONFLICT, "This task is already completed or was cancelled."),
+    ASSIGNMENT_NOT_FINISHED(HttpStatus.CONFLICT, "Update every parcel in this task before you finish it."),
+    /** Dispatch: the parcel is already in another open courier task. */
+    PARCEL_ALREADY_ASSIGNED(HttpStatus.CONFLICT,
+            "This parcel is already in another courier's task. Refresh to see the latest queue."),
+    /** Dispatch: the parcel's status or branch doesn't suit the task (e.g. a pickup for a parcel already at a branch). */
+    PARCEL_NOT_READY_FOR_TASK(HttpStatus.CONFLICT,
+            "This parcel can't be added to this task now. Refresh to see its latest status."),
+    /** Dispatch: the courier has already started the task, so it can't be cancelled or given to someone else. */
+    ASSIGNMENT_STARTED(HttpStatus.CONFLICT, "The courier has already started this task."),
+    /** Dispatch: removing the last parcel would leave an empty task; cancel the task instead. */
+    ASSIGNMENT_NEEDS_PARCEL(HttpStatus.CONFLICT, "A task needs at least one parcel. Cancel the task instead."),
+    /** Dispatch: someone else changed the task at the same moment. */
+    ASSIGNMENT_CHANGED(HttpStatus.CONFLICT, "This task was just changed by someone else. Refresh and try again."),
     COURIER_NOT_ASSIGNABLE(HttpStatus.CONFLICT, "This courier is not active and cannot be assigned parcels."),
     ACCOUNT_REMOVED(HttpStatus.CONFLICT, "This account has been permanently removed and cannot be modified."),
     UNSUPPORTED_MEDIA_TYPE(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "Send the request as JSON (application/json)."),
