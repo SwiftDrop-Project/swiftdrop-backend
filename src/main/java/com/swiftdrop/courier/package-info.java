@@ -12,6 +12,11 @@
  * <p>Stateless: no schema, no tables. Assignments are read and changed only through
  * {@link com.swiftdrop.dispatch.AssignmentApi}, parcels only through {@link com.swiftdrop.delivery.DeliveryApi}. A
  * courier sees only their own assignments and the parcels in them; anything else answers 404, so ids can't be probed.
+ * Both APIs come by constructor injection. A clash with a dispatcher's change to the same task answers 409
+ * ASSIGNMENT_CHANGED (dispatch's optimistic lock) and the parcel change is rolled back.
+ *
+ * <p>Tasks scheduled for a later day ({@code scheduledFor}) are listed and can be worked now; the date is information
+ * only, as dispatch defines it.
  *
  * <p>Uses: dispatch ({@code AssignmentApi} and its records), delivery ({@code DeliveryApi} and its records) and
  * shared. No module depends on courier.

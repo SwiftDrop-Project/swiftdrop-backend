@@ -77,11 +77,11 @@ Change it in the same PR as the code, and tell the frontend team.
 | 409 | `PARCEL_NOT_READY_FOR_TASK` | Dispatch: the parcel's status or branch doesn't suit the task (the message names the parcel) |
 | 409 | `ASSIGNMENT_STARTED` | Dispatch: cancelling or reassigning a task the courier has already started |
 | 409 | `ASSIGNMENT_NEEDS_PARCEL` | Dispatch: removing the last parcel of a task |
-| 409 | `ASSIGNMENT_CHANGED` | Dispatch: someone else changed the task at the same moment |
+| 409 | `ASSIGNMENT_CHANGED` | Dispatch or courier: someone else changed the task at the same moment |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | Request body is not `application/json` |
 | 429 | `TOO_MANY_REQUESTS` | Too many requests from this IP address; the `Retry-After` header says how many seconds to wait |
 | 500 | `INTERNAL_ERROR` | Anything unexpected (generic message only) |
-| 503 | `SERVICE_UNAVAILABLE` | A part of SwiftDrop isn't running yet (e.g. courier endpoints before parcels exist on the server) |
+| 503 | `SERVICE_UNAVAILABLE` | A part of SwiftDrop isn't built yet (e.g. proof-of-delivery photos) |
 
 Messages of the new codes (show them as-is):
 
@@ -611,6 +611,8 @@ the same transaction (both are saved, or neither).
 - A courier sees only their own tasks and the parcels in them: another courier's task or parcel, or an unknown id →
   `404 NOT_FOUND`. A non-UUID id → `400 VALIDATION_FAILED`.
 - "Today" is the current day in Sri Lankan time (Asia/Colombo).
+- `scheduledFor` is the day the dispatcher planned the task for (today or later). It is information only: a task
+  scheduled for a later day is already in the courier's list and the courier can work on it now.
 
 ### Item outcomes (what happened to one parcel in one task)
 
@@ -694,10 +696,11 @@ Every parcel in a task starts as `PENDING`.
 ```json
 { "date": "2026-11-09", "open": 2, "completedToday": 1, "assignments": [ /* Task (summary) */ ] }
 ```
-Every open task (whatever day it was assigned), plus the tasks completed or cancelled today. Order: `IN_PROGRESS`,
-then `ASSIGNED` (oldest `assignedAt` first), then closed ones (newest first). `open` = not completed or cancelled,
-`completedToday` = completed today.
-- `200` · `401` · `403` · `503`
+Every open task, whatever day it was assigned or is scheduled for (also later days: check `scheduledFor`), plus
+the tasks completed or cancelled today. Order: `IN_PROGRESS`, then `ASSIGNED` (oldest `assignedAt` first, not by
+`scheduledFor`), then closed ones (newest first). `open` = not completed or cancelled, `completedToday` = completed
+today.
+- `200` · `401` · `403`
 
 ### `GET /courier/assignments/history?page=0&size=20&trackingNumber=SD2611060007`
 Completed and cancelled tasks, newest first, as a page of Task (summary):
@@ -706,11 +709,11 @@ Completed and cancelled tasks, newest first, as a page of Task (summary):
 ```
 `page` from 0 (default 0); `size` 1-100 (default 20); `trackingNumber` optional (spaces and case ignored): only the
 tasks that held that parcel; an unknown number gives an empty page.
-- `200` · `400` `VALIDATION_FAILED` (`fieldErrors.page` / `fieldErrors.size`) · `401` · `403` · `503`
+- `200` · `400` `VALIDATION_FAILED` (`fieldErrors.page` / `fieldErrors.size`) · `401` · `403`
 
 ### `GET /courier/assignments/{assignmentId}`
 All Task (summary) fields, plus `"items": [ /* Task item */ ]` ordered by `sequence`.
-- `200` · `400` (non-UUID id) · `401` · `403` · `404` `NOT_FOUND` · `503`
+- `200` · `400` (non-UUID id) · `401` · `403` · `404` `NOT_FOUND`
 
 ### `POST /courier/assignments/{assignmentId}/items/{parcelId}/outcome`
 Records what happened to one parcel (everything except the handover):
@@ -728,12 +731,14 @@ Records what happened to one parcel (everything except the handover):
 ```
 - `200`: the task detail after the change. Customers, merchants and the tracking page are told through delivery's
   `ParcelStatusChanged` event (`actorRole: COURIER`).
-- `400` `VALIDATION_FAILED` · `401` · `403` · `404` `NOT_FOUND` (not your task, or the parcel is not in it) · `503`
+- `400` `VALIDATION_FAILED` · `401` · `403` · `404` `NOT_FOUND` (not your task, or the parcel is not in it)
 - `409` `ASSIGNMENT_CLOSED`: the task is completed or cancelled.
 - `409` `TASK_STEP_NOT_ALLOWED`: the outcome doesn't follow the item's current one (e.g. `DELIVERED` before `LOADED`,
-  or the button pressed twice), or someone changed the task at the same moment. The frontend reloads the task.
+  or the button pressed twice). The frontend reloads the task.
 - `409` `INVALID_STATUS_TRANSITION`: the parcel itself can't make the move (e.g. it is no longer at the task's
   origin branch).
+- `409` `ASSIGNMENT_CHANGED`: the dispatcher changed the task at the same moment (e.g. added a parcel). Nothing was
+  saved; reload the task and try again.
 
 ### `POST /courier/assignments/{assignmentId}/handover`
 Hands parcels over at a branch: `HANDED_OVER` at the destination (PICKUP, TRANSFER), or `RETURNED` to the origin
@@ -744,16 +749,17 @@ Hands parcels over at a branch: `HANDED_OVER` at the destination (PICKUP, TRANSF
 ```
 `receivedBy` is the name of the person at the branch who took the parcels (there is no branch-staff login yet).
 - `200`: the task detail after the change.
-- `400` · `401` · `403` · `404` (not your task, or a parcel not in it) · `503`
+- `400` · `401` · `403` · `404` (not your task, or a parcel not in it)
 - `409` `ASSIGNMENT_CLOSED` · `409` `TASK_STEP_NOT_ALLOWED` (a parcel is not ready) · `409`
-  `INVALID_STATUS_TRANSITION`
+  `INVALID_STATUS_TRANSITION` · `409` `ASSIGNMENT_CHANGED` (changed by the dispatcher at the same moment)
 
 ### `POST /courier/assignments/{assignmentId}/complete`
 No body. Completes the task once every item is closed. No parcel status changes.
 - `200`: the Task (summary), `status: COMPLETED`.
-- `401` · `403` · `404` · `503`
+- `401` · `403` · `404`
 - `409` `ASSIGNMENT_NOT_FINISHED`: a parcel is still pending, collected, loaded or failed-but-not-returned.
 - `409` `ASSIGNMENT_CLOSED`: already completed or cancelled.
+- `409` `ASSIGNMENT_CHANGED`: the dispatcher changed the task at the same moment.
 
 ### `GET /courier/parcels/{parcelId}`
 One parcel the courier handles or handled (it must be in one of their tasks):
@@ -778,7 +784,7 @@ One parcel the courier handles or handled (it must be in one of their tasks):
   item (sender for PICKUP, recipient for DELIVERY, none for TRANSFER).
 - `history`: newest first, **without notes** (several couriers write on one parcel; your own notes are on your task
   items).
-- `200` · `400` (non-UUID id) · `401` · `403` · `404` `NOT_FOUND` · `503`
+- `200` · `400` (non-UUID id) · `401` · `403` · `404` `NOT_FOUND`
 
 Proof-of-delivery photos (upload and download) come in a later version.
 
@@ -789,7 +795,8 @@ Proof-of-delivery photos (upload and download) come in a later version.
 4. The step is allowed for the item (`409` `TASK_STEP_NOT_ALLOWED`).
 5. The parcel can make the move (`409` `INVALID_STATUS_TRANSITION`).
 6. The parcel status and the outcome are saved together. A clash with another change: on the parcel →
-   `409` `INVALID_STATUS_TRANSITION`, on the task → `409` `TASK_STEP_NOT_ALLOWED`. Either way, reload the task.
+   `409` `INVALID_STATUS_TRANSITION`, on the task → `409` `ASSIGNMENT_CHANGED`. Either way nothing is saved; reload
+   the task.
 
 ### Validation rules (courier)
 

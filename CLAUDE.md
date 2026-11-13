@@ -23,7 +23,7 @@ Every direct sub-package of `com.swiftdrop` is a module. `SwiftdropBackendApplic
 | `notifications` | NotificationsApi, AccountEmail | `notifications` | TBD |
 | `webhooks` | - | `webhooks` | TBD |
 | `outbox` | - (reads the outbox only through `DeliveryOutboxApi`) | none | TBD |
-| `courier` | - (endpoints only; uses `DeliveryApi`) | none | Kalpani |
+| `courier` | - (endpoints only; uses `AssignmentApi` and `DeliveryApi`) | none | Kalpani |
 
 ```
 com.swiftdrop.<module>/
@@ -48,17 +48,19 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
 - A module's public URLs: implement `shared.web.PublicEndpoints` as a bean in the module. Never edit identity's SecurityConfig for that.
 - Unbuilt modules have placeholder contracts ("Contract owned by <module> - extend in Phase 0"); the owner extends them.
 - Current dependencies: identity -> notifications, shared; merchants -> identity, shared; delivery -> shared;
-  dispatch -> delivery, identity, shared; courier -> delivery, identity, shared; infrastructure -> shared. Nothing
-  depends on courier. Planned: courier -> dispatch (courier tasks).
+  dispatch -> delivery, identity, shared; courier -> dispatch, delivery, shared; infrastructure -> shared. Nothing
+  depends on courier.
 - dispatch: `AssignmentApi` is implemented; dispatcher endpoints are under `/dispatch` (DISPATCHER and ADMIN, API.md
   "Dispatch"). Delivery has no "waiting for pickup" query, so dispatch keeps `dispatch.pickup_queue` from
   `ParcelStatusChanged` (RabbitMQ queue `dispatch.q`); it fills only while the outbox relay runs
   (`SWIFTDROP_OUTBOX_RELAY_ENABLED=true`).
   Assignment status and item outcomes are separate from the parcel status: a courier's task can be completed while
   its parcels are still on their way.
-- courier gets `DeliveryApi` through an `ObjectProvider` and answers 503 SERVICE_UNAVAILABLE while nothing implements
-  it. TEMPORARY: `courier/internal/fake` (`SWIFTDROP_FAKE_DELIVERY=true`) is an in-memory `DeliveryApi` for demos;
-  delete it (and its property and tests) when delivery is implemented.
+- courier gets `AssignmentApi` (dispatch) and `DeliveryApi` (delivery) by constructor injection. Each courier step
+  changes the parcel status (`DeliveryApi.changeStatus`) and records the item outcome (`AssignmentApi.recordOutcome`)
+  in one transaction; a clash with a dispatcher's change answers 409 `ASSIGNMENT_CHANGED` and keeps nothing.
+  `scheduledFor` is information only: couriers see and may work tasks scheduled for a later day.
+  `CourierWorkflowIntegrationTest` / `CourierWorkflowRollbackTest` run on the real modules; keep them green.
 - delivery must never depend on identity: identity -> notifications, and notifications will consume
   `ParcelStatusChanged` (notifications -> delivery), so that would be a cycle. User ids are plain UUIDs and roles are
   plain names (e.g. `COURIER`). Multi-branch: several couriers handle one parcel, so callers authorize

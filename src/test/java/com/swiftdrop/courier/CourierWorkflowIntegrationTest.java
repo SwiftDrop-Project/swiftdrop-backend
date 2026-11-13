@@ -8,6 +8,8 @@ import com.swiftdrop.shared.reference.District;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.JsonNode;
 
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -315,6 +317,53 @@ class CourierWorkflowIntegrationTest extends RealWorkflowTest {
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("ASSIGNMENT_CLOSED"));
         assertThat(parcel(parcel).status()).isEqualTo(ParcelStatus.CREATED);
+    }
+
+    // ---- Tasks scheduled for a later day ----
+
+    /**
+     * Current behaviour, kept on purpose: {@code scheduledFor} is information only. A task the dispatcher planned for a
+     * later day is already on the courier's list (with its date), ordered by {@code assignedAt} like any other, and
+     * the courier may work it now.
+     */
+    @Test
+    void aTaskScheduledForALaterDayIsListedWithItsDateAndCanBeWorkedNow() throws Exception {
+        StaffCourier courier = createCourier("GAMPAHA");
+        UUID later = bookParcel();
+        UUID now = bookParcel();
+        LocalDate today = LocalDate.now(ZoneId.of("Asia/Colombo"));
+        LocalDate inThreeDays = today.plusDays(3);
+        JsonNode created = read(postJson(DISPATCH_TASKS, Map.of(
+                "courierId", courier.id().toString(),
+                "type", "PICKUP",
+                "destinationBranch", "GAMPAHA",
+                "scheduledFor", inThreeDays.toString(),
+                "parcelIds", List.of(later.toString())), dispatcher)
+                .andExpect(status().isCreated()));
+        UUID laterTask = UUID.fromString(created.get("id").asString());
+        UUID todayTask = pickupTask(courier, "GAMPAHA", now);
+
+        // Listed today, with its own date; assigned first, so listed first (not ordered by scheduledFor).
+        today(courier)
+                .andExpect(jsonPath("$.date").value(today.toString()))
+                .andExpect(jsonPath("$.open").value(2))
+                .andExpect(jsonPath("$.assignments[0].assignmentId").value(laterTask.toString()))
+                .andExpect(jsonPath("$.assignments[0].scheduledFor").value(inThreeDays.toString()))
+                .andExpect(jsonPath("$.assignments[1].assignmentId").value(todayTask.toString()))
+                .andExpect(jsonPath("$.assignments[1].scheduledFor").value(today.toString()));
+        taskDetail(courier, laterTask)
+                .andExpect(jsonPath("$.scheduledFor").value(inThreeDays.toString()))
+                .andExpect(jsonPath("$.items[0].allowedOutcomes[0]").value("COLLECTED"));
+
+        // No restriction by date: the whole task can be done today.
+        outcome(courier, laterTask, later, outcomeBody("COLLECTED")).andExpect(status().isOk());
+        handover(courier, laterTask, "S. Silva", later).andExpect(status().isOk());
+        complete(courier, laterTask)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("COMPLETED"))
+                .andExpect(jsonPath("$.scheduledFor").value(inThreeDays.toString()));
+        assertThat(parcel(later).status()).isEqualTo(ParcelStatus.AT_BRANCH);
+        assertThat(parcel(later).currentBranch()).isEqualTo(District.GAMPAHA);
     }
 
     // ---- Refused steps change nothing ----

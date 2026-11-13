@@ -41,7 +41,7 @@ architecture diagram). `SwiftdropBackendApplication` stays at the root.
 | `notifications` | Emails (and later SMS) to users | `notifications` | TBD | Placeholder |
 | `webhooks` | Merchant webhooks | `webhooks` | TBD | Placeholder |
 | `outbox` | Relays delivery's outbox events to RabbitMQ | - | TBD | Placeholder |
-| `courier` | The courier's tasks: today's tasks, what happened to each parcel, branch handovers, completing a task, task history, one parcel (through `AssignmentApi` and `DeliveryApi`) | - | Kalpani | Built (answers 503 until dispatch and delivery are implemented) |
+| `courier` | The courier's tasks: today's tasks, what happened to each parcel, branch handovers, completing a task, task history, one parcel (through `AssignmentApi` and `DeliveryApi`) | - | Kalpani | Built (on the real `AssignmentApi` and `DeliveryApi`) |
 
 Each module's `package-info.java` describes its purpose, owner, schema and the events it publishes and consumes.
 Placeholder modules already have their public contract types (for example `DeliveryApi`, `ParcelStatusChanged`)
@@ -188,7 +188,6 @@ secrets in the code.
 | `DEMO_PASSWORD` | empty | No | Password for the demo accounts |
 | `GOOGLE_CLIENT_ID` | empty | No | Google OAuth client ID. Google sign-in is on only when both Google values are set. |
 | `GOOGLE_CLIENT_SECRET` | empty | No | Google OAuth client secret. Never commit it. |
-| `SWIFTDROP_FAKE_DISPATCH` | `false` | No | **Temporary**, local demos only: `true` gives the courier endpoints in-memory courier tasks. With `SEED_DEMO_USERS=true` and a **local** database (`DB_URL` host `localhost` or `postgres`), every start creates 9 real demo parcels (orders of `merchant@swiftdrop.lk`, tracking numbers in the log) and gives `courier@swiftdrop.lk` one PICKUP, one TRANSFER and one DELIVERY task (Delgoda → Gampaha → Matara → Deniyaya). The tasks are gone after a restart; the parcels stay. With any other database (e.g. Neon) it logs a warning and creates nothing. Without the flag the courier endpoints answer 503. Removed once dispatch is implemented. |
 
 The connection pool is small on purpose (at most 3 connections, none kept while idle), because the
 whole team shares one Neon database. These values are fixed in `application.yml`.
@@ -353,8 +352,10 @@ PowerShell: `.\mvnw.cmd test`
 | `merchants/AdminMerchantTest` | Admin list, approve, reject, and access rules |
 | `merchants/internal/...` | Demo merchant seeding (approved, can log in, parallel-safe) |
 | `infrastructure/...` | Districts, correlation ID, RabbitMQ exchange and queues |
-| `courier/Courier*Test` | Courier endpoints with `AssignmentApi` and `DeliveryApi` mocked: access (401/403), ownership (404), today's list and order, item outcomes and the parcel move per task type, handovers (all or nothing), completing, check order and request rules (400/409), history; 503 without implementations; `CourierRollbackTest` (both fakes, real transaction): nothing is kept when dispatch fails |
-| `courier/OnlyFakeDeliveryTest`, `courier/internal/...` | Temporary demo fakes: `FakeDeliveryWiringTest` walks all three seeded tasks over HTTP with both flags on; with only the delivery flag the app starts and answers 503; the fakes' rules and rollback; "today" in Sri Lankan time |
+| `courier/Courier*Test` | Courier endpoints with `AssignmentApi` and `DeliveryApi` mocked: access (401/403), ownership (404), today's list and order, item outcomes and the parcel move per task type, handovers (all or nothing), completing, check order and request rules (400/409), history |
+| `courier/CourierWorkflowIntegrationTest` | Courier endpoints on the **real** delivery and dispatch modules (no mocks): a parcel from Delgoda to Deniyaya through a pickup, a transfer and a delivery task (three couriers), a failed delivery returned and delivered again, ownership between couriers, roles, the dispatcher reassigning and cancelling, tasks scheduled for a later day, refused steps that change nothing |
+| `courier/CourierWorkflowRollbackTest` | The parcel status and the task outcome commit together: dispatch failing after the parcel moved, a handover failing halfway, and a real clash with the dispatcher (`409 ASSIGNMENT_CHANGED`) keep nothing |
+| `courier/internal/application/CourierDayTest` | "Today" in Sri Lankan time |
 | `shared/validation/...` | Phone number rules |
 | `SwiftdropBackendApplicationTests` | App starts, health, Swagger, Google off without credentials |
 
