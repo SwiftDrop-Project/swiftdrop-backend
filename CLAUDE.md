@@ -49,8 +49,8 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
 - Unbuilt modules have placeholder contracts ("Contract owned by <module> - extend in Phase 0"); the owner extends them.
 - Current dependencies: identity -> notifications, shared; merchants -> identity, shared; delivery -> shared;
   dispatch -> delivery, identity, shared; courier -> delivery, identity, shared; infrastructure -> shared. Nothing
-  depends on courier. Planned: courier -> dispatch (courier tasks); webhooks -> delivery, merchants, shared (nothing
-  depends on webhooks).
+  depends on courier. webhooks -> delivery, merchants, shared (nothing depends on webhooks).
+  Planned: courier -> dispatch (courier tasks).
 - webhooks (contract in API.md "Webhooks", being built): reads `ParcelStatusChanged` from `webhooks.q` (declared by
   infrastructure; never declare it again with other arguments), stores one delivery row per event and subscription,
   and a scheduled worker sends them. Retries live in the database (`webhooks.deliveries`), not in RabbitMQ queues.

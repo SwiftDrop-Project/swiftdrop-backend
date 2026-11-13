@@ -19,7 +19,9 @@
  * RabbitMQ), claiming rows with {@code FOR UPDATE SKIP LOCKED} so several backends never send the same one.
  * Signing secrets are stored encrypted (they are needed in plain form to sign), never hashed and never logged.
  *
- * <p>Status: contract agreed (API.md "Webhooks"); implementation in progress.
+ * <p>Status: subscriptions API ({@code /merchant/webhooks}) and the {@code webhooks.q} consumer are built (events
+ * become PENDING deliveries; events from before a subscription was created are not replayed to it). Sending,
+ * retries, the test ping, delivery history and the admin endpoints are in progress.
  *
  * <p>Database schema {@code webhooks} (no foreign keys; merchant ids are identity user ids):
  * <ul>
