@@ -85,6 +85,37 @@ public class WebhookSubscription {
         return Collections.unmodifiableSet(types);
     }
 
+    /** A new URL (already validated by the caller). The same URL changes nothing. */
+    public void changeUrl(String newUrl, Instant now) {
+        if (!url.equals(newUrl)) {
+            url = newUrl;
+            updatedAt = now;
+        }
+    }
+
+    /** New event types: non-empty parcel events (not webhook.ping). The same set changes nothing. */
+    public void changeEventTypes(Set<WebhookEventType> types, Instant now) {
+        String[] wireNames = toWireNames(types);
+        if (!Arrays.equals(eventTypes, wireNames)) {
+            eventTypes = wireNames;
+            updatedAt = now;
+        }
+    }
+
+    /** Turns the subscription back on (the caller checks the limit). Turning it on again changes nothing. */
+    public void activate(Instant now) {
+        if (!active) {
+            active = true;
+            updatedAt = now;
+        }
+    }
+
+    /** A new signing secret (its ciphertext); the old one stops working at once. */
+    public void rotateSecret(String newSecretCiphertext, Instant now) {
+        secretCiphertext = newSecretCiphertext;
+        updatedAt = now;
+    }
+
     /** Turns the subscription off (DELETE /merchant/webhooks/{id}). Turning it off again changes nothing. */
     public void deactivate(Instant now) {
         if (active) {

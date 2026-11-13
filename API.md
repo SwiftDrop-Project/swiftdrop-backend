@@ -62,6 +62,7 @@ Change it in the same PR as the code, and tell the frontend team.
 | 403 | `ACCOUNT_PENDING_APPROVAL` | Merchant not approved yet |
 | 403 | `ACCOUNT_REJECTED` | Merchant application rejected |
 | 403 | `ACCOUNT_DISABLED` | Account disabled by admin |
+| 403 | `MERCHANT_NOT_APPROVED` | A merchant whose account isn't approved (API key requests; creating a webhook) |
 | 403 | `PROFILE_INCOMPLETE` | Google sign-up not finished: only `GET /auth/me`, `POST /auth/logout` and `POST /auth/complete-profile` work |
 | 404 | `NOT_FOUND` | Resource not found |
 | 405 | `METHOD_NOT_ALLOWED` | Wrong HTTP method for this path |
@@ -507,7 +508,8 @@ Response `200` — same shape as **Create**, with the new `rawKey` shown once.
 
 A merchant registers HTTPS URLs; SwiftDrop sends a signed `POST` to each one when one of the merchant's parcels
 changes status. Only parcels with a merchant trigger webhooks (customer bookings never do). The merchant endpoints
-require a logged-in `MERCHANT` cookie (`SD_TOKEN`) of an approved merchant; API keys can't manage webhooks (yet).
+require a logged-in `MERCHANT` cookie (`SD_TOKEN`) of an approved merchant; API keys can't manage webhooks (yet):
+a request authenticated with an `X-Api-Key` header gets `403 FORBIDDEN`.
 The admin endpoints require `ADMIN`.
 
 ### Event types
@@ -552,7 +554,7 @@ The secret is never in this shape. The create and rotate responses add it once:
 
 | Method and path | What it does | Main errors |
 |---|---|---|
-| `POST /merchant/webhooks` `{"url", "eventTypes": [...]}` | Create an active subscription (201, subscription + `secret`) | 400 `url`, `eventTypes`; 403 merchant not approved; 409 `WEBHOOK_LIMIT_REACHED` |
+| `POST /merchant/webhooks` `{"url", "eventTypes": [...]}` | Create an active subscription (201, subscription + `secret`) | 400 `url`, `eventTypes`; 403 `MERCHANT_NOT_APPROVED`; 409 `WEBHOOK_LIMIT_REACHED` |
 | `GET /merchant/webhooks` | Your subscriptions, active and turned off, newest first (array of subscriptions) | — |
 | `PATCH /merchant/webhooks/{id}` `{"url"?, "eventTypes"?, "active"?}` | Change only the fields sent (subscription) | 400; 404; 409 `WEBHOOK_LIMIT_REACHED` (turning one on) |
 | `DELETE /merchant/webhooks/{id}` | Turn off (`active: false`; history is kept). 204. Idempotent | 404 |
@@ -571,7 +573,7 @@ Another merchant's subscription or delivery answers 404, never 403. A merchant h
 |---|---|---|
 | `url` | Required, at most 2048 characters, an absolute `https://` URL | Enter a full https:// address, like https://shop.example.com/webhooks |
 | `url` | No user name or password in it, and the host must not be (or resolve to) a private, loopback or link-local address | This address can't receive webhooks. Use a public https:// address. |
-| `eventTypes` | Required, 1-7 distinct parcel event types from the table above (`webhook.ping` isn't one) | Choose at least one event |
+| `eventTypes` | Required, 1-7 distinct parcel event types from the table above (`webhook.ping` isn't one) | Choose at least one event (empty); Choose at most 7 events; `'parcel.lost' isn't a webhook event` (unknown name) |
 | `status` (query) | `PENDING`, `SUCCEEDED` or `FAILED` | — |
 
 ### What the merchant receives
