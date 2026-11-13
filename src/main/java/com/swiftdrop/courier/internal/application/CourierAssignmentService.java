@@ -22,10 +22,7 @@ import com.swiftdrop.shared.error.FieldValidationException;
 import com.swiftdrop.shared.error.NotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.event.EventListener;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -42,7 +39,6 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static com.swiftdrop.courier.internal.application.CourierSupport.ACTOR_ROLE;
-import static com.swiftdrop.courier.internal.application.CourierSupport.required;
 import static com.swiftdrop.courier.internal.application.CourierSupport.trimToNull;
 
 /**
@@ -56,10 +52,6 @@ import static com.swiftdrop.courier.internal.application.CourierSupport.trimToNu
  * <p>Writes: check order request (400) → mine (404) → assignment open (409 ASSIGNMENT_CLOSED) → step allowed
  * (409 TASK_STEP_NOT_ALLOWED) → parcel transition (409 INVALID_STATUS_TRANSITION); then the parcel status
  * ({@link ParcelMoves}) and the item outcome are written in one transaction, so both or neither are kept.
- *
- * <p>Both APIs come through an {@link ObjectProvider} because nothing implements them until WP3 and WP8 are merged
- * (or the temporary fakes are on). The application still starts; the endpoints answer
- * {@code 503 SERVICE_UNAVAILABLE}. Replace them with constructor injection once both are implemented.
  */
 @Service
 public class CourierAssignmentService {
@@ -73,39 +65,26 @@ public class CourierAssignmentService {
                     ? compareNullsLast(closedAt(b), closedAt(a))
                     : compareNullsLast(a.assignedAt(), b.assignedAt()));
 
-    private final ObjectProvider<AssignmentApi> assignments;
-    private final ObjectProvider<DeliveryApi> deliveries;
+    private final AssignmentApi assignmentApi;
+    private final DeliveryApi delivery;
     private final Clock clock;
 
     @Autowired
-    public CourierAssignmentService(ObjectProvider<AssignmentApi> assignments,
-                                    ObjectProvider<DeliveryApi> deliveries) {
-        this(assignments, deliveries, Clock.system(CourierDay.ZONE));
+    public CourierAssignmentService(AssignmentApi assignmentApi, DeliveryApi delivery) {
+        this(assignmentApi, delivery, Clock.system(CourierDay.ZONE));
     }
 
-    CourierAssignmentService(ObjectProvider<AssignmentApi> assignments, ObjectProvider<DeliveryApi> deliveries,
-                             Clock clock) {
-        this.assignments = assignments;
-        this.deliveries = deliveries;
+    CourierAssignmentService(AssignmentApi assignmentApi, DeliveryApi delivery, Clock clock) {
+        this.assignmentApi = assignmentApi;
+        this.delivery = delivery;
         this.clock = clock;
-    }
-
-    @EventListener(ApplicationReadyEvent.class)
-    void warnWhenAnApiIsMissing() {
-        if (assignments.getIfAvailable() == null) {
-            log.warn("No AssignmentApi implementation: courier endpoints answer 503 SERVICE_UNAVAILABLE until "
-                    + "dispatch is implemented (or SWIFTDROP_FAKE_DISPATCH=true for demo data).");
-        }
-        if (deliveries.getIfAvailable() == null) {
-            log.warn("No DeliveryApi implementation: courier endpoints answer 503 SERVICE_UNAVAILABLE.");
-        }
     }
 
     // ---- Reads ----
 
     /** Open assignments, plus the ones completed or cancelled today (Sri Lankan time). */
     public CourierToday today(UUID courierId) {
-        List<AssignmentView> list = required(assignments)
+        List<AssignmentView> list = assignmentApi
                 .findOpenForCourier(courierId, CourierDay.startOfToday(clock))
                 .stream()
                 .filter(assignment -> courierId.equals(assignment.courierId()))
@@ -120,11 +99,10 @@ public class CourierAssignmentService {
      */
     public Page<AssignmentView> history(UUID courierId, int page, int size, String trackingNumber) {
         PageRequest pageable = CourierSupport.pageRequest(page, size);
-        AssignmentApi assignmentApi = required(assignments);
         String normalized = CourierSupport.normalizeTrackingNumber(trackingNumber);
         UUID parcelId = null;
         if (normalized != null) {
-            Optional<DeliverySnapshot> parcel = required(deliveries).findByTrackingNumber(normalized);
+            Optional<DeliverySnapshot> parcel = delivery.findByTrackingNumber(normalized);
             if (parcel.isEmpty()) {
                 return Page.empty(pageable);
             }
@@ -134,8 +112,6 @@ public class CourierAssignmentService {
     }
 
     public AssignmentDetail detail(UUID courierId, UUID assignmentId) {
-        AssignmentApi assignmentApi = required(assignments);
-        DeliveryApi delivery = required(deliveries);
         return withParcels(delivery, own(assignmentApi, assignmentId, courierId));
     }
 
@@ -145,8 +121,6 @@ public class CourierAssignmentService {
     @Transactional
     public AssignmentDetail recordOutcome(UUID courierId, UUID assignmentId, UUID parcelId,
                                           ItemOutcomeRequest request) {
-        AssignmentApi assignmentApi = required(assignments);
-        DeliveryApi delivery = required(deliveries);
         ValidOutcome valid = validate(request);
 
         AssignmentView assignment = own(assignmentApi, assignmentId, courierId);
@@ -176,8 +150,6 @@ public class CourierAssignmentService {
      */
     @Transactional
     public AssignmentDetail handover(UUID courierId, UUID assignmentId, HandoverRequest request) {
-        AssignmentApi assignmentApi = required(assignments);
-        DeliveryApi delivery = required(deliveries);
         List<UUID> parcelIds = request.parcelIds();
         if (new LinkedHashSet<>(parcelIds).size() != parcelIds.size()) {
             throw new FieldValidationException("parcelIds", "Select each parcel only once.");
@@ -224,7 +196,6 @@ public class CourierAssignmentService {
      */
     @Transactional
     public AssignmentView complete(UUID courierId, UUID assignmentId) {
-        AssignmentApi assignmentApi = required(assignments);
         AssignmentView assignment = own(assignmentApi, assignmentId, courierId);
         requireOpen(assignment);
         if (assignment.items().stream().anyMatch(item -> !item.isClosed())) {

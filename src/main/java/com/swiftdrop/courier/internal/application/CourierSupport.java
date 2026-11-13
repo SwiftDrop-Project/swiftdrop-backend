@@ -1,9 +1,6 @@
 package com.swiftdrop.courier.internal.application;
 
-import com.swiftdrop.shared.error.ApiException;
-import com.swiftdrop.shared.error.ErrorCode;
 import com.swiftdrop.shared.error.FieldValidationException;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.data.domain.PageRequest;
 
 import java.util.Locale;
@@ -16,18 +13,6 @@ final class CourierSupport {
     static final int MAX_PAGE_SIZE = 100;
 
     private CourierSupport() {
-    }
-
-    /**
-     * The implementation behind the provider, or 503 SERVICE_UNAVAILABLE while the owning module (delivery, dispatch)
-     * has none yet.
-     */
-    static <T> T required(ObjectProvider<T> provider) {
-        T api = provider.getIfAvailable();
-        if (api == null) {
-            throw new ApiException(ErrorCode.SERVICE_UNAVAILABLE);
-        }
-        return api;
     }
 
     static PageRequest pageRequest(int page, int size) {

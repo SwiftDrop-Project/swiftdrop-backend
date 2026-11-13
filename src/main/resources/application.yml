@@ -120,13 +120,6 @@ swiftdrop:
     admin-password: ${ADMIN_PASSWORD:}
     demo-users: ${SEED_DEMO_USERS:false}
     demo-password: ${DEMO_PASSWORD:}
-  # TEMPORARY - delete when WP8 implements AssignmentApi.
-  # true: courier endpoints use an in-memory FakeAssignmentApi (courier tasks). With SEED_DEMO_USERS=true and a local
-  # database, DemoCourierSeeder creates real demo parcels on every start and gives courier@swiftdrop.lk demo PICKUP,
-  # TRANSFER and DELIVERY tasks. On any other database (e.g. Neon) it writes nothing. Local demos only.
-  dev:
-    fake-dispatch: ${SWIFTDROP_FAKE_DISPATCH:false}
-
   outbox:
     relay:
       enabled: ${SWIFTDROP_OUTBOX_RELAY_ENABLED:false}

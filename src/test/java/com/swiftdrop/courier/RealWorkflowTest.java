@@ -26,8 +26,8 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Base for the courier tests that run against the REAL delivery (WP3) and dispatch (WP8) modules: no mocks and no
- * fake dispatch. Everything is set up through the real HTTP endpoints, as the people would do it: the admin creates
+ * Base for the courier tests that run against the REAL delivery (WP3) and dispatch (WP8) modules: no mocks.
+ * Everything is set up through the real HTTP endpoints, as the people would do it: the admin creates
  * the couriers and a dispatcher, a customer books the parcels, the dispatcher creates the tasks, and the couriers work
  * them. Parcels go from Delgoda (GAMPAHA) to Deniyaya (MATARA) unless a test says otherwise.
  *
@@ -64,7 +64,7 @@ abstract class RealWorkflowTest extends IntegrationTest {
         customer = registerCustomer(uniqueEmail(), uniquePhone());
     }
 
-    /** The real dispatch implementation answers, not a fake (the fake is @Primary when its flag is on). */
+    /** The real dispatch implementation answers, not a test double. */
     protected void assertRealDispatch() {
         assertThat(AopUtils.getTargetClass(assignmentApi).getName())
                 .isEqualTo("com.swiftdrop.dispatch.internal.application.AssignmentService");

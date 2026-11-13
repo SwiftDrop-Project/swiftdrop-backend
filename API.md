@@ -611,12 +611,6 @@ the same transaction (both are saved, or neither).
 - A courier sees only their own tasks and the parcels in them: another courier's task or parcel, or an unknown id →
   `404 NOT_FOUND`. A non-UUID id → `400 VALIDATION_FAILED`.
 - "Today" is the current day in Sri Lankan time (Asia/Colombo).
-- Until dispatch (WP8) is implemented, every courier endpoint answers `503 SERVICE_UNAVAILABLE` (delivery, WP3, is
-  implemented). For local demos (temporary): `SWIFTDROP_FAKE_DISPATCH=true` and `SEED_DEMO_USERS=true` give
-  `courier@swiftdrop.lk` one task of each type in memory (Delgoda → Gampaha branch → Matara branch → Deniyaya). The
-  parcels are real: every start creates 9 new ones (orders of `merchant@swiftdrop.lk`; the tracking numbers are in
-  the backend log), but only on a local database (`DB_URL` host `localhost` or `postgres`). With any other database
-  nothing is created and the courier has no tasks. The tasks are gone after a restart; the parcels stay.
 
 ### Item outcomes (what happened to one parcel in one task)
 

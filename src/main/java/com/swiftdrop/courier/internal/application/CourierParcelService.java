@@ -9,7 +9,6 @@ import com.swiftdrop.dispatch.AssignmentItemView;
 import com.swiftdrop.dispatch.AssignmentView;
 import com.swiftdrop.shared.error.ErrorCode;
 import com.swiftdrop.shared.error.NotFoundException;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -19,8 +18,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
-import static com.swiftdrop.courier.internal.application.CourierSupport.required;
-
 /**
  * One parcel as the courier sees it: its status and history, and the courier's own items for it. A courier sees a
  * parcel only if it is (or was) in one of their assignments; anything else is {@code 404 NOT_FOUND}.
@@ -28,17 +25,15 @@ import static com.swiftdrop.courier.internal.application.CourierSupport.required
 @Service
 public class CourierParcelService {
 
-    private final ObjectProvider<AssignmentApi> assignments;
-    private final ObjectProvider<DeliveryApi> deliveries;
+    private final AssignmentApi assignmentApi;
+    private final DeliveryApi delivery;
 
-    public CourierParcelService(ObjectProvider<AssignmentApi> assignments, ObjectProvider<DeliveryApi> deliveries) {
-        this.assignments = assignments;
-        this.deliveries = deliveries;
+    public CourierParcelService(AssignmentApi assignmentApi, DeliveryApi delivery) {
+        this.assignmentApi = assignmentApi;
+        this.delivery = delivery;
     }
 
     public ParcelDetail detail(UUID courierId, UUID parcelId) {
-        AssignmentApi assignmentApi = required(assignments);
-        DeliveryApi delivery = required(deliveries);
         List<AssignmentItemView> items = assignmentApi.findItemsForCourierAndParcel(courierId, parcelId);
         if (items.isEmpty()) {
             throw new NotFoundException(ErrorCode.NOT_FOUND);

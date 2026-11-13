@@ -12,15 +12,9 @@
  * <p>Stateless: no schema, no tables. Assignments are read and changed only through
  * {@link com.swiftdrop.dispatch.AssignmentApi}, parcels only through {@link com.swiftdrop.delivery.DeliveryApi}. A
  * courier sees only their own assignments and the parcels in them; anything else answers 404, so ids can't be probed.
- * Delivery (WP3) implements {@code DeliveryApi}; until dispatch (WP8) implements {@code AssignmentApi}, the endpoints
- * answer 503 SERVICE_UNAVAILABLE.
  *
- * <p>Uses: dispatch ({@code AssignmentApi} and its records), delivery ({@code DeliveryApi} and its records), shared,
- * and identity ({@code IdentityApi}, only for the temporary demo data in {@code internal.fake}). No module depends on
- * courier.
- *
- * <p>TEMPORARY: {@code internal.fake} holds an in-memory {@code AssignmentApi} and demo data, on only with
- * {@code SWIFTDROP_FAKE_DISPATCH=true}. Delete it when WP8 implements {@code AssignmentApi}.
+ * <p>Uses: dispatch ({@code AssignmentApi} and its records), delivery ({@code DeliveryApi} and its records) and
+ * shared. No module depends on courier.
  *
  * <p>Owner: Kalpani (WP9). Database schema: none. Events published: none (delivery publishes
  * {@code ParcelStatusChanged} for every status change). Events consumed: none.
