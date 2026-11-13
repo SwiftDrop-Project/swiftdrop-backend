@@ -48,7 +48,7 @@ public record PriceQuote(
         DELIVERY,
         /** Between the two district branches, by SwiftDrop's own transport. */
         LINEHAUL,
-        /** Cash on delivery handling. */
+        /** Cash on delivery handling; only when the rate card has a COD fee (version 3 has none). */
         COD
     }
 

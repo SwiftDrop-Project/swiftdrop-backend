@@ -16,7 +16,7 @@ import java.util.stream.Stream;
  * @param lengthCm      packed outside length; the three measurements come together or not at all. Without them the
  *                      quote is PROVISIONAL (no vehicle, no distance charge)
  * @param keepUpright   the parcel may not lie on its side
- * @param cashOnDelivery the courier collects cash, which adds the COD handling fee
+ * @param cashOnDelivery the courier collects cash, which adds the rate card's COD handling fee if it has one
  */
 public record QuoteRequest(
         District pickupDistrict,

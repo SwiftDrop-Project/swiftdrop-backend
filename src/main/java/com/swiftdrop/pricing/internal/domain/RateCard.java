@@ -12,7 +12,8 @@ import java.util.Objects;
  * @param baseFee            covers the first {@code baseWeightKg} billable kilograms
  * @param perKgFee           for every billable kilogram above them
  * @param volumetricDivisor  volumetric weight (kg) = length x width x height (cm) / this
- * @param codFee             handling fee when the courier collects cash on delivery
+ * @param codFee             handling fee when the courier collects cash on delivery; 0 for none (the quote then has
+ *                           no COD line)
  * @param linehaulPerKm      for each kilometre between the pickup and drop-off district branches (SwiftDrop's own
  *                           transport, whatever the parcel's size)
  * @param roadFactor         straight-line distance x this = estimated road distance

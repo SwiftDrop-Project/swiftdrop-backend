@@ -25,7 +25,7 @@ import java.util.Optional;
  *     + the vehicle's leg fee for the pickup leg
  *     + the vehicle's leg fee for the delivery leg
  *     + linehaul per km x the distance between the branches (0 inside one district)
- *     + the COD fee, when the courier collects cash
+ *     + the COD fee, when the courier collects cash and the rate card has one (rate card 3 has none)
  * </pre>
  *
  * Billable weight is the greater of the actual and the volumetric weight (L x W x H / divisor), rounded up to a
@@ -35,8 +35,8 @@ public class FeeCalculator {
 
     /**
      * @param branchDistanceKm the estimated road distance between the pickup and drop-off district branches
-     * @param cashOnDelivery   true when the courier collects cash, which adds the COD fee (the cash itself is not
-     *                         part of the fee)
+     * @param cashOnDelivery   true when the courier collects cash, which adds the rate card's COD fee if it has one
+     *                         (the cash itself is not part of the fee)
      */
     public FeeQuote quote(RateCard card, ParcelMeasurements parcel, BigDecimal branchDistanceKm,
                           boolean cashOnDelivery) {
@@ -50,7 +50,10 @@ public class FeeCalculator {
         FeeLine weight = new FeeLine(FeeComponent.WEIGHT, weightCharge(card, billableKg));
         FeeLine linehaul = new FeeLine(FeeComponent.LINEHAUL,
                 Money.of(branchDistanceKm.multiply(card.linehaulPerKm())));
-        FeeLine cod = cashOnDelivery ? new FeeLine(FeeComponent.COD, Money.of(card.codFee())) : null;
+        // A card without a COD fee (0) gives no COD line, rather than a line of 0.00.
+        FeeLine cod = cashOnDelivery && card.codFee().signum() > 0
+                ? new FeeLine(FeeComponent.COD, Money.of(card.codFee()))
+                : null;
 
         // Without the size the vehicle isn't known, so neither are the local legs; the rest is.
         Optional<VehicleRate> vehicle = parcel.hasDimensions()
