@@ -21,14 +21,20 @@ public record MerchantAccountResponse(
         String phone,
         Role role,
         UserStatus status,
+        boolean mustChangePassword,
         MerchantInfo merchant) {
+
+    public MerchantAccountResponse(UUID id, String fullName, String email, String phone, Role role, UserStatus status,
+                                   MerchantInfo merchant) {
+        this(id, fullName, email, phone, role, status, false, merchant);
+    }
 
     public static MerchantAccountResponse from(MerchantAccountView account) {
         UserSummary user = account.user();
         MerchantProfileView p = account.profile();
         return new MerchantAccountResponse(user.id(), user.fullName(), user.email(), user.phone(), user.role(),
-                user.status(), new MerchantInfo(p.businessName(), p.pickupDistrict(), p.city(),
-                p.approvalStatus().name()));
+                user.status(), user.mustChangePassword(), new MerchantInfo(p.businessName(), p.pickupDistrict(),
+                p.city(), p.approvalStatus().name()));
     }
 
     @Schema(name = "MerchantAccountInfo")

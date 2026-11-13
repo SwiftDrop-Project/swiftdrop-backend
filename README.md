@@ -35,7 +35,7 @@ architecture diagram). `SwiftdropBackendApplication` stays at the root.
 | `merchants` | Merchant business profiles and the admin approval workflow (API keys later) | `merchants` | Viduranga | Built |
 | `pricing` | Delivery rates and price quotes | `pricing` | TBD | Placeholder |
 | `delivery` | Parcels, status changes, proof of delivery, receipts, outbox events | `delivery` | Pasindu | Contracts ready |
-| `dispatch` | Courier tasks (PICKUP, TRANSFER between branches, DELIVERY) with their parcels | - (tables proposed) | TBD (WP8) | Contract only: `AssignmentApi` |
+| `dispatch` | Courier assignments (pickup, transfer between branches, final delivery) and what happened to each parcel in them | `dispatch` | D.M.A.I. Disanayaka | Tables and domain model (`AssignmentApi` and dispatcher endpoints next) |
 | `reporting` | Delivery and cash-on-delivery reports | - | TBD | Placeholder |
 | `tracking` | Parcel tracking by tracking number, live updates (SSE) | - | TBD | Placeholder |
 | `notifications` | Emails (and later SMS) to users | `notifications` | TBD | Placeholder |
@@ -198,8 +198,8 @@ How to create the Google client: see "Google sign-in setup" in the
 
 ## Database migrations (Flyway)
 
-- Each stateful module owns one schema: `identity`, `merchants`, `pricing`, `delivery`, `webhooks`,
-  `notifications`. dispatch, reporting, tracking, outbox and courier own none. No foreign keys or joins across schemas;
+- Each stateful module owns one schema: `identity`, `merchants`, `pricing`, `delivery`, `dispatch`, `webhooks`,
+  `notifications`. reporting, tracking, outbox and courier own none. No foreign keys or joins across schemas;
   a module refers to another module's rows by UUID only. Entities use `@Table(schema = "<module>")`.
 - Schema changes happen **only** through Flyway files in the module's own folder:
   `src/main/resources/db/migration/<module>/`. A module's first migration starts with
@@ -225,6 +225,7 @@ Current migrations (the baseline for the new Neon database; the old `V2026110114
 | `delivery/V202611052245__create_parcels.sql` | `delivery` schema, `delivery.parcels` (no foreign keys) |
 | `delivery/V202611060017__create_parcel_status_history.sql` | `delivery.parcel_status_history` (one row per status change) |
 | `delivery/V202611060024__create_outbox_events.sql` | `delivery.outbox_events` (the transactional outbox) |
+| `dispatch/V202611101200__create_dispatch_schema.sql` | `dispatch` schema, `dispatch.courier_assignments` and `dispatch.assignment_items` (a parcel is open in at most one assignment; no foreign keys) |
 
 Flyway orders migrations by version across **all** module folders, so a new file must also be newer than the
 migrations it depends on (e.g. a change to `identity.users` must sort after the identity baseline).
@@ -335,6 +336,7 @@ PowerShell: `.\mvnw.cmd test`
 |---|---|
 | `ModuleArchitectureTest` | Module list, boundaries and cycles (`ApplicationModules.verify()`), module docs |
 | `DatabaseIsolationTest` | Tests use Testcontainers, never `.env`; one schema per module, no cross-schema foreign keys |
+| `dispatch/...` | Assignment rules (branches per type, outcomes, completing), the dispatch tables' constraints, one open assignment per parcel, courier queries |
 | `identity/AuthRegisterTest` | Register customer and merchant, validation, duplicates |
 | `identity/AuthLoginTest` | Login with email or mobile, remember me, account statuses (incl. unverified email), logout |
 | `identity/AuthMeTest` | Current user |

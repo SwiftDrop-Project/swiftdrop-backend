@@ -43,6 +43,10 @@ spring:
     port: ${RABBITMQ_PORT:5672}
     username: ${RABBITMQ_USER}
     password: ${RABBITMQ_PASSWORD}
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
 
   # SMTP. Local default: Mailpit (no auth). Shared setup: Gmail with an App Password (see .env.example).
   mail:
