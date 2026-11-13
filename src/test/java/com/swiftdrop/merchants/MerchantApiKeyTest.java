@@ -2,7 +2,6 @@ package com.swiftdrop.merchants;
 
 import com.swiftdrop.IntegrationTest;
 import jakarta.servlet.http.Cookie;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -212,7 +211,6 @@ class MerchantApiKeyTest extends IntegrationTest {
     }
 
     @Test
-    @Disabled("Remove when SecurityConfig wires ApiKeyAuthenticationFilter before BearerTokenAuthenticationFilter")
     void revokedKeyFailsApiKeyAuth() throws Exception {
         Cookie merchant = approveAndLogin(uniqueEmail(), uniquePhone());
 
@@ -229,7 +227,6 @@ class MerchantApiKeyTest extends IntegrationTest {
     }
 
     @Test
-    @Disabled("Remove when SecurityConfig wires ApiKeyAuthenticationFilter before BearerTokenAuthenticationFilter")
     void unapprovedMerchantKeyRejected() throws Exception {
         String email = uniqueEmail();
         String userId = registerMerchant(email, uniquePhone());
