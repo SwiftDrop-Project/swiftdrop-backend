@@ -1,8 +1,8 @@
 
 package com.swiftdrop.notifications.internal.provider;
 
-import com.swiftdrop.identity.IdentityApi;
-import com.swiftdrop.identity.UserSummary;
+import com.swiftdrop.notifications.CustomerRecipientLookup;
+import com.swiftdrop.notifications.CustomerRecipientLookup.CustomerRecipient;
 import jakarta.mail.Session;
 import jakarta.mail.internet.MimeMessage;
 import org.junit.jupiter.api.BeforeEach;
@@ -25,7 +25,7 @@ class ParcelEmailSenderTest {
     private JavaMailSender mailSender;
 
     @Mock
-    private IdentityApi identityApi;
+    private CustomerRecipientLookup recipientLookup;
 
     private ParcelEmailSender sender;
 
@@ -37,24 +37,19 @@ class ParcelEmailSenderTest {
                 new MailProperties("no-reply@swiftdrop.lk", "SwiftDrop");
 
         sender = new ParcelEmailSender(
-                mailSender, properties, identityApi);
+                mailSender, properties, recipientLookup);
     }
 
     @Test
     void sendsEmailForExistingCustomer() {
         UUID customerId = UUID.randomUUID();
 
-        UserSummary customer = new UserSummary(
-                customerId,
+        CustomerRecipient customer = new CustomerRecipient(
                 "Test Customer",
-                "customer@example.com",
-                "+94771234567",
-                null,
-                null,
-                null
+                "customer@example.com"
         );
 
-        when(identityApi.findById(customerId))
+        when(recipientLookup.findById(customerId))
                 .thenReturn(Optional.of(customer));
 
         MimeMessage message = new MimeMessage(
@@ -73,7 +68,7 @@ class ParcelEmailSenderTest {
     void rejectsUnknownCustomer() {
         UUID customerId = UUID.randomUUID();
 
-        when(identityApi.findById(customerId))
+        when(recipientLookup.findById(customerId))
                 .thenReturn(Optional.empty());
 
         assertThrows(
