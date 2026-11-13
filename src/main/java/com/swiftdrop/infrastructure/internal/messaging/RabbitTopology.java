@@ -1,4 +1,7 @@
+
 package com.swiftdrop.infrastructure.internal.messaging;
+
+import com.swiftdrop.infrastructure.messaging.RabbitMessagingConstants;
 
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
@@ -18,21 +21,27 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class RabbitTopology {
 
-    public static final String PARCEL_EVENTS_EXCHANGE = "parcel.events";
-    public static final String PARCEL_STATUS_CHANGED = "parcel.status.changed";
+    public static final String PARCEL_EVENTS_EXCHANGE =
+            RabbitMessagingConstants.PARCEL_EVENTS_EXCHANGE;
 
-    public static final String NOTIFICATIONS_QUEUE = "notifications.q";
-    public static final String WEBHOOKS_QUEUE = "webhooks.q";
+    public static final String PARCEL_STATUS_CHANGED =
+            RabbitMessagingConstants.PARCEL_STATUS_CHANGED;
+
+    public static final String NOTIFICATIONS_QUEUE =
+            RabbitMessagingConstants.NOTIFICATIONS_QUEUE;
+
+    public static final String WEBHOOKS_QUEUE =
+            RabbitMessagingConstants.WEBHOOKS_QUEUE;
 
     // WP7 dead-letter topology
     public static final String NOTIFICATIONS_DLX =
-            "notifications.dlx";
+            RabbitMessagingConstants.NOTIFICATIONS_DLX;
 
     public static final String NOTIFICATIONS_DLQ =
-            "notifications.dlq";
+            RabbitMessagingConstants.NOTIFICATIONS_DLQ;
 
     public static final String NOTIFICATIONS_DEAD_ROUTING_KEY =
-            "notifications.dead";
+            RabbitMessagingConstants.NOTIFICATIONS_DEAD_ROUTING_KEY;
 
     @Bean
     Declarables parcelEventsTopology() {

@@ -1,8 +1,7 @@
 
 package com.swiftdrop.notifications.internal.messaging;
 
-import com.swiftdrop.infrastructure.internal.messaging.RabbitTopology;
-
+import com.swiftdrop.infrastructure.messaging.RabbitMessagingConstants;
 import org.springframework.amqp.ImmediateRequeueAmqpException;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.rabbit.connection.CorrelationData;
@@ -36,8 +35,8 @@ public class ParcelNotificationDeadLetterRecoverer {
 
         try {
             rabbitTemplate.send(
-                    RabbitTopology.NOTIFICATIONS_DLX,
-                    RabbitTopology.NOTIFICATIONS_DEAD_ROUTING_KEY,
+                    RabbitMessagingConstants.NOTIFICATIONS_DLX,
+                    RabbitMessagingConstants.NOTIFICATIONS_DEAD_ROUTING_KEY,
                     originalMessage,
                     correlationData
             );

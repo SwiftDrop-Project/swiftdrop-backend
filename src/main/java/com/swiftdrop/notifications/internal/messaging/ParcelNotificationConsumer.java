@@ -3,7 +3,7 @@ package com.swiftdrop.notifications.internal.messaging;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.swiftdrop.delivery.ParcelStatusChanged;
-import com.swiftdrop.infrastructure.internal.messaging.RabbitTopology;
+import com.swiftdrop.infrastructure.messaging.RabbitMessagingConstants;
 import com.swiftdrop.notifications.internal.application.ParcelNotificationService;
 
 import org.slf4j.Logger;
@@ -38,7 +38,7 @@ public class ParcelNotificationConsumer {
     }
 
     @RabbitListener(
-            queues = RabbitTopology.NOTIFICATIONS_QUEUE,
+           queues = RabbitMessagingConstants.NOTIFICATIONS_QUEUE,
             containerFactory = "parcelNotificationListenerFactory"
     )
     public void consume(Message message) throws Exception {
