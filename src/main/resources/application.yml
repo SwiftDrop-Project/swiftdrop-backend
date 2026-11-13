@@ -126,3 +126,7 @@ swiftdrop:
   # TRANSFER and DELIVERY tasks. On any other database (e.g. Neon) it writes nothing. Local demos only.
   dev:
     fake-dispatch: ${SWIFTDROP_FAKE_DISPATCH:false}
+
+  outbox:
+    relay:
+      enabled: ${SWIFTDROP_OUTBOX_RELAY_ENABLED:false}
