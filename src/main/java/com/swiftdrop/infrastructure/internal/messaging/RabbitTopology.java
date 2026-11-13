@@ -10,27 +10,79 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * RabbitMQ exchange, queues and bindings. Spring AMQP declares them when the first connection opens; declaring
- * them again is harmless, so every backend instance can start with the same topology.
+ * RabbitMQ exchanges, queues and bindings.
  *
- * <p>The delivery module (through the outbox) publishes {@code ParcelStatusChanged} to {@value #PARCEL_EVENTS_EXCHANGE}
- * with routing key {@value #PARCEL_STATUS_CHANGED}. notifications and webhooks each read their own durable queue.
+ * Existing parcel events topology remains unchanged.
+ * WP7 adds a separate dead-letter topology for notifications.
  */
 @Configuration
 public class RabbitTopology {
 
     public static final String PARCEL_EVENTS_EXCHANGE = "parcel.events";
     public static final String PARCEL_STATUS_CHANGED = "parcel.status.changed";
+
     public static final String NOTIFICATIONS_QUEUE = "notifications.q";
     public static final String WEBHOOKS_QUEUE = "webhooks.q";
 
+    // WP7 dead-letter topology
+    public static final String NOTIFICATIONS_DLX =
+            "notifications.dlx";
+
+    public static final String NOTIFICATIONS_DLQ =
+            "notifications.dlq";
+
+    public static final String NOTIFICATIONS_DEAD_ROUTING_KEY =
+            "notifications.dead";
+
     @Bean
     Declarables parcelEventsTopology() {
-        TopicExchange exchange = new TopicExchange(PARCEL_EVENTS_EXCHANGE, true, false);
-        Queue notifications = QueueBuilder.durable(NOTIFICATIONS_QUEUE).build();
-        Queue webhooks = QueueBuilder.durable(WEBHOOKS_QUEUE).build();
-        Binding toNotifications = BindingBuilder.bind(notifications).to(exchange).with(PARCEL_STATUS_CHANGED);
-        Binding toWebhooks = BindingBuilder.bind(webhooks).to(exchange).with(PARCEL_STATUS_CHANGED);
-        return new Declarables(exchange, notifications, webhooks, toNotifications, toWebhooks);
+
+        TopicExchange exchange =
+                new TopicExchange(PARCEL_EVENTS_EXCHANGE, true, false);
+
+        Queue notifications =
+                QueueBuilder.durable(NOTIFICATIONS_QUEUE).build();
+
+        Queue webhooks =
+                QueueBuilder.durable(WEBHOOKS_QUEUE).build();
+
+        Binding toNotifications =
+                BindingBuilder.bind(notifications)
+                        .to(exchange)
+                        .with(PARCEL_STATUS_CHANGED);
+
+        Binding toWebhooks =
+                BindingBuilder.bind(webhooks)
+                        .to(exchange)
+                        .with(PARCEL_STATUS_CHANGED);
+
+        return new Declarables(
+                exchange,
+                notifications,
+                webhooks,
+                toNotifications,
+                toWebhooks
+        );
+    }
+
+    @Bean
+    Declarables notificationDeadLetterTopology() {
+
+        TopicExchange deadLetterExchange =
+                new TopicExchange(NOTIFICATIONS_DLX, true, false);
+
+        Queue deadLetterQueue =
+                QueueBuilder.durable(NOTIFICATIONS_DLQ).build();
+
+        Binding deadLetterBinding =
+                BindingBuilder.bind(deadLetterQueue)
+                        .to(deadLetterExchange)
+                        .with(NOTIFICATIONS_DEAD_ROUTING_KEY);
+
+        return new Declarables(
+                deadLetterExchange,
+                deadLetterQueue,
+                deadLetterBinding
+        );
     }
 }
