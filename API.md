@@ -795,3 +795,78 @@ branches for the type (400), then each parcel (404 unknown, 409 `PARCEL_NOT_READ
 **Pickup queue.** Delivery has no "waiting for pickup" query, so dispatch keeps its own list from the
 `ParcelStatusChanged` events (RabbitMQ queue `dispatch.q`). Parcels appear there only while the outbox relay runs
 (`SWIFTDROP_OUTBOX_RELAY_ENABLED=true`), and parcels created before dispatch was deployed are not in it.
+
+## Tracking (WP8, live tracking)
+
+Public tracking by tracking number, and live updates pushed over **WebSocket with STOMP** (design document 2.4.10,
+4.5). The REST lookup gives the starting point; the WebSocket sends each change after it. Updates arrive only while
+the outbox relay runs (`SWIFTDROP_OUTBOX_RELAY_ENABLED=true`).
+
+**Privacy.** Public tracking never shows names, phone numbers, addresses, notes, amounts, user ids or who made a
+change: only the status, the town and district at each end, the branch a parcel is at, and a failed delivery's
+reason code.
+
+### `GET /track/{trackingNumber}` (public)
+
+Spaces and letter case are ignored (`sd 2611 0048 17` works). At most 30 lookups per minute per IP
+(`swiftdrop.tracking.lookups-per-minute`), then `429 TOO_MANY_REQUESTS`. An unknown number, or one in the wrong
+format, is `404 NOT_FOUND` "We couldn't find a parcel with this tracking number. Check the number and try again."
+
+```json
+{
+  "trackingNumber": "SD2611004817",
+  "status": "AT_BRANCH",
+  "currentBranch": "COLOMBO",
+  "from": { "city": "Colombo 03", "district": "COLOMBO" },
+  "to": { "city": "Kandy", "district": "KANDY" },
+  "createdAt": "2026-11-13T04:10:00Z",
+  "updatedAt": "2026-11-13T06:45:00Z",
+  "version": 3,
+  "history": [
+    { "status": "CREATED", "branch": null, "failureReason": null, "occurredAt": "2026-11-13T04:10:00Z" },
+    { "status": "PICKED_UP", "branch": null, "failureReason": null, "occurredAt": "2026-11-13T05:30:00Z" },
+    { "status": "AT_BRANCH", "branch": "COLOMBO", "failureReason": null, "occurredAt": "2026-11-13T06:45:00Z" }
+  ]
+}
+```
+
+`history` is oldest first. `currentBranch` is set only while the status is `AT_BRANCH`.
+
+### WebSocket (STOMP)
+
+Plain WebSocket (no SockJS), STOMP 1.2, heart-beats every 20 s. Clients only subscribe: a `SEND`, or a subscription
+to anything not listed, gets a STOMP `ERROR` frame and the connection closes.
+
+| Handshake URL | Who | May subscribe to |
+|---|---|---|
+| `ws://<host>/api/v1/ws/public` | anyone (cookie ignored) | `/topic/parcels/{trackingNumber}` |
+| `ws://<host>/api/v1/ws` | logged in: the handshake checks the `SD_TOKEN` cookie like any request (401 without it) | the above, and `/topic/live` (DISPATCHER, ADMIN) |
+
+The tracking number in the topic must be the normalised form (`SD2611004817`). The browser origin must be
+`FRONTEND_URL`.
+
+**`/topic/parcels/{trackingNumber}`**, one message per status change:
+
+```json
+{ "trackingNumber": "SD2611004817", "status": "OUT_FOR_DELIVERY", "branch": null, "failureReason": null,
+  "occurredAt": "2026-11-13T08:02:00Z", "version": 5 }
+```
+
+Apply a message only if its `version` is higher than the one you have (events can repeat or arrive late), then add
+it to the history. After a reconnect, load `GET /track/{trackingNumber}` again: messages sent while disconnected are
+not replayed. If the WebSocket keeps failing, poll that endpoint (the frontend polls every 30 s).
+
+**`/topic/live`** (DISPATCHER, ADMIN): every parcel's status changes, for the live board.
+
+```json
+{ "eventId": "…", "parcelId": "…", "trackingNumber": "SD2611004817", "fromStatus": "PICKED_UP",
+  "toStatus": "AT_BRANCH", "branch": "COLOMBO", "origin": "COLOMBO", "destination": "KANDY",
+  "failureReason": null, "actorRole": "COURIER", "occurredAt": "2026-11-13T06:45:00Z", "version": 3 }
+```
+
+`origin` and `destination` are the sender's and recipient's districts.
+
+### `GET /tracking/live/recent?branch=COLOMBO` (DISPATCHER, ADMIN)
+
+The last 100 changes this server has seen (it keeps 200 in memory, cleared on restart), newest first, in the
+`/topic/live` shape. With `branch`, only changes whose origin, destination or arrival branch is that branch.
