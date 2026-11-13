@@ -71,6 +71,14 @@ Change it in the same PR as the code, and tell the frontend team.
 | 409 | `INVALID_STATUS_TRANSITION` | The parcel can't move to that status from its current one, e.g. DELIVERED → PICKED_UP or PICKED_UP → IN_TRANSIT (a picked-up parcel goes to a branch first). See [Parcel statuses](#parcel-statuses) |
 | 409 | `PARCEL_NOT_ASSIGNABLE` | Assigning a courier to a parcel that was already picked up or is finished |
 | 409 | `PARCEL_NEEDS_MANUAL_QUOTE` | Booking a parcel that no vehicle carries or fits (pricing's `MANUAL_QUOTE`) |
+| 409 | `TASK_STEP_NOT_ALLOWED` | A courier's step isn't allowed for this parcel in this task now (e.g. handing over a parcel that wasn't collected, or a step that was already done) |
+| 409 | `ASSIGNMENT_CLOSED` | Recording a step on, or completing, a courier task that is already completed or cancelled |
+| 409 | `ASSIGNMENT_NOT_FINISHED` | Completing a courier task while one of its parcels is still open |
+| 409 | `PARCEL_ALREADY_ASSIGNED` | Dispatch: the parcel is already in another open courier task (also when two dispatchers assign it at once) |
+| 409 | `PARCEL_NOT_READY_FOR_TASK` | Dispatch: the parcel's status or branch doesn't suit the task (the message names the parcel) |
+| 409 | `ASSIGNMENT_STARTED` | Dispatch: cancelling or reassigning a task the courier has already started |
+| 409 | `ASSIGNMENT_NEEDS_PARCEL` | Dispatch: removing the last parcel of a task |
+| 409 | `ASSIGNMENT_CHANGED` | Dispatch: someone else changed the task at the same moment |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | Request body is not `application/json` |
 | 429 | `TOO_MANY_REQUESTS` | Too many requests from this IP address; the `Retry-After` header says how many seconds to wait |
 | 500 | `INTERNAL_ERROR` | Anything unexpected (generic message only) |
@@ -88,6 +96,14 @@ Messages of the new codes (show them as-is):
 | `INVALID_STATUS_TRANSITION` | This parcel can't move to that status now. Refresh to see its latest status. |
 | `PARCEL_NOT_ASSIGNABLE` | A courier can only be assigned before the parcel is picked up. |
 | `PARCEL_NEEDS_MANUAL_QUOTE` | This parcel is too big or too heavy for our vehicles. Contact us for a quote. |
+| `TASK_STEP_NOT_ALLOWED` | This step isn't possible for this parcel now. Refresh to see your task. |
+| `ASSIGNMENT_CLOSED` | This task is already completed or was cancelled. |
+| `ASSIGNMENT_NOT_FINISHED` | Update every parcel in this task before you finish it. |
+| `PARCEL_ALREADY_ASSIGNED` | This parcel is already in another courier's task. Refresh to see the latest queue. |
+| `PARCEL_NOT_READY_FOR_TASK` | This parcel can't be added to this task now. Refresh to see its latest status. |
+| `ASSIGNMENT_STARTED` | The courier has already started this task. |
+| `ASSIGNMENT_NEEDS_PARCEL` | A task needs at least one parcel. Cancel the task instead. |
+| `ASSIGNMENT_CHANGED` | This task was just changed by someone else. Refresh and try again. |
 | `SERVICE_UNAVAILABLE` | This isn't available yet. Please try again later. |
 
 **Rate limits** (per client IP; over the limit → `429 TOO_MANY_REQUESTS` + `Retry-After: <seconds>`; CORS exposes
@@ -801,3 +817,93 @@ Proof-of-delivery photos (upload and download) come in a later version.
 
 An unknown `status` or `failureReason` value gives `400` with that field in `fieldErrors`.
 
+## Dispatch (WP8, roles `DISPATCHER` and `ADMIN`)
+
+A parcel passes through several **courier tasks** on its way (multi-branch workflow):
+
+| Task type | For parcels that are | Branches |
+|---|---|---|
+| `PICKUP` | `CREATED`, sender in the destination branch's district | `destinationBranch` only |
+| `TRANSFER` | `AT_BRANCH` at the origin branch | `originBranch` and `destinationBranch`, different |
+| `DELIVERY` | `AT_BRANCH` at the origin branch, which is the recipient's district | `originBranch` only |
+
+A task is `ASSIGNED` → `IN_PROGRESS` (the courier recorded the first step) → `COMPLETED`, or `CANCELLED` by the
+dispatcher while still `ASSIGNED`. A parcel is in at most one open task. A parcel the courier couldn't take
+(`NOT_COLLECTED`, `NOT_LOADED`) or brought back (`RETURNED`) goes back to the queue. Branches and districts use the
+codes from `GET /meta/districts`.
+
+### Queue parcel (response)
+
+```json
+{
+  "parcelId": "uuid", "trackingNumber": "SD2611004817", "status": "AT_BRANCH",
+  "from": { "city": "Colombo 03", "district": "COLOMBO" }, "to": { "city": "Kandy", "district": "KANDY" },
+  "weightKg": 1.50, "currentBranch": "COLOMBO", "waitingSince": "2026-11-11T04:30:00Z",
+  "suggestedType": "TRANSFER", "suggestedOrigin": "COLOMBO", "suggestedDestination": "KANDY"
+}
+```
+No names, phone numbers or street addresses.
+
+### Task (response)
+
+```json
+{
+  "id": "uuid", "type": "PICKUP", "status": "ASSIGNED",
+  "courier": { "id": "uuid", "fullName": "Nimal Silva", "phone": "+94771234567" },
+  "originBranch": null, "destinationBranch": "COLOMBO", "scheduledFor": "2026-11-11", "note": "Call before you go",
+  "createdAt": "…", "startedAt": null, "completedAt": null, "cancelledAt": null, "version": 0,
+  "items": [{
+    "parcelId": "uuid", "sequence": 1, "trackingNumber": "SD2611004817", "parcelStatus": "CREATED",
+    "from": { "city": "Colombo 03", "district": "COLOMBO" }, "to": { "city": "Kandy", "district": "KANDY" },
+    "outcome": "PENDING", "problem": null, "failureReason": null, "note": null, "receivedBy": null,
+    "recipientName": null, "updatedAt": "…", "closedAt": null
+  }]
+}
+```
+In lists (`GET /dispatch/assignments`) a task has `parcelCount` and `openParcelCount` instead of `note` and `items`.
+`outcome`: `PENDING`, `COLLECTED`, `LOADED`, `HANDED_OVER`, `DELIVERED`, `FAILED`, `RETURNED`, `NOT_COLLECTED`,
+`NOT_LOADED`. `problem` (not collected / not loaded): `SENDER_UNAVAILABLE`, `PARCEL_NOT_READY`, `PARCEL_MISSING`,
+`PARCEL_DAMAGED`, `ADDRESS_UNREACHABLE`, `OTHER`.
+
+### Endpoints
+
+| Method and path | What it does | Main errors |
+|---|---|---|
+| `GET /dispatch/queue?branch=COLOMBO&kind=PICKUP` | Parcels waiting for a task, oldest first. `kind`: `PICKUP` (new parcels picked up in the branch's district) or `AT_BRANCH` | 400 missing or unknown `branch` |
+| `GET /dispatch/overview?branch=COLOMBO` | `{branch, waitingPickup, waitingAtBranch, assignedTasks, inProgressTasks, completedToday, issuesThisWeek, activeCouriers}` | 400 |
+| `GET /dispatch/couriers?branch=` | Active couriers (blocked and removed left out) | — |
+| `GET /dispatch/couriers/workload?branch=` | `[{courierId, fullName, phone, branch, vehicleType, openTasks, openParcels, completedToday}]`, least busy first | — |
+| `GET /dispatch/issues?branch=COLOMBO&days=7` | Parcels couriers couldn't collect, load or deliver in the last `days` (1-30) days, newest first: `[{assignmentId, assignmentType, parcelId, trackingNumber, parcelStatus, outcome, problem, failureReason, note, courier, updatedAt, backInQueue}]` | 400 `days` |
+| `POST /dispatch/assignments` | Create a task (201, task) | see below |
+| `GET /dispatch/assignments?status=&type=&courierId=&branch=&date=2026-11-11&page=0&size=20` | Tasks, newest first (page of tasks). `branch` matches the origin or the destination | 400 `page`, `size` (1-100) |
+| `GET /dispatch/assignments/{id}` | One task | 404 |
+| `POST /dispatch/assignments/{id}/parcels` `{"parcelIds": [...]}` | Add parcels to an open task (task) | 409 `ASSIGNMENT_CLOSED`, `PARCEL_ALREADY_ASSIGNED`, `PARCEL_NOT_READY_FOR_TASK`; 400 `parcelIds` (already in the task, over 50) |
+| `DELETE /dispatch/assignments/{id}/parcels/{parcelId}` | Take out a parcel the courier hasn't updated (task) | 409 `TASK_STEP_NOT_ALLOWED`, `ASSIGNMENT_NEEDS_PARCEL`, `ASSIGNMENT_CLOSED` |
+| `POST /dispatch/assignments/{id}/reassign` `{"courierId": "uuid"}` | Give a task that hasn't started to another courier (task) | 409 `ASSIGNMENT_STARTED`, `COURIER_NOT_ASSIGNABLE` |
+| `POST /dispatch/assignments/{id}/cancel` | Cancel a task that hasn't started; its parcels go back to the queue (task) | 409 `ASSIGNMENT_STARTED`, `ASSIGNMENT_CLOSED` |
+| `POST /dispatch/parcels/{parcelId}/assign` `{"courierId": "uuid"}` | One step: a one-parcel task of the type the parcel needs next, for today. 201 `{parcelId, trackingNumber, status, assignedCourierId, assignedAt, assignmentId, assignmentType}` | 404; 409 `COURIER_NOT_ASSIGNABLE`, `PARCEL_NOT_ASSIGNABLE` (delivered), `PARCEL_NOT_READY_FOR_TASK`, `PARCEL_ALREADY_ASSIGNED` |
+
+Any 409 on a task: show the message and reload the task or the queue.
+
+### `POST /dispatch/assignments`
+
+```json
+{ "courierId": "uuid", "type": "TRANSFER", "originBranch": "COLOMBO", "destinationBranch": "KANDY",
+  "scheduledFor": "2026-11-11", "note": "Fragile items on top", "parcelIds": ["uuid", "uuid"] }
+```
+Checked in this order: the body (400), the courier (404 unknown, 409 `COURIER_NOT_ASSIGNABLE`), the date and the
+branches for the type (400), then each parcel (404 unknown, 409 `PARCEL_NOT_READY_FOR_TASK`,
+`PARCEL_ALREADY_ASSIGNED`).
+
+| Field | Rule | Error message |
+|---|---|---|
+| `courierId` | Required | Select a courier. |
+| `type` | Required: `PICKUP`, `TRANSFER`, `DELIVERY` | Choose the type of task. |
+| `originBranch` / `destinationBranch` | As the table at the top of this section | Choose where the courier hands over the parcels. / Choose the branch the parcels leave from. / … |
+| `scheduledFor` | Optional, today (Sri Lanka) or later; default today | Choose today or a later date. |
+| `note` | Optional, max 500 chars | Keep the note under 500 characters. |
+| `parcelIds` | 1-50, each once | Select between 1 and 50 parcels. / Select each parcel only once. |
+
+**Pickup queue.** Delivery has no "waiting for pickup" query, so dispatch keeps its own list from the
+`ParcelStatusChanged` events (RabbitMQ queue `dispatch.q`). Parcels appear there only while the outbox relay runs
+(`SWIFTDROP_OUTBOX_RELAY_ENABLED=true`), and parcels created before dispatch was deployed are not in it.
