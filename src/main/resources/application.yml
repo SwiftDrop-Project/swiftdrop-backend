@@ -125,3 +125,7 @@ swiftdrop:
   # (needs SEED_DEMO_USERS=true). Nothing is written to the database. Local demos only, never on shared servers.
   dev:
     fake-delivery: ${SWIFTDROP_FAKE_DELIVERY:false}
+
+  outbox:
+    relay:
+      enabled: ${SWIFTDROP_OUTBOX_RELAY_ENABLED:false}
