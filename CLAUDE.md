@@ -19,7 +19,7 @@ Every direct sub-package of `com.swiftdrop` is a module. `SwiftdropBackendApplic
 | `delivery` | DeliveryApi, DeliveryOutboxApi, OutboxMessage, DeliverySnapshot, DeliveryContact, CreateDeliveryCommand, ChangeStatusCommand, ParcelStatus (incl. `AT_BRANCH`; branch = `District`), ParcelStatusEntry, ParcelStatusChanged, FailureReason, ProofPhoto, ProofPhotoRef, DeliveryStats | `delivery` (incl. `outbox_events`) | Pasindu |
 | `dispatch` | AssignmentApi (courier-facing), AssignmentView, AssignmentItemView, RecordOutcomeCommand, AssignmentType, AssignmentStatus, ItemOutcome, TaskProblem | `dispatch` (`courier_assignments`, `assignment_items`, `pickup_queue`) | D.M.A.I. Disanayaka (WP8) |
 | `reporting` | - | none | TBD |
-| `tracking` | - (endpoints, WebSocket/STOMP and a RabbitMQ listener only) | none | D.M.A.I. Disanayaka (WP8) |
+| `tracking` | - (endpoints, WebSocket/STOMP and a RabbitMQ listener only) | `tracking` (`parcel_index`) | D.M.A.I. Disanayaka (WP8) |
 | `notifications` | NotificationsApi, AccountEmail | `notifications` | TBD |
 | `webhooks` | - | `webhooks` | TBD |
 | `outbox` | - (reads the outbox only through `DeliveryOutboxApi`) | none | TBD |
@@ -59,6 +59,8 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
 - tracking: public lookup `GET /track/{trackingNumber}` and live updates over WebSocket/STOMP (API.md "Tracking"):
   `/api/v1/ws/public` (public, `/topic/parcels/{trackingNumber}`) and `/api/v1/ws` (cookie checked; DISPATCHER/ADMIN
   may follow `/topic/live`). In-memory simple broker; each instance has its own auto-delete RabbitMQ queue.
+  The admin's all-parcels list (`/admin/tracking/parcels`) reads tracking's own `tracking.parcel_index`, filled from
+  `ParcelStatusChanged` and from lookups (delivery has no admin search).
 - courier gets `DeliveryApi` through an `ObjectProvider` and answers 503 SERVICE_UNAVAILABLE while nothing implements
   it. TEMPORARY: `courier/internal/fake` (`SWIFTDROP_FAKE_DELIVERY=true`) is an in-memory `DeliveryApi` for demos;
   delete it (and its property and tests) when delivery is implemented.
@@ -89,8 +91,8 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
   Hikari pool: max 3, min idle 0, idle timeout 60 s, max lifetime 5 min, connection timeout 30 s.
 
 ## Database
-- One schema per stateful module: identity, merchants, pricing, delivery, dispatch, webhooks, notifications.
-  reporting, tracking, outbox and courier own no schema.
+- One schema per stateful module: identity, merchants, pricing, delivery, dispatch, tracking, webhooks, notifications.
+  reporting, outbox and courier own no schema.
 - Entities use `@Table(schema = "<module>")`. No foreign keys or joins across schemas; refer to other modules' rows by UUID only.
 - Schema changes ONLY through Flyway, in the module's folder: `src/main/resources/db/migration/<module>/`.
 - File name: `V<yyyyMMddHHmm>__<description>.sql` (current date and time, e.g. `V202611051430__add_parcels.sql`).

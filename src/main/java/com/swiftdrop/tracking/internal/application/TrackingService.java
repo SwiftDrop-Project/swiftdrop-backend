@@ -14,7 +14,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 /** Public parcel lookup by tracking number: only what a stranger holding the number may see. */
 @Service
@@ -27,9 +26,11 @@ public class TrackingService {
             "We couldn't find a parcel with this tracking number. Check the number and try again.";
 
     private final DeliveryApi deliveries;
+    private final ParcelIndexer indexer;
 
-    public TrackingService(DeliveryApi deliveries) {
+    public TrackingService(DeliveryApi deliveries, ParcelIndexer indexer) {
         this.deliveries = deliveries;
+        this.indexer = indexer;
     }
 
     /** "sd 2611 0048 17" → "SD2611004817", or null when it can't be a tracking number. */
@@ -41,8 +42,10 @@ public class TrackingService {
         return TRACKING_NUMBER.matcher(value).matches() ? value : null;
     }
 
-    /** The parcel's public view. 404 for a number in the wrong format too, so the answer gives nothing away. */
-    @Transactional(readOnly = true)
+    /**
+     * The parcel's public view. 404 for a number in the wrong format too, so the answer gives nothing away. A parcel
+     * that is looked up is also added to the all-parcels index (it may predate the index).
+     */
     public TrackingResponse track(String trackingNumber) {
         String number = normalize(trackingNumber);
         if (number == null) {
@@ -50,6 +53,7 @@ public class TrackingService {
         }
         DeliverySnapshot parcel = deliveries.findByTrackingNumber(number)
                 .orElseThrow(() -> new NotFoundException(ErrorCode.NOT_FOUND, NOT_FOUND_MESSAGE));
+        indexer.index(parcel);
         List<TrackingStep> history = deliveries.history(parcel.id()).stream()
                 .sorted(Comparator.comparing(ParcelStatusEntry::occurredAt))
                 .map(entry -> new TrackingStep(entry.status(), entry.branch(), entry.failureReason(),

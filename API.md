@@ -870,3 +870,43 @@ not replayed. If the WebSocket keeps failing, poll that endpoint (the frontend p
 
 The last 100 changes this server has seen (it keeps 200 in memory, cleared on restart), newest first, in the
 `/topic/live` shape. With `branch`, only changes whose origin, destination or arrival branch is that branch.
+
+### `GET /admin/tracking/parcels?q=&status=&district=&from=&to=&page=0&size=20` (ADMIN)
+
+Every parcel's latest status, most recently updated first. All filters are optional:
+
+| Param | Meaning |
+|---|---|
+| `q` | Part of a tracking number (spaces and case ignored, at most 40 characters). |
+| `status` | One `ParcelStatus`. |
+| `district` | The sender's or recipient's district, or the branch the parcel is at. |
+| `from`, `to` | `yyyy-MM-dd`, last updated on or after / on or before that day (Sri Lankan time). `to` before `from` is 400. |
+| `page`, `size` | `page` ≥ 0, `size` 1-100 (default 20); otherwise 400 `VALIDATION_FAILED`. |
+
+```json
+{
+  "content": [{
+    "parcelId": "0c9d82dd-b94a-40be-9a29-baeb71d909b8",
+    "trackingNumber": "SD2611406946",
+    "status": "AT_BRANCH",
+    "from": { "city": "Colombo 03", "district": "COLOMBO" },
+    "to": { "city": "Kandy", "district": "KANDY" },
+    "currentBranch": "COLOMBO",
+    "failureReason": null,
+    "createdAt": "2026-11-13T04:10:00Z",
+    "updatedAt": "2026-11-13T06:45:12Z",
+    "version": 3
+  }],
+  "page": 0, "size": 20, "totalElements": 1, "totalPages": 1
+}
+```
+
+The list is tracking's own index (`tracking.parcel_index`): a parcel is added or updated when a `ParcelStatusChanged`
+event arrives and whenever it is looked up with `GET /track/{trackingNumber}`. A parcel that has done neither since
+the index was added is not listed yet. Live changes come on `/topic/live`.
+
+### `GET /admin/tracking/parcels/counts?q=&district=&from=&to=` (ADMIN)
+
+How many indexed parcels match the same filters, per status (the status filter is ignored, so a status picker can
+show the numbers): `{ "total": 12, "byStatus": { "CREATED": 3, "AT_BRANCH": 2, ..., "DELIVERED": 7 } }`. Every
+status is present, 0 when none.

@@ -23,7 +23,8 @@ import org.springframework.stereotype.Service;
 /**
  * Turns each {@link ParcelStatusChanged} into live updates: a public {@link TrackingUpdate} on
  * {@value #PARCEL_TOPIC}{trackingNumber} and a {@link LiveEvent} on {@value #LIVE_TOPIC} for the dispatchers' board.
- * Also keeps the last {@value #RECENT_SIZE} events in memory, so the board isn't empty when it opens.
+ * Also keeps the last {@value #RECENT_SIZE} events in memory, so the board isn't empty when it opens, and writes the
+ * parcel's latest status to the all-parcels index.
  *
  * <p>Events arrive at least once and may be late: one already seen, or older than the last one seen for its parcel,
  * is dropped.
@@ -39,15 +40,17 @@ public class LiveUpdates {
 
     private final SimpMessagingTemplate messaging;
     private final DeliveryApi deliveries;
+    private final ParcelIndexer indexer;
     private final Cache<UUID, Long> lastVersion = Caffeine.newBuilder()
             .expireAfterAccess(Duration.ofHours(6))
             .maximumSize(100_000)
             .build();
     private final Deque<LiveEvent> recent = new ArrayDeque<>();
 
-    public LiveUpdates(SimpMessagingTemplate messaging, DeliveryApi deliveries) {
+    public LiveUpdates(SimpMessagingTemplate messaging, DeliveryApi deliveries, ParcelIndexer indexer) {
         this.messaging = messaging;
         this.deliveries = deliveries;
+        this.indexer = indexer;
     }
 
     public void handle(ParcelStatusChanged event) {
@@ -71,6 +74,7 @@ public class LiveUpdates {
                 event.parcelVersion());
         remember(live);
         messaging.convertAndSend(LIVE_TOPIC, live);
+        parcel.ifPresent(indexer::index);
         log.debug("Pushed {} -> {}", event.trackingNumber(), event.toStatus());
     }
 
