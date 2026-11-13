@@ -58,7 +58,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "swiftdrop.dev.fake-delivery=false",
         // webhooks: fixed key and strict URLs, whatever the local .env says
         "swiftdrop.webhooks.encryption-key=test-only-webhook-key-0123456789-abcdefghijklmnop",
-        "swiftdrop.webhooks.allow-insecure-urls=false"
+        "swiftdrop.webhooks.allow-insecure-urls=false",
+        // no background sender: tests call WebhookDispatcher.dispatchDue() themselves
+        "swiftdrop.webhooks.dispatcher.enabled=false"
 })
 @AutoConfigureMockMvc
 @Import({TestcontainersConfiguration.class, TestDoublesConfiguration.class})

@@ -17,11 +17,16 @@
  * <p>Delivery: the listener only stores one {@code PENDING} delivery per (event, subscription), so a redelivered
  * message is ignored. A scheduled worker sends due deliveries and keeps the retry state in the database (not in
  * RabbitMQ), claiming rows with {@code FOR UPDATE SKIP LOCKED} so several backends never send the same one.
+ * A claim is a 60-second lease ({@code next_attempt_at} moves ahead, the row stays PENDING), so a backend that dies
+ * mid-send loses nothing; no transaction or connection is held during the HTTP call. The worker runs when
+ * {@code SWIFTDROP_WEBHOOKS_DISPATCHER_ENABLED=true} (the default). Before each send the URL is resolved and checked
+ * again; the HTTP client then resolves it once more, so a host that changes its DNS answer within those
+ * milliseconds is not caught (pinning the checked address is a possible hardening step).
  * Signing secrets are stored encrypted (they are needed in plain form to sign), never hashed and never logged.
  *
- * <p>Status: subscriptions API ({@code /merchant/webhooks}) and the {@code webhooks.q} consumer are built (events
- * become PENDING deliveries; events from before a subscription was created are not replayed to it). Sending,
- * retries, the test ping, delivery history and the admin endpoints are in progress.
+ * <p>Status: subscriptions API ({@code /merchant/webhooks}), the {@code webhooks.q} consumer (events become PENDING
+ * deliveries; events from before a subscription was created are not replayed to it) and the sending worker with
+ * retries are built. The test ping, delivery history, manual retry and the admin endpoints are in progress.
  *
  * <p>Database schema {@code webhooks} (no foreign keys; merchant ids are identity user ids):
  * <ul>

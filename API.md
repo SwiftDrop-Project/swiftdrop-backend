@@ -546,8 +546,9 @@ The secret is never in this shape. The create and rotate responses add it once:
 }
 ```
 - `status`: `PENDING` (waiting for the next attempt), `SUCCEEDED`, `FAILED` (no more automatic attempts).
-- `lastError`: `null`, `HTTP_<code>`, `TIMEOUT`, `CONNECTION_FAILED` or `URL_NOT_ALLOWED`. The merchant's response
-  body is never stored.
+- `lastError`: `null`, `HTTP_<code>`, `TIMEOUT`, `CONNECTION_FAILED`, `URL_NOT_ALLOWED` (the URL resolved to a
+  private address or couldn't be resolved; nothing was sent) or `SUBSCRIPTION_INACTIVE` (the subscription was turned
+  off before it was sent; not counted as an attempt). The merchant's response body is never stored.
 - `nextAttemptAt` is `null` unless `status` is `PENDING`.
 
 ### Endpoints
@@ -618,12 +619,14 @@ parsing), compare it with the signature in constant time, and reject timestamps 
 ### Delivery and retries
 
 - A 2xx answer within 10 seconds counts as delivered. Redirects are not followed.
-- 408, 429, 5xx, timeouts and connection errors are retried: right away, then after 1 min, 5 min, 15 min, 1 h and
-  6 h (6 attempts in all).
-- Any other 4xx, or the 6th failed attempt, makes the delivery `FAILED`. The merchant or an admin can retry it.
+- 408, 429, 5xx, timeouts, connection errors and `URL_NOT_ALLOWED` are retried: right away, then after 1 min, 5 min,
+  15 min, 1 h and 6 h (6 attempts in all).
+- Any other 4xx or a 3xx, or the 6th failed attempt, makes the delivery `FAILED`. The merchant or an admin can retry
+  it.
 - Delivery is at-least-once and not ordered: use `id` and `sequence`, as above.
 - A change to a subscription (URL, event types, turned off) applies to new events. A turned-off subscription gets no
-  new parcel events, and its `PENDING` parcel deliveries are not sent (a test ping still is).
+  new parcel events, and its `PENDING` parcel deliveries are not sent: they become `FAILED` with `lastError`
+  `SUBSCRIPTION_INACTIVE` (a test ping is still sent).
 
 ---
 

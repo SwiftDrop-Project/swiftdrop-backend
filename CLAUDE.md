@@ -55,7 +55,9 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
   infrastructure; never declare it again with other arguments), stores one delivery row per event and subscription,
   and a scheduled worker sends them. Retries live in the database (`webhooks.deliveries`), not in RabbitMQ queues.
   Signing secrets are stored encrypted (AES-GCM), never hashed and never logged. Merchants get a public payload,
-  never the raw event (no customer ids, actor ids or notes).
+  never the raw event (no customer ids, actor ids or notes). The worker (`WebhookDispatcher`, on unless
+  `SWIFTDROP_WEBHOOKS_DISPATCHER_ENABLED=false`; off in tests, which call `dispatchDue()`) leases rows and never holds
+  a transaction during the HTTP call; result updates are guarded by the lease.
 - dispatch: `AssignmentApi` is implemented; dispatcher endpoints are under `/dispatch` (DISPATCHER and ADMIN, API.md
   "Dispatch"). Delivery has no "waiting for pickup" query, so dispatch keeps `dispatch.pickup_queue` from
   `ParcelStatusChanged` (RabbitMQ queue `dispatch.q`); it fills only while the outbox relay runs
