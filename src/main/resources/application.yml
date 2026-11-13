@@ -125,3 +125,11 @@ swiftdrop:
   # (needs SEED_DEMO_USERS=true). Nothing is written to the database. Local demos only, never on shared servers.
   dev:
     fake-delivery: ${SWIFTDROP_FAKE_DELIVERY:false}
+  # Webhooks (WP6). Merchants' signing secrets are stored AES-GCM encrypted with a key derived from encryption-key.
+  # Empty WEBHOOK_ENCRYPTION_KEY: the JWT secret is used instead. Changing the value later makes the stored secrets
+  # unreadable (merchants must rotate them). The fallback is the property, not the JWT_SECRET variable, so tests
+  # (which set the property) always get the same key.
+  # allow-insecure-urls: true allows http:// and loopback receivers (http://localhost:9000) - local testing only.
+  webhooks:
+    encryption-key: ${WEBHOOK_ENCRYPTION_KEY:${swiftdrop.security.jwt.secret:}}
+    allow-insecure-urls: ${SWIFTDROP_WEBHOOKS_ALLOW_INSECURE_URLS:false}

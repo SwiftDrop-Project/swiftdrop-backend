@@ -609,6 +609,7 @@ Headers:
 | `X-SwiftDrop-Timestamp` | Unix time in seconds when this attempt was sent (new on every attempt) |
 | `X-SwiftDrop-Signature` | `sha256=` + lowercase hex of HMAC-SHA256(secret, `<timestamp>.<raw body>`) |
 
+The HMAC key is the whole secret, including the `whsec_` prefix, as UTF-8 bytes.
 To verify a request: compute the HMAC over the timestamp header, a `.` and the **raw** request body (before any JSON
 parsing), compare it with the signature in constant time, and reject timestamps more than 5 minutes old.
 
