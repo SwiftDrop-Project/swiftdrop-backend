@@ -70,6 +70,7 @@ Change it in the same PR as the code, and tell the frontend team.
 | 409 | `PROFILE_ALREADY_COMPLETE` | `POST /auth/complete-profile` for an account that is not `PROFILE_INCOMPLETE` |
 | 409 | `INVALID_STATUS_TRANSITION` | The parcel can't move to that status from its current one, e.g. DELIVERED → PICKED_UP or PICKED_UP → IN_TRANSIT (a picked-up parcel goes to a branch first). See [Parcel statuses](#parcel-statuses) |
 | 409 | `PARCEL_NOT_ASSIGNABLE` | Assigning a courier to a parcel that was already picked up or is finished |
+| 409 | `PARCEL_NEEDS_MANUAL_QUOTE` | Booking a parcel that no vehicle carries or fits (pricing's `MANUAL_QUOTE`) |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | Request body is not `application/json` |
 | 429 | `TOO_MANY_REQUESTS` | Too many requests from this IP address; the `Retry-After` header says how many seconds to wait |
 | 500 | `INTERNAL_ERROR` | Anything unexpected (generic message only) |
@@ -86,6 +87,7 @@ Messages of the new codes (show them as-is):
 | `TOO_MANY_REQUESTS` | Too many attempts. Please wait a moment and try again. |
 | `INVALID_STATUS_TRANSITION` | This parcel can't move to that status now. Refresh to see its latest status. |
 | `PARCEL_NOT_ASSIGNABLE` | A courier can only be assigned before the parcel is picked up. |
+| `PARCEL_NEEDS_MANUAL_QUOTE` | This parcel is too big or too heavy for our vehicles. Contact us for a quote. |
 | `SERVICE_UNAVAILABLE` | This isn't available yet. Please try again later. |
 
 **Rate limits** (per client IP; over the limit → `429 TOO_MANY_REQUESTS` + `Retry-After: <seconds>`; CORS exposes
@@ -519,11 +521,15 @@ Request:
                  "city": "Kandy", "district": "KANDY" },
   "weightKg": 2.5,
   "codAmount": 2500.00,
-  "instructions": "Call before coming"
+  "instructions": "Call before coming",
+  "lengthCm": 40,
+  "widthCm": 30,
+  "heightCm": 12,
+  "keepUpright": false
 }
 ```
-There is no customer id and no fee: the customer comes from the login, and the server sets the fee and the
-tracking number.
+There is no customer id and no fee: the customer comes from the login, and the server sets the fee (with pricing,
+the same quote as `POST /pricing/estimate`) and the tracking number.
 
 | Field | Rule | Message |
 |---|---|---|
@@ -536,6 +542,8 @@ tracking number.
 | `weightKg` | 0.01–50, up to 2 decimals | "Enter the weight." / "Enter a weight above 0 kg." / "A parcel can weigh up to 50 kg." / "Use up to 2 decimal places." |
 | `codAmount` | Optional: cash to collect on delivery; leave out when already paid. 0.01–500000, up to 2 decimals | "Enter an amount above 0, or leave it out." / "Cash on delivery can be up to Rs. 500,000." |
 | `instructions` | Optional, up to 500 characters (blank = none) | "Use 500 characters or fewer." |
+| `lengthCm`, `widthCm`, `heightCm` | Required: packed outside measurements, whole cm 1–300 | "Enter the length." / "Enter the width." / "Enter the height." / "Use whole centimetres from 1 to 300." |
+| `keepUpright` | Optional, default `false`: the parcel may not lie on its side | |
 
 Response `201`: a Delivery.
 ```json
@@ -550,20 +558,25 @@ Response `201`: a Delivery.
   "weightKg": 2.5,
   "codAmount": 2500.00,
   "instructions": "Call before coming",
-  "feeAmount": 450.00,
+  "feeAmount": 1395.20,
   "currency": "LKR",
   "createdAt": "2026-11-07T04:30:00Z",
   "updatedAt": "2026-11-07T04:30:00Z",
   "currentBranch": null,
   "failureReason": null,
-  "proof": null
+  "proof": null,
+  "size": { "lengthCm": 40, "widthCm": 30, "heightCm": 12, "keepUpright": false },
+  "vehicle": "BIKE",
+  "billableWeightKg": 3
 }
 ```
-- `feeAmount` is a flat 450.00 LKR until pricing (WP4) is connected.
+- `feeAmount` is pricing's quote for the route, weight, size and cash on delivery (see "Pricing (WP4)"). The parcel
+  keeps the vehicle, billable weight, rate card version and fee lines. `size`, `vehicle` and `billableWeightKg` are
+  `null` for parcels booked before sizes.
 - `currentBranch`: set only while `AT_BRANCH` (a district, e.g. `GAMPAHA`). `failureReason`: only while `FAILED`.
   `proof`: `{ "recipientName": "Kamala Silva", "hasPhoto": false }` once `DELIVERED`. Otherwise all three are `null`.
-- `400` `VALIDATION_FAILED` (keys like `pickup.phone`, `weightKg`) · `401` `UNAUTHENTICATED` · `403` `FORBIDDEN`
-  (logged in, but not a `CUSTOMER`)
+- `400` `VALIDATION_FAILED` (keys like `pickup.phone`, `weightKg`, `lengthCm`) · `401` `UNAUTHENTICATED` · `403`
+  `FORBIDDEN` (logged in, but not a `CUSTOMER`) · `409` `PARCEL_NEEDS_MANUAL_QUOTE` (no vehicle carries or fits it)
 
 ### My deliveries
 `GET /deliveries?page=0&size=20&status=AT_BRANCH` (logged-in `CUSTOMER`)

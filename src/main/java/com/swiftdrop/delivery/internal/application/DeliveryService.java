@@ -11,6 +11,7 @@ import com.swiftdrop.delivery.ParcelStatusEntry;
 import com.swiftdrop.delivery.ProofPhoto;
 import com.swiftdrop.delivery.ProofPhotoRef;
 import com.swiftdrop.delivery.internal.domain.Parcel;
+import com.swiftdrop.delivery.internal.domain.ParcelPrice;
 import com.swiftdrop.delivery.internal.domain.ParcelStatusHistory;
 import com.swiftdrop.delivery.internal.domain.TrackingNumberGenerator;
 import com.swiftdrop.delivery.internal.persistence.DailyTotal;
@@ -124,9 +125,8 @@ class DeliveryService implements DeliveryApi {
             }
         }
         Instant now = clock.instant();
-        FeeQuoter.Fee fee = feeQuoter.quote(command);
-        Parcel parcel = Parcel.create(UUID.randomUUID(), newTrackingNumber(now), command, fee.amount(),
-                fee.currency(), now);
+        ParcelPrice price = feeQuoter.quote(command);
+        Parcel parcel = Parcel.create(UUID.randomUUID(), newTrackingNumber(now), command, price, now);
         parcels.save(parcel);
         ParcelStatusHistory first = ParcelStatusHistory.firstEntry(UUID.randomUUID(), parcel);
         statusHistory.save(first);

@@ -47,7 +47,7 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
 - Controllers never return entities. Map to DTOs in `internal/dto`.
 - A module's public URLs: implement `shared.web.PublicEndpoints` as a bean in the module. Never edit identity's SecurityConfig for that.
 - Unbuilt modules have placeholder contracts ("Contract owned by <module> - extend in Phase 0"); the owner extends them.
-- Current dependencies: identity -> notifications, shared; merchants -> identity, shared; delivery -> shared;
+- Current dependencies: identity -> notifications, shared; merchants -> identity, shared; delivery -> pricing, shared;
   courier -> delivery, identity, shared; pricing -> shared; infrastructure -> shared. Nothing depends on courier.
 - courier gets `DeliveryApi` through an `ObjectProvider` and answers 503 SERVICE_UNAVAILABLE while nothing implements
   it. TEMPORARY: `courier/internal/fake` (`SWIFTDROP_FAKE_DELIVERY=true`) is an in-memory `DeliveryApi` for demos;

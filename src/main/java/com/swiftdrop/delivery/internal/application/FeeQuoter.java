@@ -1,18 +1,17 @@
 package com.swiftdrop.delivery.internal.application;
 
 import com.swiftdrop.delivery.CreateDeliveryCommand;
-
-import java.math.BigDecimal;
+import com.swiftdrop.delivery.internal.domain.ParcelPrice;
 
 /**
  * The delivery fee for a new parcel. The fee always comes from here, never from the caller, so nobody can choose
- * their own price. Pricing (WP4) will give the real fee through PricingApi; until then {@link FlatFeeQuoter}.
+ * their own price. {@link PricingFeeQuoter} asks pricing (WP4), the same quote the fee estimate shows.
  */
 interface FeeQuoter {
 
-    Fee quote(CreateDeliveryCommand command);
-
-    /** An amount and its currency, e.g. 450.00 LKR. */
-    record Fee(BigDecimal amount, String currency) {
-    }
+    /**
+     * @throws com.swiftdrop.shared.error.BusinessRuleException PARCEL_NEEDS_MANUAL_QUOTE when no vehicle takes the
+     *                                                          parcel
+     */
+    ParcelPrice quote(CreateDeliveryCommand command);
 }

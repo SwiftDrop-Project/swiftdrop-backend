@@ -3,6 +3,7 @@ package com.swiftdrop.delivery.internal.dto;
 import com.swiftdrop.delivery.DeliveryContact;
 import com.swiftdrop.delivery.DeliverySnapshot;
 import com.swiftdrop.delivery.FailureReason;
+import com.swiftdrop.delivery.ParcelSize;
 import com.swiftdrop.delivery.ParcelStatus;
 import com.swiftdrop.shared.reference.District;
 
@@ -13,7 +14,8 @@ import java.util.UUID;
 /**
  * A delivery as its customer sees it: the response of POST /deliveries and the item of "My deliveries".
  * {@code currentBranch} is set only while AT_BRANCH, {@code failureReason} only while FAILED, and {@code proof} only
- * once DELIVERED; otherwise they are null.
+ * once DELIVERED; otherwise they are null. {@code size}, {@code vehicle} and {@code billableWeightKg} show how the fee
+ * was worked out (null for parcels booked before sizes).
  */
 public record DeliveryResponse(
         UUID id,
@@ -30,7 +32,10 @@ public record DeliveryResponse(
         Instant updatedAt,
         District currentBranch,
         FailureReason failureReason,
-        Proof proof) {
+        Proof proof,
+        ParcelSize size,
+        String vehicle,
+        Integer billableWeightKg) {
 
     /** Who received a delivered parcel, and whether the courier added a photo. */
     public record Proof(String recipientName, boolean hasPhoto) {
@@ -49,7 +54,8 @@ public record DeliveryResponse(
         return new DeliveryResponse(parcel.id(), parcel.trackingNumber(), parcel.status(), parcel.pickup(),
                 parcel.recipient(), parcel.weightKg(), parcel.codAmount(), parcel.instructions(),
                 parcel.feeAmount(), parcel.currency(), parcel.createdAt(), parcel.updatedAt(),
-                parcel.currentBranch(), parcel.failureReason(), proof);
+                parcel.currentBranch(), parcel.failureReason(), proof, parcel.size(), parcel.vehicle(),
+                parcel.billableWeightKg());
     }
 
     /** The contacts, the instructions and the proof name are personal data: only the tracking number and the status. */

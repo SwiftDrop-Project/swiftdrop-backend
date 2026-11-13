@@ -30,6 +30,8 @@ public enum ErrorCode {
     INVALID_STATUS_TRANSITION(HttpStatus.CONFLICT,
             "This parcel can't move to that status now. Refresh to see its latest status."),
     PARCEL_NOT_ASSIGNABLE(HttpStatus.CONFLICT, "A courier can only be assigned before the parcel is picked up."),
+    PARCEL_NEEDS_MANUAL_QUOTE(HttpStatus.CONFLICT,
+            "This parcel is too big or too heavy for our vehicles. Contact us for a quote."),
     COURIER_NOT_ASSIGNABLE(HttpStatus.CONFLICT, "This courier is not active and cannot be assigned parcels."),
     ACCOUNT_REMOVED(HttpStatus.CONFLICT, "This account has been permanently removed and cannot be modified."),
     UNSUPPORTED_MEDIA_TYPE(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "Send the request as JSON (application/json)."),

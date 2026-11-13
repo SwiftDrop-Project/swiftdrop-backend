@@ -6,10 +6,12 @@ import com.swiftdrop.delivery.DeliveryContact;
 import com.swiftdrop.delivery.DeliverySnapshot;
 import com.swiftdrop.delivery.DeliveryStats;
 import com.swiftdrop.delivery.FailureReason;
+import com.swiftdrop.delivery.ParcelSize;
 import com.swiftdrop.delivery.ParcelStatus;
 import com.swiftdrop.delivery.ParcelStatusChanged;
 import com.swiftdrop.delivery.ParcelStatusEntry;
 import com.swiftdrop.delivery.internal.domain.Parcel;
+import com.swiftdrop.delivery.internal.domain.ParcelPrice;
 import com.swiftdrop.delivery.internal.domain.ParcelStatusHistory;
 import com.swiftdrop.delivery.internal.domain.TrackingNumberGenerator;
 import com.swiftdrop.delivery.internal.persistence.DailyTotal;
@@ -81,7 +83,7 @@ class DeliveryServiceTest {
 
     @BeforeEach
     void aFeeAndAFreeTrackingNumber() {
-        when(feeQuoter.quote(any())).thenReturn(new FeeQuoter.Fee(new BigDecimal("450.00"), "LKR"));
+        when(feeQuoter.quote(any())).thenReturn(ParcelPrice.flat(new BigDecimal("450.00"), "LKR"));
         when(trackingNumbers.next(NOW)).thenReturn("SD2611004817");
     }
 
@@ -116,6 +118,25 @@ class DeliveryServiceTest {
         assertThat(snapshot.trackingNumber()).isEqualTo("SD2611004817");
         assertThat(snapshot.feeAmount()).isEqualByComparingTo("450.00");
         assertThat(snapshot.currency()).isEqualTo("LKR");
+    }
+
+    @Test
+    void theParcelKeepsItsSizeAndHowTheFeeWasWorkedOut() {
+        when(feeQuoter.quote(any())).thenReturn(new ParcelPrice(new BigDecimal("1295.20"), "LKR", "BIKE", 3, 2,
+                "[{\"component\":\"BASE\",\"amount\":350.00}]"));
+        var booking = new CreateDeliveryCommand(UUID.randomUUID(), null, null, PICKUP, RECIPIENT,
+                new BigDecimal("1.80"), null, null, new ParcelSize(40, 30, 12, false));
+
+        DeliverySnapshot snapshot = service.create(booking);
+
+        assertThat(snapshot.feeAmount()).isEqualByComparingTo("1295.20");
+        assertThat(snapshot.size()).isEqualTo(new ParcelSize(40, 30, 12, false));
+        assertThat(snapshot.vehicle()).isEqualTo("BIKE");
+        assertThat(snapshot.billableWeightKg()).isEqualTo(3);
+        assertThat(snapshot.rateCardVersion()).isEqualTo(2);
+        ArgumentCaptor<Parcel> parcel = ArgumentCaptor.forClass(Parcel.class);
+        verify(parcels).save(parcel.capture());
+        assertThat(parcel.getValue().getFeeBreakdown()).contains("\"BASE\"");
     }
 
     @Test
