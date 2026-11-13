@@ -47,7 +47,7 @@ class MandatoryPasswordChangeTest extends IntegrationTest {
                 .andExpect(jsonPath("$.mustChangePassword").value(true));
 
         // Protected courier endpoint is blocked with 403 PASSWORD_CHANGE_REQUIRED
-        mvc.perform(get("/api/v1/courier/deliveries/today").cookie(tempCookie))
+        mvc.perform(get("/api/v1/courier/assignments/today").cookie(tempCookie))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value("PASSWORD_CHANGE_REQUIRED"));
 
@@ -70,7 +70,7 @@ class MandatoryPasswordChangeTest extends IntegrationTest {
                 .andExpect(jsonPath("$.mustChangePassword").value(false));
 
         // Courier endpoint now responds 200 OK
-        mvc.perform(get("/api/v1/courier/deliveries/today").cookie(freshCookie))
+        mvc.perform(get("/api/v1/courier/assignments/today").cookie(freshCookie))
                 .andExpect(status().isOk());
 
         // Pre-change cookie is invalidated
