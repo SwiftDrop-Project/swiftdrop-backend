@@ -20,15 +20,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 
 /**
- * The fee rules with rate card 3 (the migration's values): base 250 incl. 1 kg, 75 per extra kg, leg fees Bike 150,
- * Tuk-tuk 300, Lorry 1500 for each local leg, linehaul 2.00 per km between the branches, no COD fee.
+ * The fee rules with rate card 4 (the migration's values): base 150 incl. 1 kg, 50 per extra kg, leg fees Bike 150,
+ * Tuk-tuk 300, Lorry 1500 for each local leg, linehaul 1.00 per km between the branches, no COD fee.
  */
 class FeeCalculatorTest {
 
     private static final VehicleRate BIKE = new VehicleRate(Vehicle.BIKE, 1, 45, 35, 35, kg("10"), rs("150"));
     private static final VehicleRate TUK_TUK = new VehicleRate(Vehicle.TUK_TUK, 2, 80, 60, 60, kg("40"), rs("300"));
     private static final VehicleRate LORRY = new VehicleRate(Vehicle.LORRY, 3, 250, 150, 150, kg("500"), rs("1500"));
-    private static final RateCard CARD = new RateCard(3, "LKR", rs("250"), 1, rs("75"), 5000, rs("0"), rs("2"),
+    private static final RateCard CARD = new RateCard(4, "LKR", rs("150"), 1, rs("50"), 5000, rs("0"), rs("1"),
             new BigDecimal("1.30"), List.of(BIKE, TUK_TUK, LORRY));
     /** Rate card 2, which had a COD fee of 100: quotes from a card with a COD fee still get the COD line. */
     private static final RateCard CARD_WITH_COD_FEE = new RateCard(2, "LKR", rs("350"), 1, rs("200"), 5000,
@@ -53,10 +53,10 @@ class FeeCalculatorTest {
         assertThat(quote.vehicle()).isEqualTo(Vehicle.BIKE);
         assertThat(quote.distanceKm()).isEqualByComparingTo("122.6");
         assertThat(quote.lines()).containsExactly(
-                line(BASE, "250.00"), line(WEIGHT, "150.00"), line(PICKUP, "150.00"), line(DELIVERY, "150.00"),
-                line(LINEHAUL, "245.20"));
-        assertThat(quote.total()).isEqualByComparingTo("945.20");
-        assertThat(quote.rateCardVersion()).isEqualTo(3);
+                line(BASE, "150.00"), line(WEIGHT, "100.00"), line(PICKUP, "150.00"), line(DELIVERY, "150.00"),
+                line(LINEHAUL, "122.60"));
+        assertThat(quote.total()).isEqualByComparingTo("672.60");
+        assertThat(quote.rateCardVersion()).isEqualTo(4);
         assertThat(quote.currency()).isEqualTo("LKR");
     }
 
@@ -65,7 +65,7 @@ class FeeCalculatorTest {
         FeeQuote quote = calculator.quote(CARD, parcel("1.8", 40, 30, 12, false), SAME_DISTRICT, false);
 
         assertThat(quote.amountOf(LINEHAUL)).hasValueSatisfying(amount -> assertThat(amount).isEqualByComparingTo("0"));
-        assertThat(quote.total()).isEqualByComparingTo("700.00");
+        assertThat(quote.total()).isEqualByComparingTo("550.00");
     }
 
     @Test
@@ -77,9 +77,9 @@ class FeeCalculatorTest {
         assertThat(lyingDown.vehicle()).isEqualTo(Vehicle.TUK_TUK);
         assertThat(lyingDown.amountOf(PICKUP))
                 .hasValueSatisfying(amount -> assertThat(amount).isEqualByComparingTo("300"));
-        assertThat(lyingDown.total()).isEqualByComparingTo("1170.20");
+        assertThat(lyingDown.total()).isEqualByComparingTo("922.60");
         assertThat(upright.vehicle()).isEqualTo(Vehicle.LORRY);
-        assertThat(upright.total()).isEqualByComparingTo("3570.20");
+        assertThat(upright.total()).isEqualByComparingTo("3322.60");
         assertThat(upright.amountOf(LINEHAUL)).isEqualTo(lyingDown.amountOf(LINEHAUL));
         assertThat(upright.amountOf(WEIGHT)).isEqualTo(lyingDown.amountOf(WEIGHT));
     }
@@ -87,9 +87,9 @@ class FeeCalculatorTest {
     @Test
     void theLinehaulIsTheBranchDistanceTimesTheRate() {
         assertThat(calculator.quote(CARD, parcel("1", 10, 10, 10, false), km("12.0"), false).amountOf(LINEHAUL))
-                .hasValueSatisfying(amount -> assertThat(amount).isEqualByComparingTo("24.00"));
+                .hasValueSatisfying(amount -> assertThat(amount).isEqualByComparingTo("12.00"));
         assertThat(calculator.quote(CARD, parcel("1", 10, 10, 10, false), km("396.1"), false).amountOf(LINEHAUL))
-                .hasValueSatisfying(amount -> assertThat(amount).isEqualByComparingTo("792.20"));
+                .hasValueSatisfying(amount -> assertThat(amount).isEqualByComparingTo("396.10"));
     }
 
     // ---- Weight ----
@@ -99,17 +99,17 @@ class FeeCalculatorTest {
         FeeQuote quote = calculator.quote(CARD, parcel("1", 10, 10, 10, false), SAME_DISTRICT, false);
 
         assertThat(quote.amountOf(WEIGHT)).hasValueSatisfying(amount -> assertThat(amount).isEqualByComparingTo("0"));
-        assertThat(quote.total()).isEqualByComparingTo("550.00");
+        assertThat(quote.total()).isEqualByComparingTo("450.00");
     }
 
     @Test
     void everyKiloAfterTheFirstAddsThePerKgFee() {
-        // 5 kg, 10 x 10 x 10 cm: billed 5 kg → 4 kg above the first x 75; 5 kg still fits a Bike
+        // 5 kg, 10 x 10 x 10 cm: billed 5 kg → 4 kg above the first x 50; 5 kg still fits a Bike
         FeeQuote quote = calculator.quote(CARD, parcel("5", 10, 10, 10, false), SAME_DISTRICT, false);
 
         assertThat(quote.amountOf(WEIGHT))
-                .hasValueSatisfying(amount -> assertThat(amount).isEqualByComparingTo("300.00"));
-        assertThat(quote.total()).isEqualByComparingTo("850.00");
+                .hasValueSatisfying(amount -> assertThat(amount).isEqualByComparingTo("200.00"));
+        assertThat(quote.total()).isEqualByComparingTo("650.00");
     }
 
     @Test
@@ -154,7 +154,7 @@ class FeeCalculatorTest {
 
     @Test
     void vehiclesAreTriedSmallestFirstWhateverOrderTheyComeIn() {
-        RateCard shuffled = new RateCard(3, "LKR", rs("250"), 1, rs("75"), 5000, rs("0"), rs("2"),
+        RateCard shuffled = new RateCard(4, "LKR", rs("150"), 1, rs("50"), 5000, rs("0"), rs("1"),
                 new BigDecimal("1.30"), List.of(LORRY, BIKE, TUK_TUK));
 
         assertThat(shuffled.vehicles()).extracting(VehicleRate::vehicle)
@@ -172,7 +172,7 @@ class FeeCalculatorTest {
 
         assertThat(withCash.amountOf(COD)).isEmpty();
         assertThat(withCash.lines()).isEqualTo(paid.lines());
-        assertThat(withCash.total()).isEqualByComparingTo("550.00");
+        assertThat(withCash.total()).isEqualByComparingTo("450.00");
     }
 
     @Test
@@ -196,8 +196,8 @@ class FeeCalculatorTest {
         assertThat(quote.vehicle()).isNull();
         assertThat(quote.distanceKm()).isEqualByComparingTo("122.6");
         assertThat(quote.lines()).containsExactly(
-                line(BASE, "250.00"), line(WEIGHT, "150.00"), line(LINEHAUL, "245.20"));
-        assertThat(quote.total()).isEqualByComparingTo("645.20");
+                line(BASE, "150.00"), line(WEIGHT, "100.00"), line(LINEHAUL, "122.60"));
+        assertThat(quote.total()).isEqualByComparingTo("372.60");
     }
 
     // ---- Bad measurements ----

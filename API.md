@@ -574,7 +574,7 @@ Response `201`: a Delivery.
   "weightKg": 2.5,
   "codAmount": 2500.00,
   "instructions": "Call before coming",
-  "feeAmount": 945.20,
+  "feeAmount": 672.60,
   "currency": "LKR",
   "createdAt": "2026-11-07T04:30:00Z",
   "updatedAt": "2026-11-07T04:30:00Z",
@@ -635,14 +635,14 @@ A parcel goes pickup address → pickup district branch → drop-off district br
 local legs use a vehicle; between the branches SwiftDrop's own transport carries it, whatever its size.
 
 **Estimated fee = base fee (includes the first 1 kg) + weight charge + pickup leg + delivery leg + linehaul**, from
-the active rate card (version 3):
-- Base fee = LKR 250, which covers the first billable kg.
+the active rate card (version 4):
+- Base fee = LKR 150, which covers the first billable kg.
 - Billable weight = the greater of the actual and the volumetric weight (L × W × H ÷ 5000), rounded up to a whole kg.
-  Weight charge = LKR 75 × billable kg above the first.
+  Weight charge = LKR 50 × billable kg above the first.
 - Vehicle = the first of Bike → Tuk-tuk → Lorry that carries the actual weight and fits the parcel (any orientation;
   with `keepUpright` only length and width may swap). Each local leg costs the vehicle's fixed leg fee (Bike 150,
   Tuk-tuk 300, Lorry 1,500), with no distance charge.
-- Linehaul = LKR 2.00 × the distance between the branches: the straight line between the district centres × 1.3
+- Linehaul = LKR 1.00 × the distance between the branches: the straight line between the district centres × 1.3
   (0 inside one district).
 - No cash on delivery handling fee: `cashOnDelivery` is still accepted but adds nothing (rate cards 1 and 2 added
   LKR 100). The COD amount itself is never part of the fee.
@@ -664,24 +664,24 @@ Response `200`:
 ```json
 {
   "status": "COMPLETE",
-  "total": 945.20,
+  "total": 672.60,
   "currency": "LKR",
-  "rateCardVersion": 3,
+  "rateCardVersion": 4,
   "billableWeightKg": 3,
   "volumetricWeightKg": 2.88,
   "vehicle": "BIKE",
   "distanceKm": 122.6,
   "lines": [
-    { "component": "BASE", "amount": 250.00 },
-    { "component": "WEIGHT", "amount": 150.00 },
+    { "component": "BASE", "amount": 150.00 },
+    { "component": "WEIGHT", "amount": 100.00 },
     { "component": "PICKUP", "amount": 150.00 },
     { "component": "DELIVERY", "amount": 150.00 },
-    { "component": "LINEHAUL", "amount": 245.20 }
+    { "component": "LINEHAUL", "amount": 122.60 }
   ]
 }
 ```
 - `distanceKm`: between the two branches. `lines`: `BASE`, `WEIGHT`, `PICKUP`, `DELIVERY`, `LINEHAUL`, then `COD` when
-  `cashOnDelivery` is true and the rate card has a COD fee (version 3 has none).
+  `cashOnDelivery` is true and the rate card has a COD fee (none since version 3).
 - `status`: `COMPLETE`; `PROVISIONAL` without measurements (no vehicle, so no `PICKUP` and `DELIVERY` lines;
   `vehicle` and `volumetricWeightKg` are `null`); `MANUAL_QUOTE` when no vehicle takes the parcel for the local legs
   (`total` is `null`).

@@ -25,7 +25,7 @@ import java.util.Optional;
  *     + the vehicle's leg fee for the pickup leg
  *     + the vehicle's leg fee for the delivery leg
  *     + linehaul per km x the distance between the branches (0 inside one district)
- *     + the COD fee, when the courier collects cash and the rate card has one (rate card 3 has none)
+ *     + the COD fee, when the courier collects cash and the rate card has one (none since rate card 3)
  * </pre>
  *
  * Billable weight is the greater of the actual and the volumetric weight (L x W x H / divisor), rounded up to a
