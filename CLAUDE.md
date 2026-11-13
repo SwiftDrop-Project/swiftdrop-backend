@@ -54,12 +54,14 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
   Assignment status and item outcomes are separate from the parcel status: a courier's task can be completed while
   its parcels are still on their way.
 - courier gets `AssignmentApi` and `DeliveryApi` through `ObjectProvider`s and answers 503 SERVICE_UNAVAILABLE while
-  either has no implementation. Courier writes are `@Transactional`: the parcel status (delivery) and the item outcome
+  either has no implementation (delivery is implemented; dispatch isn't yet). Courier writes are `@Transactional`: the parcel status (delivery) and the item outcome
   (dispatch) are saved together (`ParcelMoves` has the outcome → parcel status table).
-  TEMPORARY: `courier/internal/fake` holds in-memory `FakeDeliveryApi` (`SWIFTDROP_FAKE_DELIVERY=true`) and
-  `FakeAssignmentApi` (`SWIFTDROP_FAKE_DISPATCH=true`) for demos; with both on (and `SEED_DEMO_USERS=true`) the
-  seeder gives `courier@swiftdrop.lk` the Delgoda → Gampaha → Matara → Deniyaya demo. The fakes undo their changes
-  when a transaction rolls back. Delete each fake (and its property and tests) when its module is implemented.
+  TEMPORARY: `courier/internal/fake` holds an in-memory `FakeAssignmentApi` (`SWIFTDROP_FAKE_DISPATCH=true`) for
+  demos; it undoes its changes when a transaction rolls back. With `SEED_DEMO_USERS=true`, `DemoCourierSeeder`
+  creates real demo parcels through `DeliveryApi` on every start and gives `courier@swiftdrop.lk` the
+  Delgoda → Gampaha → Matara → Deniyaya demo, but only on a local database (host `localhost`, `127.0.0.1` or
+  `postgres`): never on the shared Neon database. Delete the package (and the property and its tests) when WP8
+  implements `AssignmentApi`.
 - delivery must never depend on identity: identity -> notifications, and notifications will consume
   `ParcelStatusChanged` (notifications -> delivery), so that would be a cycle. User ids are plain UUIDs and roles are
   plain names (e.g. `COURIER`). Multi-branch: several couriers handle one parcel, so callers authorize

@@ -97,8 +97,7 @@ public class CourierAssignmentService {
                     + "dispatch is implemented (or SWIFTDROP_FAKE_DISPATCH=true for demo data).");
         }
         if (deliveries.getIfAvailable() == null) {
-            log.warn("No DeliveryApi implementation: courier endpoints answer 503 SERVICE_UNAVAILABLE until delivery "
-                    + "is implemented (or SWIFTDROP_FAKE_DELIVERY=true for demo data).");
+            log.warn("No DeliveryApi implementation: courier endpoints answer 503 SERVICE_UNAVAILABLE.");
         }
     }
 

@@ -3,8 +3,11 @@ package com.swiftdrop.courier.internal.fake;
 
 import com.swiftdrop.IntegrationTest;
 import com.swiftdrop.delivery.DeliveryApi;
+import com.swiftdrop.delivery.ParcelStatus;
 import com.swiftdrop.dispatch.AssignmentView;
+import com.swiftdrop.shared.reference.District;
 import jakarta.servlet.http.Cookie;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
@@ -16,23 +19,24 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Both fakes on, end to end over HTTP: the app starts, the demo courier sees the seeded Delgoda → Gampaha → Matara →
+ * The demo end to end over HTTP, with the real delivery module on PostgreSQL (Testcontainers) and the fake dispatch:
+ * the seeder creates real parcels at their starting status, the demo courier sees the Delgoda → Gampaha → Matara →
  * Deniyaya tasks and walks all three (PICKUP with one parcel not collected, TRANSFER, DELIVERY with one failed parcel
  * returned to the branch). The other courier's task stays invisible.
  */
 @TestPropertySource(properties = {
-        "swiftdrop.dev.fake-delivery=true",
         "swiftdrop.dev.fake-dispatch=true",
         "swiftdrop.seed.demo-users=true",
-        "swiftdrop.seed.demo-password=" + FakeDeliveryWiringTest.DEMO_PASSWORD
+        "swiftdrop.seed.demo-password=" + DemoCourierWiringTest.DEMO_PASSWORD
 })
-class FakeDeliveryWiringTest extends IntegrationTest {
+class DemoCourierWiringTest extends IntegrationTest {
 
     static final String DEMO_PASSWORD = "Demo12345";
     private static final String TASKS = "/api/v1/courier/assignments";
@@ -44,9 +48,36 @@ class FakeDeliveryWiringTest extends IntegrationTest {
     @Autowired
     FakeAssignmentApi assignments;
 
+    @Autowired
+    DemoCourierSeeder seeder;
+
+    private DemoCourierSeeder.DemoRun run;
+
+    @BeforeEach
+    void demoRun() {
+        run = seeder.lastRun();
+        assertThat(run).as("the seeder ran (Testcontainers counts as a local database)").isNotNull();
+    }
+
+    /** Before the walk: the walk moves these parcels on. */
+    private void theSeededParcelsAreRealOrdersOfTheDemoMerchantAtTheirStartingStatus() {
+        for (int number = 1; number <= 9; number++) {
+            assertThat(deliveries.findById(run.parcelId(number))).get()
+                    .satisfies(parcel -> assertThat(parcel.merchantOrderRef()).startsWith("WP9-DEMO-" + run.run()));
+        }
+        assertThat(deliveries.findById(run.parcelId(1)).orElseThrow().status()).isEqualTo(ParcelStatus.CREATED);
+        assertThat(deliveries.findById(run.parcelId(4)).orElseThrow().currentBranch()).isEqualTo(District.GAMPAHA);
+        assertThat(deliveries.findById(run.parcelId(6)).orElseThrow().currentBranch()).isEqualTo(District.MATARA);
+        assertThat(deliveries.findById(run.parcelId(9)).orElseThrow().status()).isEqualTo(ParcelStatus.IN_TRANSIT);
+        assertThat(deliveries.history(run.parcelId(6))).extracting(entry -> entry.status()).containsExactly(
+                ParcelStatus.AT_BRANCH, ParcelStatus.IN_TRANSIT, ParcelStatus.AT_BRANCH, ParcelStatus.PICKED_UP,
+                ParcelStatus.CREATED);
+    }
+
     @Test
     void demoCourierWalksThePickupTheTransferAndTheDelivery() throws Exception {
-        Cookie courier = tokenCookie(login(FakeDeliverySeeder.DEMO_COURIER_EMAIL, DEMO_PASSWORD, false)
+        theSeededParcelsAreRealOrdersOfTheDemoMerchantAtTheirStartingStatus();
+        Cookie courier = tokenCookie(login(DemoCourierSeeder.DEMO_COURIER_EMAIL, DEMO_PASSWORD, false)
                 .andExpect(status().isOk()).andReturn());
 
         JsonNode today = read(mvc.perform(get(TASKS + "/today").cookie(courier))
@@ -74,7 +105,7 @@ class FakeDeliveryWiringTest extends IntegrationTest {
         mvc.perform(get(TASKS + "/history").cookie(courier))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.totalElements").value(3));
-        mvc.perform(get(TASKS + "/history").cookie(courier).param("trackingNumber", "sd2611 060007"))
+        mvc.perform(get(TASKS + "/history").cookie(courier).param("trackingNumber", typedLoosely(run.parcel(7).trackingNumber())))
                 .andExpect(jsonPath("$.totalElements").value(1))
                 .andExpect(jsonPath("$.content[0].type").value("DELIVERY"));
 
@@ -85,7 +116,7 @@ class FakeDeliveryWiringTest extends IntegrationTest {
         mvc.perform(get(TASKS + "/{id}", task).cookie(courier))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.items.length()").value(3))
-                .andExpect(jsonPath("$.items[0].trackingNumber").value("SD2611060001"))
+                .andExpect(jsonPath("$.items[0].trackingNumber").value(run.parcel(1).trackingNumber()))
                 .andExpect(jsonPath("$.items[0].contact.name").value("Delgoda Spice Traders"))
                 .andExpect(jsonPath("$.items[0].from.city").value("Delgoda"))
                 .andExpect(jsonPath("$.items[0].to.city").value("Deniyaya"))
@@ -164,7 +195,7 @@ class FakeDeliveryWiringTest extends IntegrationTest {
     private void walkTheDelivery(Cookie courier, String task) throws Exception {
         mvc.perform(get(TASKS + "/{id}", task).cookie(courier))
                 .andExpect(jsonPath("$.originBranch").value("MATARA"))
-                .andExpect(jsonPath("$.items[0].trackingNumber").value("SD2611060006"))
+                .andExpect(jsonPath("$.items[0].trackingNumber").value(run.parcel(6).trackingNumber()))
                 .andExpect(jsonPath("$.items[0].contact.name").value("Anoma Rathnayake"))
                 .andExpect(jsonPath("$.items[0].codAmount").value(2450.00));
 
@@ -227,9 +258,14 @@ class FakeDeliveryWiringTest extends IntegrationTest {
 
     // ---- Helpers ----
 
-    /** Demo parcel {@code number} (tracking number {@code SD26110600NN}). */
+    /** Demo parcel {@code number} of this run. */
     private UUID parcelId(int number) {
-        return deliveries.findByTrackingNumber(String.format("SD26110600%02d", number)).orElseThrow().id();
+        return run.parcelId(number);
+    }
+
+    /** "SD2611104827" → "sd2611 104827": lower case with a space, as a courier might type it. */
+    private static String typedLoosely(String trackingNumber) {
+        return trackingNumber.substring(0, 6).toLowerCase() + " " + trackingNumber.substring(6);
     }
 
     private ResultActions outcome(String task, int parcel, Map<String, ?> body, Cookie cookie) throws Exception {

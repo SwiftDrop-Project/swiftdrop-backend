@@ -34,11 +34,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * The parcel status and the task outcome are written in one transaction: when dispatch fails after delivery already
- * changed the parcel, nothing is kept. Runs a real transaction against both (TEMPORARY) fakes, which undo their
- * in-memory changes on rollback like the real tables; a Mockito spy makes dispatch fail.
+ * changed the parcel, nothing is kept. Runs a real transaction against the real delivery module (PostgreSQL in
+ * Testcontainers; the parcel and history rows are checked) and the TEMPORARY fake dispatch, which undoes its in-memory
+ * changes on rollback like a real table would; a Mockito spy makes dispatch fail. The parcels are the demo seeder's.
  */
 @TestPropertySource(properties = {
-        "swiftdrop.dev.fake-delivery=true",
         "swiftdrop.dev.fake-dispatch=true",
         "swiftdrop.seed.demo-users=true",
         "swiftdrop.seed.demo-password=" + CourierRollbackTest.DEMO_PASSWORD
@@ -67,7 +67,7 @@ class CourierRollbackTest extends IntegrationTest {
     @Test
     void whenDispatchFailsTheParcelKeepsItsStatusAndHistory() throws Exception {
         AssignmentView pickup = task("PICKUP");
-        DeliverySnapshot parcel = parcel("SD2611060001");
+        DeliverySnapshot parcel = parcel(pickup, 0);
         List<ParcelStatusEntry> history = deliveries.history(parcel.id());
         doThrow(new IllegalStateException("dispatch is down")).when(assignments).recordOutcome(any());
 
@@ -85,8 +85,8 @@ class CourierRollbackTest extends IntegrationTest {
     @Test
     void aHandoverThatFailsHalfwayKeepsNothing() throws Exception {
         AssignmentView transfer = task("TRANSFER");
-        DeliverySnapshot first = parcel("SD2611060004");
-        DeliverySnapshot second = parcel("SD2611060005");
+        DeliverySnapshot first = parcel(transfer, 0);
+        DeliverySnapshot second = parcel(transfer, 1);
         outcome(transfer, first, Map.of("outcome", "LOADED")).andExpect(status().isOk());
         outcome(transfer, second, Map.of("outcome", "LOADED")).andExpect(status().isOk());
         AssignmentView loaded = assignments.findByIdForCourier(transfer.id(), courierId).orElseThrow();
@@ -117,8 +117,9 @@ class CourierRollbackTest extends IntegrationTest {
         throw new AssertionError("No demo task of type " + type);
     }
 
-    private DeliverySnapshot parcel(String trackingNumber) {
-        return deliveries.findByTrackingNumber(trackingNumber).orElseThrow();
+    /** The parcel of the task's item at {@code index}, read from the database. */
+    private DeliverySnapshot parcel(AssignmentView task, int index) {
+        return deliveries.findById(task.items().get(index).parcelId()).orElseThrow();
     }
 
     private ResultActions outcome(AssignmentView task, DeliverySnapshot parcel, Map<String, ?> body)

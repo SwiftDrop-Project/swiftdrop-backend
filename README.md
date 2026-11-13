@@ -188,8 +188,7 @@ secrets in the code.
 | `DEMO_PASSWORD` | empty | No | Password for the demo accounts |
 | `GOOGLE_CLIENT_ID` | empty | No | Google OAuth client ID. Google sign-in is on only when both Google values are set. |
 | `GOOGLE_CLIENT_SECRET` | empty | No | Google OAuth client secret. Never commit it. |
-| `SWIFTDROP_FAKE_DELIVERY` | `false` | No | **Temporary**, local demos only: `true` gives the courier endpoints an in-memory delivery module. Use it with `SWIFTDROP_FAKE_DISPATCH`. Removed once delivery is implemented. |
-| `SWIFTDROP_FAKE_DISPATCH` | `false` | No | **Temporary**, local demos only: `true` gives the courier endpoints in-memory courier tasks. With both fake flags and `SEED_DEMO_USERS=true`, `courier@swiftdrop.lk` gets one PICKUP, one TRANSFER and one DELIVERY task (Delgoda → Gampaha → Matara → Deniyaya). With only one flag the courier endpoints answer 503. Nothing is saved. Removed once dispatch is implemented. |
+| `SWIFTDROP_FAKE_DISPATCH` | `false` | No | **Temporary**, local demos only: `true` gives the courier endpoints in-memory courier tasks. With `SEED_DEMO_USERS=true` and a **local** database (`DB_URL` host `localhost` or `postgres`), every start creates 9 real demo parcels (orders of `merchant@swiftdrop.lk`, tracking numbers in the log) and gives `courier@swiftdrop.lk` one PICKUP, one TRANSFER and one DELIVERY task (Delgoda → Gampaha → Matara → Deniyaya). The tasks are gone after a restart; the parcels stay. With any other database (e.g. Neon) it logs a warning and creates nothing. Without the flag the courier endpoints answer 503. Removed once dispatch is implemented. |
 
 The connection pool is small on purpose (at most 3 connections, none kept while idle), because the
 whole team shares one Neon database. These values are fixed in `application.yml`.

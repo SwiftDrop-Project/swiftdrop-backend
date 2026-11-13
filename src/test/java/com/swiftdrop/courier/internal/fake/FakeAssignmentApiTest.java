@@ -26,7 +26,9 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -40,14 +42,17 @@ class FakeAssignmentApiTest {
     private final UUID courier = UUID.randomUUID();
     private final UUID otherCourier = UUID.randomUUID();
     private FakeAssignmentApi fake;
-    private FakeDeliveryApi deliveries;
 
+    /** The demo tasks, with random parcel ids: this fake never looks at parcels. */
     @BeforeEach
     void seed() {
-        Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
-        fake = new FakeAssignmentApi(clock);
-        deliveries = new FakeDeliveryApi(clock);
-        FakeDeliverySeeder.seed(deliveries, fake, courier, otherCourier, NOW);
+        fake = new FakeAssignmentApi(Clock.fixed(NOW, ZoneOffset.UTC));
+        Map<Integer, UUID> parcelIds = new HashMap<>();
+        for (int number = 1; number <= 9; number++) {
+            parcelIds.put(number, UUID.randomUUID());
+        }
+        DemoCourierSeeder.assignments(courier, otherCourier, LocalDate.of(2026, 11, 6), NOW, parcelIds)
+                .forEach(fake::put);
     }
 
     @AfterEach
@@ -194,7 +199,7 @@ class FakeAssignmentApiTest {
         fake.recordOutcome(command(pickup, parcel, ItemOutcome.COLLECTED));
         fake.recordOutcome(new RecordOutcomeCommand(pickup.id(), parcel, courier, ItemOutcome.HANDED_OVER, null,
                 null, null, "S. Silva", null));
-        FakeDeliveryApiTest.finish(TransactionSynchronization.STATUS_ROLLED_BACK);
+        finish(TransactionSynchronization.STATUS_ROLLED_BACK);
 
         assertThat(fake.findByIdForCourier(pickup.id(), courier)).contains(pickup);
     }
@@ -211,6 +216,13 @@ class FakeAssignmentApiTest {
 
     private RecordOutcomeCommand command(AssignmentView task, UUID parcelId, ItemOutcome outcome) {
         return new RecordOutcomeCommand(task.id(), parcelId, courier, outcome, null, null, null, null, null);
+    }
+
+    /** Ends the test "transaction" like a transaction manager would. */
+    private static void finish(int status) {
+        List<TransactionSynchronization> synchronizations = TransactionSynchronizationManager.getSynchronizations();
+        TransactionSynchronizationManager.clearSynchronization();
+        synchronizations.forEach(synchronization -> synchronization.afterCompletion(status));
     }
 
     private static void assertCode(Runnable call, Class<? extends ApiException> type, ErrorCode code) {

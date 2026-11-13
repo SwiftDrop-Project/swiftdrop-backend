@@ -1,4 +1,4 @@
-// TEMPORARY - delete when WP3 and WP8 implement DeliveryApi and AssignmentApi (then there is always an implementation).
+// TEMPORARY - delete when WP8 implements AssignmentApi (then there is always an implementation).
 package com.swiftdrop.courier;
 
 import com.swiftdrop.IntegrationTest;
@@ -14,7 +14,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * The normal test context has no DeliveryApi and no AssignmentApi at all (no fakes, no mocks): the app starts and
+ * The normal test context has the real DeliveryApi but no AssignmentApi (no fake, no mock): the app starts and
  * every courier endpoint answers 503.
  */
 class CourierUnavailableTest extends IntegrationTest {

@@ -601,11 +601,12 @@ the same transaction (both are saved, or neither).
 - A courier sees only their own tasks and the parcels in them: another courier's task or parcel, or an unknown id →
   `404 NOT_FOUND`. A non-UUID id → `400 VALIDATION_FAILED`.
 - "Today" is the current day in Sri Lankan time (Asia/Colombo).
-- Until dispatch (WP8) and delivery (WP3) are implemented, every courier endpoint answers `503 SERVICE_UNAVAILABLE`.
-  For local demos (temporary): `SWIFTDROP_FAKE_DELIVERY=true`, `SWIFTDROP_FAKE_DISPATCH=true` and
-  `SEED_DEMO_USERS=true` give `courier@swiftdrop.lk` one task of each type in memory (Delgoda → Gampaha branch →
-  Matara branch → Deniyaya, tracking numbers `SD2611060001`-`SD2611060008`). Nothing is saved; a restart resets
-  them. With only one of the two flags, the endpoints still answer `503`.
+- Until dispatch (WP8) is implemented, every courier endpoint answers `503 SERVICE_UNAVAILABLE` (delivery, WP3, is
+  implemented). For local demos (temporary): `SWIFTDROP_FAKE_DISPATCH=true` and `SEED_DEMO_USERS=true` give
+  `courier@swiftdrop.lk` one task of each type in memory (Delgoda → Gampaha branch → Matara branch → Deniyaya). The
+  parcels are real: every start creates 9 new ones (orders of `merchant@swiftdrop.lk`; the tracking numbers are in
+  the backend log), but only on a local database (`DB_URL` host `localhost` or `postgres`). With any other database
+  nothing is created and the courier has no tasks. The tasks are gone after a restart; the parcels stay.
 
 ### Item outcomes (what happened to one parcel in one task)
 
@@ -783,7 +784,8 @@ Proof-of-delivery photos (upload and download) come in a later version.
 3. The task is open (`409` `ASSIGNMENT_CLOSED`).
 4. The step is allowed for the item (`409` `TASK_STEP_NOT_ALLOWED`).
 5. The parcel can make the move (`409` `INVALID_STATUS_TRANSITION`).
-6. The parcel status and the outcome are saved together. A clash with another change → `409` `TASK_STEP_NOT_ALLOWED`.
+6. The parcel status and the outcome are saved together. A clash with another change: on the parcel →
+   `409` `INVALID_STATUS_TRANSITION`, on the task → `409` `TASK_STEP_NOT_ALLOWED`. Either way, reload the task.
 
 ### Validation rules (courier)
 

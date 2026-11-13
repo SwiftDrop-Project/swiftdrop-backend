@@ -35,7 +35,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * it rolls back ({@link FakeTransactions}), like the real tables would be.
  *
  * <p>{@code @Primary}: if a real implementation exists while the flag is still on, this one wins instead of the app
- * failing on two beans, and {@link FakeDeliverySeeder} logs a warning.
+ * failing on two beans, and {@link DemoCourierSeeder} logs a warning.
  */
 @Component
 @Primary
