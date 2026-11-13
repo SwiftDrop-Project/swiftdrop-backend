@@ -78,6 +78,8 @@ Change it in the same PR as the code, and tell the frontend team.
 | 409 | `ASSIGNMENT_STARTED` | Dispatch: cancelling or reassigning a task the courier has already started |
 | 409 | `ASSIGNMENT_NEEDS_PARCEL` | Dispatch: removing the last parcel of a task |
 | 409 | `ASSIGNMENT_CHANGED` | Dispatch: someone else changed the task at the same moment |
+| 409 | `WEBHOOK_LIMIT_REACHED` | Webhooks: creating or turning on a 6th active subscription |
+| 409 | `WEBHOOK_DELIVERY_NOT_RETRYABLE` | Webhooks: retrying a delivery that is not `FAILED` |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | Request body is not `application/json` |
 | 429 | `TOO_MANY_REQUESTS` | Too many requests from this IP address; the `Retry-After` header says how many seconds to wait |
 | 500 | `INTERNAL_ERROR` | Anything unexpected (generic message only) |
@@ -102,6 +104,8 @@ Messages of the new codes (show them as-is):
 | `ASSIGNMENT_STARTED` | The courier has already started this task. |
 | `ASSIGNMENT_NEEDS_PARCEL` | A task needs at least one parcel. Cancel the task instead. |
 | `ASSIGNMENT_CHANGED` | This task was just changed by someone else. Refresh and try again. |
+| `WEBHOOK_LIMIT_REACHED` | You can have up to 5 active webhooks. Turn one off before adding another. |
+| `WEBHOOK_DELIVERY_NOT_RETRYABLE` | Only failed deliveries can be sent again. |
 | `SERVICE_UNAVAILABLE` | This isn't available yet. Please try again later. |
 
 **Rate limits** (per client IP; over the limit → `429 TOO_MANY_REQUESTS` + `Retry-After: <seconds>`; CORS exposes
@@ -496,6 +500,127 @@ Response `200` — the key with `revokedAt` set. Idempotent.
 Revokes the existing key and creates a new one with the same name.
 
 Response `200` — same shape as **Create**, with the new `rawKey` shown once.
+
+---
+
+## Webhooks (WP6)
+
+A merchant registers HTTPS URLs; SwiftDrop sends a signed `POST` to each one when one of the merchant's parcels
+changes status. Only parcels with a merchant trigger webhooks (customer bookings never do). The merchant endpoints
+require a logged-in `MERCHANT` cookie (`SD_TOKEN`) of an approved merchant; API keys can't manage webhooks (yet).
+The admin endpoints require `ADMIN`.
+
+### Event types
+
+| Type | Sent when the parcel becomes |
+|---|---|
+| `parcel.created` | `CREATED` |
+| `parcel.picked_up` | `PICKED_UP` |
+| `parcel.at_branch` | `AT_BRANCH` |
+| `parcel.in_transit` | `IN_TRANSIT` |
+| `parcel.out_for_delivery` | `OUT_FOR_DELIVERY` |
+| `parcel.delivered` | `DELIVERED` |
+| `parcel.failed` | `FAILED` |
+| `webhook.ping` | Never by a parcel: only `POST /merchant/webhooks/{id}/test`, so it can't be subscribed to |
+
+### Subscription (response)
+
+```json
+{
+  "id": "uuid", "url": "https://shop.example.com/swiftdrop", "eventTypes": ["parcel.delivered", "parcel.failed"],
+  "active": true, "createdAt": "2026-11-13T09:00:00Z", "updatedAt": "2026-11-13T09:00:00Z"
+}
+```
+The secret is never in this shape. The create and rotate responses add it once:
+`"secret": "whsec_…"`. Store it securely; it can't be retrieved again (rotate to get a new one).
+
+### Delivery (response)
+
+```json
+{
+  "id": "uuid", "subscriptionId": "uuid", "eventId": "uuid", "eventType": "parcel.delivered",
+  "status": "PENDING", "attempts": 1, "lastStatusCode": 500, "lastError": "HTTP_500",
+  "nextAttemptAt": "2026-11-13T09:16:00Z", "createdAt": "2026-11-13T09:15:00Z", "deliveredAt": null
+}
+```
+- `status`: `PENDING` (waiting for the next attempt), `SUCCEEDED`, `FAILED` (no more automatic attempts).
+- `lastError`: `null`, `HTTP_<code>`, `TIMEOUT`, `CONNECTION_FAILED` or `URL_NOT_ALLOWED`. The merchant's response
+  body is never stored.
+- `nextAttemptAt` is `null` unless `status` is `PENDING`.
+
+### Endpoints
+
+| Method and path | What it does | Main errors |
+|---|---|---|
+| `POST /merchant/webhooks` `{"url", "eventTypes": [...]}` | Create an active subscription (201, subscription + `secret`) | 400 `url`, `eventTypes`; 403 merchant not approved; 409 `WEBHOOK_LIMIT_REACHED` |
+| `GET /merchant/webhooks` | Your subscriptions, active and turned off, newest first (array of subscriptions) | — |
+| `PATCH /merchant/webhooks/{id}` `{"url"?, "eventTypes"?, "active"?}` | Change only the fields sent (subscription) | 400; 404; 409 `WEBHOOK_LIMIT_REACHED` (turning one on) |
+| `DELETE /merchant/webhooks/{id}` | Turn off (`active: false`; history is kept). 204. Idempotent | 404 |
+| `POST /merchant/webhooks/{id}/rotate-secret` | New secret; the old one stops working at once, also for retries (200, subscription + `secret`) | 404 |
+| `POST /merchant/webhooks/{id}/test` | Queue a `webhook.ping` for this subscription, sent within seconds (202, delivery). Also works while it is turned off, so a URL can be checked before turning it on | 404 |
+| `GET /merchant/webhooks/{id}/deliveries?status=&page=0&size=20` | Delivery history of one subscription, newest first (page of deliveries) | 400 `status`, `page`, `size` (1-100); 404 |
+| `POST /merchant/webhooks/deliveries/{id}/retry` | Send a `FAILED` delivery again, with a new set of attempts (delivery) | 404; 409 `WEBHOOK_DELIVERY_NOT_RETRYABLE` |
+| `GET /admin/webhooks/deliveries?status=FAILED&merchantId=&page=0&size=20` | ADMIN: every merchant's deliveries, newest first (page of deliveries, each with `merchantId`) | 400 |
+| `POST /admin/webhooks/deliveries/{id}/retry` | ADMIN: same as the merchant retry | 404; 409 `WEBHOOK_DELIVERY_NOT_RETRYABLE` |
+
+Another merchant's subscription or delivery answers 404, never 403. A merchant has at most 5 active subscriptions.
+
+### Validation rules (webhooks)
+
+| Field | Rule | `fieldErrors` message |
+|---|---|---|
+| `url` | Required, at most 2048 characters, an absolute `https://` URL | Enter a full https:// address, like https://shop.example.com/webhooks |
+| `url` | No user name or password in it, and the host must not be (or resolve to) a private, loopback or link-local address | This address can't receive webhooks. Use a public https:// address. |
+| `eventTypes` | Required, 1-7 distinct parcel event types from the table above (`webhook.ping` isn't one) | Choose at least one event |
+| `status` (query) | `PENDING`, `SUCCEEDED` or `FAILED` | — |
+
+### What the merchant receives
+
+`POST <url>`, `Content-Type: application/json`:
+
+```json
+{
+  "id": "6f1c2a8e-4b0d-4c1e-9f3a-2d7b8e5c1a90",
+  "type": "parcel.delivered",
+  "createdAt": "2026-11-13T09:15:00Z",
+  "data": {
+    "parcelId": "uuid", "trackingNumber": "SD2611004817", "merchantOrderRef": "TECH-ORD-1001",
+    "status": "DELIVERED", "previousStatus": "OUT_FOR_DELIVERY", "sequence": 7,
+    "branch": null, "failureReason": null
+  }
+}
+```
+- `id` is the event id: the same on every attempt and retry. Ignore an `id` you already processed.
+- `createdAt` is when the parcel changed status, not when this attempt was sent.
+- `sequence` goes up with every status change of the parcel. Ignore an event whose `sequence` is lower than the last
+  one you saw for that parcel (events can arrive late or out of order).
+- `previousStatus` is `null` for `parcel.created`. `branch` (a district code) is set only for `parcel.at_branch`;
+  `failureReason` (a `FailureReason` code) only for `parcel.failed`. `merchantOrderRef` is `null` when the parcel
+  has none.
+- No customer, sender or recipient names, phone numbers, addresses or courier notes are ever sent.
+- A `webhook.ping` has `"data": { "subscriptionId": "uuid" }`.
+
+Headers:
+
+| Header | Value |
+|---|---|
+| `X-SwiftDrop-Event-Id` | Same as `id` |
+| `X-SwiftDrop-Event-Type` | Same as `type` |
+| `X-SwiftDrop-Timestamp` | Unix time in seconds when this attempt was sent (new on every attempt) |
+| `X-SwiftDrop-Signature` | `sha256=` + lowercase hex of HMAC-SHA256(secret, `<timestamp>.<raw body>`) |
+
+To verify a request: compute the HMAC over the timestamp header, a `.` and the **raw** request body (before any JSON
+parsing), compare it with the signature in constant time, and reject timestamps more than 5 minutes old.
+
+### Delivery and retries
+
+- A 2xx answer within 10 seconds counts as delivered. Redirects are not followed.
+- 408, 429, 5xx, timeouts and connection errors are retried: right away, then after 1 min, 5 min, 15 min, 1 h and
+  6 h (6 attempts in all).
+- Any other 4xx, or the 6th failed attempt, makes the delivery `FAILED`. The merchant or an admin can retry it.
+- Delivery is at-least-once and not ordered: use `id` and `sequence`, as above.
+- A change to a subscription (URL, event types, turned off) applies to new events. A turned-off subscription gets no
+  new parcel events, and its `PENDING` parcel deliveries are not sent (a test ping still is).
 
 ---
 

@@ -21,7 +21,7 @@ Every direct sub-package of `com.swiftdrop` is a module. `SwiftdropBackendApplic
 | `reporting` | - | none | TBD |
 | `tracking` | - | none | TBD |
 | `notifications` | NotificationsApi, AccountEmail | `notifications` | TBD |
-| `webhooks` | - | `webhooks` | TBD |
+| `webhooks` | - | `webhooks` (`subscriptions`, `deliveries`) | chanuka (WP6) |
 | `outbox` | - (reads the outbox only through `DeliveryOutboxApi`) | none | TBD |
 | `courier` | - (endpoints only; uses `DeliveryApi`) | none | Kalpani |
 
@@ -49,7 +49,13 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
 - Unbuilt modules have placeholder contracts ("Contract owned by <module> - extend in Phase 0"); the owner extends them.
 - Current dependencies: identity -> notifications, shared; merchants -> identity, shared; delivery -> shared;
   dispatch -> delivery, identity, shared; courier -> delivery, identity, shared; infrastructure -> shared. Nothing
-  depends on courier. Planned: courier -> dispatch (courier tasks).
+  depends on courier. Planned: courier -> dispatch (courier tasks); webhooks -> delivery, merchants, shared (nothing
+  depends on webhooks).
+- webhooks (contract in API.md "Webhooks", being built): reads `ParcelStatusChanged` from `webhooks.q` (declared by
+  infrastructure; never declare it again with other arguments), stores one delivery row per event and subscription,
+  and a scheduled worker sends them. Retries live in the database (`webhooks.deliveries`), not in RabbitMQ queues.
+  Signing secrets are stored encrypted (AES-GCM), never hashed and never logged. Merchants get a public payload,
+  never the raw event (no customer ids, actor ids or notes).
 - dispatch: `AssignmentApi` is implemented; dispatcher endpoints are under `/dispatch` (DISPATCHER and ADMIN, API.md
   "Dispatch"). Delivery has no "waiting for pickup" query, so dispatch keeps `dispatch.pickup_queue` from
   `ParcelStatusChanged` (RabbitMQ queue `dispatch.q`); it fills only while the outbox relay runs
