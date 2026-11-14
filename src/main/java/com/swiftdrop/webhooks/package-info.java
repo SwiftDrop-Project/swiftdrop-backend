@@ -5,9 +5,8 @@
  * <p>Public API: none (endpoints only, under {@code /merchant/webhooks} and {@code /admin/webhooks}). Nothing depends
  * on webhooks.
  *
- * <p>Dependencies: delivery ({@code ParcelStatusChanged}; {@code DeliveryApi.findById} for the merchant order
- * reference until the event carries it), merchants ({@code MerchantApi}: only approved merchants may subscribe),
- * shared.
+ * <p>Dependencies: delivery ({@code ParcelStatusChanged}, which also carries the merchant order reference),
+ * merchants ({@code MerchantApi}: only approved merchants may subscribe), shared.
  *
  * <p>Owner: chanuka (WP6). Events published: none. Events consumed: {@code ParcelStatusChanged} from RabbitMQ queue
  * {@code webhooks.q} (declared by infrastructure; webhooks must not declare it again, because a declaration with other

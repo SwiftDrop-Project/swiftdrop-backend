@@ -1,7 +1,5 @@
 package com.swiftdrop.webhooks.internal.application;
 
-import com.swiftdrop.delivery.DeliveryApi;
-import com.swiftdrop.delivery.DeliverySnapshot;
 import com.swiftdrop.delivery.ParcelStatusChanged;
 import com.swiftdrop.webhooks.internal.domain.WebhookEventType;
 import com.swiftdrop.webhooks.internal.domain.WebhookSubscription;
@@ -38,21 +36,19 @@ public class WebhookFanOutService {
 
     private final WebhookSubscriptionRepository subscriptions;
     private final WebhookDeliveryRepository deliveries;
-    private final DeliveryApi parcels;
     private final WebhookPayloadFactory payloads;
     private final Clock clock;
 
     @Autowired
     public WebhookFanOutService(WebhookSubscriptionRepository subscriptions, WebhookDeliveryRepository deliveries,
-                                DeliveryApi parcels, WebhookPayloadFactory payloads) {
-        this(subscriptions, deliveries, parcels, payloads, DATABASE_CLOCK);
+                                WebhookPayloadFactory payloads) {
+        this(subscriptions, deliveries, payloads, DATABASE_CLOCK);
     }
 
     WebhookFanOutService(WebhookSubscriptionRepository subscriptions, WebhookDeliveryRepository deliveries,
-                         DeliveryApi parcels, WebhookPayloadFactory payloads, Clock clock) {
+                         WebhookPayloadFactory payloads, Clock clock) {
         this.subscriptions = subscriptions;
         this.deliveries = deliveries;
-        this.parcels = parcels;
         this.payloads = payloads;
         this.clock = clock;
     }
@@ -72,8 +68,8 @@ public class WebhookFanOutService {
             return 0;
         }
 
-        // built once: every subscription gets the same bytes
-        String payload = payloads.build(event, merchantOrderRef(event.parcelId()));
+        // built once: every subscription gets the same bytes; the event carries the merchant's order id (null if none)
+        String payload = payloads.build(event, event.merchantOrderRef());
         Instant now = clock.instant();
         int added = 0;
         for (WebhookSubscription subscription : targets) {
@@ -82,10 +78,5 @@ public class WebhookFanOutService {
         }
         log.info("Webhook fan-out for event {} ({}): {} new deliveries", event.eventId(), type.wireName(), added);
         return added;
-    }
-
-    /** TEMPORARY until ParcelStatusChanged carries it: read from delivery. Null when unknown. */
-    private String merchantOrderRef(UUID parcelId) {
-        return parcels.findById(parcelId).map(DeliverySnapshot::merchantOrderRef).orElse(null);
     }
 }

@@ -1,13 +1,8 @@
 package com.swiftdrop.webhooks.internal.application;
 
 import com.swiftdrop.IntegrationTest;
-import com.swiftdrop.delivery.CreateDeliveryCommand;
-import com.swiftdrop.delivery.DeliveryApi;
-import com.swiftdrop.delivery.DeliveryContact;
-import com.swiftdrop.delivery.DeliverySnapshot;
 import com.swiftdrop.delivery.ParcelStatus;
 import com.swiftdrop.delivery.ParcelStatusChanged;
-import com.swiftdrop.shared.reference.District;
 import com.swiftdrop.webhooks.internal.domain.WebhookEventType;
 import com.swiftdrop.webhooks.internal.domain.WebhookSubscription;
 import com.swiftdrop.webhooks.internal.persistence.WebhookSubscriptionRepository;
@@ -15,7 +10,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 
-import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -43,9 +37,6 @@ class WebhookFanOutTest extends IntegrationTest {
 
     @Autowired
     WebhookSubscriptionRepository subscriptions;
-
-    @Autowired
-    DeliveryApi deliveries;
 
     @Autowired
     JdbcTemplate jdbc;
@@ -140,22 +131,19 @@ class WebhookFanOutTest extends IntegrationTest {
     }
 
     @Test
-    void theOrderReferenceComesFromTheParcel() {
+    void theOrderReferenceComesFromTheEvent() {
         UUID merchant = UUID.randomUUID();
         subscribe(merchant, Set.of(WebhookEventType.PARCEL_CREATED));
-        DeliverySnapshot parcel = deliveries.create(new CreateDeliveryCommand(null, merchant, "TECH-ORD-1001",
-                new DeliveryContact("Lanka Crafts", "+94760000101", "12 High Level Road", "Nugegoda", District.COLOMBO),
-                new DeliveryContact("Nimal Perera", "+94760000201", "45 Peradeniya Road", "Kandy", District.KANDY),
-                new BigDecimal("1.20"), null, null));
-        ParcelStatusChanged created = new ParcelStatusChanged(UUID.randomUUID(), parcel.id(), 0,
-                parcel.trackingNumber(), null, merchant, null, ParcelStatus.CREATED, merchant, "MERCHANT", null, null,
-                LATER, null);
+        // delivery puts the merchant's order id into the event: no parcel has to exist for the webhook
+        ParcelStatusChanged created = new ParcelStatusChanged(UUID.randomUUID(), UUID.randomUUID(), 0,
+                "SD2611000042", null, merchant, null, ParcelStatus.CREATED, merchant, "MERCHANT", null, null,
+                LATER, null, "TECH-ORD-1001");
 
         assertThat(fanOut.handle(created)).isEqualTo(1);
 
         assertThat((String) rows(created.eventId()).getFirst().get("payload"))
                 .contains("\"merchantOrderRef\":\"TECH-ORD-1001\"")
-                .contains("\"trackingNumber\":\"" + parcel.trackingNumber() + "\"")
+                .contains("\"trackingNumber\":\"SD2611000042\"")
                 .contains("\"previousStatus\":null");
     }
 
