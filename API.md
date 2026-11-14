@@ -57,11 +57,13 @@ Change it in the same PR as the code, and tell the frontend team.
 | 400 | `TOO_MANY_ATTEMPTS` | 5 wrong tries: this code no longer works, even the right one. Ask for a new one |
 | 401 | `UNAUTHENTICATED` | Not logged in / token expired / session ended (password changed, account disabled) |
 | 401 | `INVALID_CREDENTIALS` | Wrong identifier or password |
+| 401 | `API_KEY_REVOKED` | A request uses an `X-Api-Key` that was revoked |
 | 403 | `FORBIDDEN` | Logged in, wrong role |
 | 403 | `EMAIL_NOT_VERIFIED` | Login with the right password, but the email is not confirmed yet |
 | 403 | `ACCOUNT_PENDING_APPROVAL` | Merchant not approved yet |
 | 403 | `ACCOUNT_REJECTED` | Merchant application rejected |
 | 403 | `ACCOUNT_DISABLED` | Account disabled by admin |
+| 403 | `PASSWORD_CHANGE_REQUIRED` | A staff account with a temporary password calls any protected endpoint except the password-change endpoints |
 | 403 | `MERCHANT_NOT_APPROVED` | A merchant whose account isn't approved (API key requests; creating a webhook) |
 | 403 | `PROFILE_INCOMPLETE` | Google sign-up not finished: only `GET /auth/me`, `POST /auth/logout` and `POST /auth/complete-profile` work |
 | 404 | `NOT_FOUND` | Resource not found |
@@ -82,6 +84,7 @@ Change it in the same PR as the code, and tell the frontend team.
 | 409 | `ASSIGNMENT_CHANGED` | Dispatch: someone else changed the task at the same moment |
 | 409 | `WEBHOOK_LIMIT_REACHED` | Webhooks: creating or turning on a 6th active subscription |
 | 409 | `WEBHOOK_DELIVERY_NOT_RETRYABLE` | Webhooks: retrying a delivery that is not `FAILED` |
+| 409 | `ACCOUNT_REMOVED` | An admin action or password action on a removed account |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | Request body is not `application/json` |
 | 429 | `TOO_MANY_REQUESTS` | Too many requests from this IP address; the `Retry-After` header says how many seconds to wait |
 | 500 | `INTERNAL_ERROR` | Anything unexpected (generic message only) |
@@ -112,6 +115,9 @@ Messages of the new codes (show them as-is):
 | `CANNOT_CHANGE_OWN_ACCOUNT` (409) | You can't block your own account. |
 | `ACCOUNT_NOT_ACTIVE` (409) | Only active accounts can be blocked. Refresh to see the account's latest status. |
 | `ACCOUNT_NOT_BLOCKED` (409) | Only blocked accounts can be unblocked. Refresh to see the account's latest status. |
+| `PASSWORD_CHANGE_REQUIRED` | Change your temporary password to continue. |
+| `API_KEY_REVOKED` | This API key has been revoked. |
+| `ACCOUNT_REMOVED` | This account has been permanently removed and cannot be modified. |
 | `SERVICE_UNAVAILABLE` | This isn't available yet. Please try again later. |
 
 **Rate limits** (per client IP; over the limit → `429 TOO_MANY_REQUESTS` + `Retry-After: <seconds>`; CORS exposes
