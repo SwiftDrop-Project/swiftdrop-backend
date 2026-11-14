@@ -35,12 +35,14 @@ public class AdminWebhookController {
     }
 
     @GetMapping("/deliveries")
-    @Operation(summary = "Every merchant's webhook deliveries, newest first (e.g. status=FAILED)")
+    @Operation(summary = "Every merchant's webhook deliveries, newest first (e.g. status=FAILED, "
+            + "eventType=parcel.failed)")
     public PageResponse<AdminWebhookDeliveryResponse> list(@RequestParam(required = false) DeliveryStatus status,
                                                            @RequestParam(required = false) UUID merchantId,
+                                                           @RequestParam(required = false) String eventType,
                                                            @RequestParam(defaultValue = "0") int page,
                                                            @RequestParam(defaultValue = "20") int size) {
-        return deliveries.adminList(status, merchantId, page, size);
+        return deliveries.adminList(status, merchantId, eventType, page, size);
     }
 
     @PostMapping("/deliveries/{id}/retry")

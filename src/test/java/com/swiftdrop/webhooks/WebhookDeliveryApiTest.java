@@ -21,7 +21,9 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.contains;
+import static org.hamcrest.Matchers.everyItem;
 import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.is;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -201,6 +203,83 @@ class WebhookDeliveryApiTest extends IntegrationTest {
         mvc.perform(get(path + "?status=LOST").cookie(merchant)).andExpect(status().isBadRequest());
     }
 
+    // ---------- history: event type filter ----------
+
+    @Test
+    void historyCanBeFilteredByEventType() throws Exception {
+        Cookie merchant = approvedMerchant();
+        String subscription = subscribe(merchant);
+        Instant base = Instant.now();
+        UUID olderDelivered = delivery(subscription, WebhookEventType.PARCEL_DELIVERED, base.minusSeconds(300));
+        delivery(subscription, WebhookEventType.PARCEL_FAILED, base.minusSeconds(200));
+        UUID newerDelivered = delivery(subscription, WebhookEventType.PARCEL_DELIVERED, base.minusSeconds(100));
+
+        mvc.perform(get(PATH + "/" + subscription + "/deliveries?eventType=parcel.delivered").cookie(merchant))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[*].id", contains(newerDelivered.toString(), olderDelivered.toString())))
+                .andExpect(jsonPath("$.content[*].eventType", everyItem(is("parcel.delivered"))))
+                .andExpect(jsonPath("$.totalElements").value(2));
+    }
+
+    @Test
+    void testPingsCanBeFoundWithTheirEventType() throws Exception {
+        Cookie merchant = approvedMerchant();
+        String subscription = subscribe(merchant);
+        delivery(subscription, WebhookEventType.PARCEL_DELIVERED, Instant.now().minusSeconds(60));
+        String ping = readJson(mvc.perform(post(PATH + "/" + subscription + "/test").cookie(merchant))
+                .andExpect(status().isAccepted())).get("id").asString();
+
+        mvc.perform(get(PATH + "/" + subscription + "/deliveries?eventType=webhook.ping").cookie(merchant))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[*].id", contains(ping)))
+                .andExpect(jsonPath("$.content[0].eventType").value("webhook.ping"));
+    }
+
+    @Test
+    void statusAndEventTypeFiltersCombine() throws Exception {
+        Cookie merchant = approvedMerchant();
+        String subscription = subscribe(merchant);
+        UUID failedFailure = delivery(subscription, WebhookEventType.PARCEL_FAILED, Instant.now().minusSeconds(300));
+        delivery(subscription, WebhookEventType.PARCEL_FAILED, Instant.now().minusSeconds(200));      // still PENDING
+        UUID failedDelivered = delivery(subscription, WebhookEventType.PARCEL_DELIVERED, Instant.now().minusSeconds(100));
+        markFailed(failedFailure);
+        markFailed(failedDelivered);
+
+        mvc.perform(get(PATH + "/" + subscription + "/deliveries?status=FAILED&eventType=parcel.failed")
+                        .cookie(merchant))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[*].id", contains(failedFailure.toString())));
+    }
+
+    @Test
+    void noEventTypeOrAnEmptyOneMeansAllEvents() throws Exception {
+        Cookie merchant = approvedMerchant();
+        String subscription = subscribe(merchant);
+        delivery(subscription, WebhookEventType.PARCEL_DELIVERED, Instant.now().minusSeconds(200));
+        delivery(subscription, WebhookEventType.PARCEL_FAILED, Instant.now().minusSeconds(100));
+
+        mvc.perform(get(PATH + "/" + subscription + "/deliveries").cookie(merchant))
+                .andExpect(jsonPath("$.totalElements").value(2));
+        mvc.perform(get(PATH + "/" + subscription + "/deliveries?eventType=").cookie(merchant))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(2));
+    }
+
+    @Test
+    void anUnknownEventTypeAnswers400() throws Exception {
+        Cookie merchant = approvedMerchant();
+        String path = PATH + "/" + subscribe(merchant) + "/deliveries";
+
+        mvc.perform(get(path + "?eventType=parcel.lost").cookie(merchant))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.fieldErrors.eventType").value("'parcel.lost' isn't a webhook event"));
+        // the enum name is not a wire name
+        mvc.perform(get(path + "?eventType=PARCEL_DELIVERED").cookie(merchant))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.fieldErrors.eventType").exists());
+    }
+
     // ---------- retry ----------
 
     @Test
@@ -279,6 +358,24 @@ class WebhookDeliveryApiTest extends IntegrationTest {
     }
 
     @Test
+    void adminsCanFilterByEventTypeToo() throws Exception {
+        Cookie admin = loginAsAdmin();
+        String subscription = subscribe(approvedMerchant());
+        UUID merchantId = merchantOf(subscription);
+        UUID failure = delivery(subscription, WebhookEventType.PARCEL_FAILED, Instant.now().minusSeconds(100));
+        delivery(subscription, WebhookEventType.PARCEL_DELIVERED, Instant.now());
+
+        mvc.perform(get(ADMIN_PATH + "?merchantId=" + merchantId + "&eventType=parcel.failed").cookie(admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[*].id", contains(failure.toString())))
+                .andExpect(jsonPath("$.content[0].merchantId").value(merchantId.toString()));
+
+        mvc.perform(get(ADMIN_PATH + "?eventType=parcel.lost").cookie(admin))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.fieldErrors.eventType").value("'parcel.lost' isn't a webhook event"));
+    }
+
+    @Test
     void adminsCanRetryAnyMerchantsFailedDelivery() throws Exception {
         Cookie admin = loginAsAdmin();
         String subscription = subscribe(approvedMerchant());
@@ -321,9 +418,13 @@ class WebhookDeliveryApiTest extends IntegrationTest {
 
     /** A PENDING parcel delivery for this subscription, created at {@code createdAt}. */
     private UUID delivery(String subscription, Instant createdAt) {
+        return delivery(subscription, WebhookEventType.PARCEL_DELIVERED, createdAt);
+    }
+
+    /** A PENDING delivery of {@code type} for this subscription, created at {@code createdAt}. */
+    private UUID delivery(String subscription, WebhookEventType type, Instant createdAt) {
         return deliveries.saveAndFlush(WebhookDelivery.pending(UUID.randomUUID(), UUID.fromString(subscription),
-                merchantOf(subscription), WebhookEventType.PARCEL_DELIVERED, "{\"id\":\"x\"}",
-                createdAt.truncatedTo(ChronoUnit.MICROS))).getId();
+                merchantOf(subscription), type, "{\"id\":\"x\"}", createdAt.truncatedTo(ChronoUnit.MICROS))).getId();
     }
 
     private void markFailed(UUID id) {

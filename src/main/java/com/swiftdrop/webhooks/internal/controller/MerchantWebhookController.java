@@ -91,12 +91,14 @@ public class MerchantWebhookController {
     }
 
     @GetMapping("/{id}/deliveries")
-    @Operation(summary = "Delivery history of one subscription, newest first")
+    @Operation(summary = "Delivery history of one subscription, newest first (optional status and eventType, "
+            + "e.g. eventType=parcel.delivered or webhook.ping)")
     public PageResponse<WebhookDeliveryResponse> deliveries(Authentication authentication, @PathVariable UUID id,
                                                             @RequestParam(required = false) DeliveryStatus status,
+                                                            @RequestParam(required = false) String eventType,
                                                             @RequestParam(defaultValue = "0") int page,
                                                             @RequestParam(defaultValue = "20") int size) {
-        return deliveries.history(merchantId(authentication), id, status, page, size);
+        return deliveries.history(merchantId(authentication), id, status, eventType, page, size);
     }
 
     @PostMapping("/deliveries/{deliveryId}/retry")

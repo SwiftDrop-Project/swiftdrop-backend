@@ -13,19 +13,15 @@ import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 
-/** The admin list filters with {@link JpaSpecificationExecutor} (status and merchant are both optional). */
+/**
+ * Both delivery lists (a merchant's history and the admin list) filter with {@link JpaSpecificationExecutor}:
+ * subscription or merchant, status and event type are all optional (see WebhookDeliveryService).
+ */
 public interface WebhookDeliveryRepository extends JpaRepository<WebhookDelivery, UUID>,
         JpaSpecificationExecutor<WebhookDelivery> {
 
     /** One subscription's history, newest first. */
     Page<WebhookDelivery> findBySubscriptionIdOrderByCreatedAtDesc(UUID subscriptionId, Pageable pageable);
-
-    /** GET /merchant/webhooks/{id}/deliveries; the order comes with {@code pageable}. */
-    Page<WebhookDelivery> findBySubscriptionId(UUID subscriptionId, Pageable pageable);
-
-    /** GET /merchant/webhooks/{id}/deliveries?status=; the order comes with {@code pageable}. */
-    Page<WebhookDelivery> findBySubscriptionIdAndStatus(UUID subscriptionId, DeliveryStatus status,
-                                                        Pageable pageable);
 
     /** The ownership check: empty for another merchant's delivery (the caller answers 404). */
     Optional<WebhookDelivery> findByIdAndMerchantId(UUID id, UUID merchantId);
