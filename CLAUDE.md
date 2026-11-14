@@ -23,7 +23,7 @@ Every direct sub-package of `com.swiftdrop` is a module. `SwiftdropBackendApplic
 | `notifications` | NotificationsApi, AccountEmail | `notifications` | TBD |
 | `webhooks` | - | `webhooks` | TBD |
 | `outbox` | - (reads the outbox only through `DeliveryOutboxApi`) | none | TBD |
-| `courier` | - (endpoints only; uses `DeliveryApi`) | none | Kalpani |
+| `courier` | - (endpoints only; uses `DeliveryApi` and dispatch's `AssignmentApi`) | none | Kalpani |
 
 ```
 com.swiftdrop.<module>/
@@ -48,8 +48,8 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
 - A module's public URLs: implement `shared.web.PublicEndpoints` as a bean in the module. Never edit identity's SecurityConfig for that.
 - Unbuilt modules have placeholder contracts ("Contract owned by <module> - extend in Phase 0"); the owner extends them.
 - Current dependencies: identity -> notifications, shared; merchants -> identity, shared; delivery -> pricing, shared;
-  dispatch -> delivery, identity, shared; tracking -> delivery, shared; courier -> delivery, identity, shared;
-  pricing -> shared; infrastructure -> shared. Nothing depends on courier. Planned: courier -> dispatch (courier tasks).
+  dispatch -> delivery, identity, shared; tracking -> delivery, shared; courier -> delivery, dispatch, identity, shared;
+  pricing -> shared; infrastructure -> shared. Nothing depends on courier.
 - dispatch: `AssignmentApi` is implemented; dispatcher endpoints are under `/dispatch` (DISPATCHER and ADMIN, API.md
   "Dispatch"). Delivery has no "waiting for pickup" query, so dispatch keeps `dispatch.pickup_queue` from
   `ParcelStatusChanged` (RabbitMQ queue `dispatch.q`); it fills only while the outbox relay runs
@@ -62,9 +62,10 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
   `GET /tracking/mine`). In-memory simple broker; each instance has its own auto-delete RabbitMQ queue.
   The admin's all-parcels list (`/admin/tracking/parcels`) reads tracking's own `tracking.parcel_index`, filled from
   `ParcelStatusChanged` and from lookups (delivery has no admin search).
-- courier gets `DeliveryApi` through an `ObjectProvider` and answers 503 SERVICE_UNAVAILABLE while nothing implements
-  it. TEMPORARY: `courier/internal/fake` (`SWIFTDROP_FAKE_DELIVERY=true`) is an in-memory `DeliveryApi` for demos;
-  delete it (and its property and tests) when delivery is implemented.
+- courier shows the parcels of the courier's dispatch tasks (`AssignmentApi`) and, on each status change, calls
+  `DeliveryApi.changeStatus` and then `AssignmentApi.recordOutcome` in one transaction (completing the task when its
+  last item closes). It never reads delivery's deprecated `assignedCourierId`. `courier/internal/fake`
+  (`SWIFTDROP_FAKE_DELIVERY`) no longer works with this and its two wiring tests are `@Disabled`: delete them.
 - delivery must never depend on identity: identity -> notifications, and notifications will consume
   `ParcelStatusChanged` (notifications -> delivery), so that would be a cycle. User ids are plain UUIDs and roles are
   plain names (e.g. `COURIER`). Multi-branch: several couriers handle one parcel, so callers authorize

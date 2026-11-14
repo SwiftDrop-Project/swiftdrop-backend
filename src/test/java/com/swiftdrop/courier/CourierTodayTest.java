@@ -26,7 +26,7 @@ class CourierTodayTest extends CourierApiTest {
     private static final ZoneId SRI_LANKA = ZoneId.of("Asia/Colombo");
 
     @Test
-    void asksDeliveryForOpenParcelsAndThoseFinishedSinceSriLankanMidnight() throws Exception {
+    void asksDispatchForOpenTasksAndThoseFinishedSinceSriLankanMidnight() throws Exception {
         Courier courier = registerCourier();
         Instant midnightBefore = startOfTodayInSriLanka();
 
@@ -38,7 +38,7 @@ class CourierTodayTest extends CourierApiTest {
 
         Instant midnightAfter = startOfTodayInSriLanka();
         ArgumentCaptor<Instant> since = ArgumentCaptor.forClass(Instant.class);
-        verify(delivery).findForCourier(eq(courier.id()), since.capture());
+        verify(assignments).findOpenForCourier(eq(courier.id()), since.capture());
         // Two readings, in case the test runs across midnight.
         assertThat(since.getValue()).isIn(midnightBefore, midnightAfter);
     }
@@ -47,14 +47,15 @@ class CourierTodayTest extends CourierApiTest {
     void listsPickupsThenDeliveriesThenFinishedWithCounts() throws Exception {
         Courier courier = registerCourier();
         Instant now = Instant.now();
-        DeliverySnapshot laterPickup = parcel(courier.id(), ParcelStatus.CREATED, at(now, 2), at(now, 2));
-        DeliverySnapshot earlierPickup = parcel(courier.id(), ParcelStatus.CREATED, at(now, 4), at(now, 4));
-        DeliverySnapshot onTheWay = parcel(courier.id(), ParcelStatus.OUT_FOR_DELIVERY, at(now, 3), at(now, 1));
-        DeliverySnapshot deliveredEarlier = parcel(courier.id(), ParcelStatus.DELIVERED, at(now, 6), now.minusSeconds(40));
-        DeliverySnapshot failedLater = parcel(courier.id(), ParcelStatus.FAILED, at(now, 5), now.minusSeconds(20));
-        DeliverySnapshot someoneElses = parcel(UUID.randomUUID(), ParcelStatus.CREATED, at(now, 9), at(now, 9));
-        when(delivery.findForCourier(eq(courier.id()), any())).thenReturn(
-                List.of(deliveredEarlier, laterPickup, someoneElses, onTheWay, failedLater, earlierPickup));
+        // Tasks are assigned at the parcel's assignedAt (see CourierApiTest#given).
+        DeliverySnapshot deliveredEarlier = given(parcel(courier.id(), ParcelStatus.DELIVERED, at(now, 6),
+                now.minusSeconds(40)));
+        DeliverySnapshot laterPickup = given(parcel(courier.id(), ParcelStatus.CREATED, at(now, 2), at(now, 2)));
+        given(parcel(UUID.randomUUID(), ParcelStatus.CREATED, at(now, 9), at(now, 9))); // someone else's task
+        DeliverySnapshot onTheWay = given(parcel(courier.id(), ParcelStatus.OUT_FOR_DELIVERY, at(now, 3), at(now, 1)));
+        DeliverySnapshot failedLater = given(parcel(courier.id(), ParcelStatus.FAILED, at(now, 5),
+                now.minusSeconds(20)));
+        DeliverySnapshot earlierPickup = given(parcel(courier.id(), ParcelStatus.CREATED, at(now, 4), at(now, 4)));
 
         mvc.perform(get(BASE + "/today").cookie(courier.cookie()))
                 .andExpect(status().isOk())
@@ -66,7 +67,9 @@ class CourierTodayTest extends CourierApiTest {
                 .andExpect(jsonPath("$.items[0].parcelId").value(earlierPickup.id().toString()))
                 .andExpect(jsonPath("$.items[0].stop").value("PICKUP"))
                 .andExpect(jsonPath("$.items[0].nextStatuses[0]").value("PICKED_UP"))
-                .andExpect(jsonPath("$.items[1].parcelId").value(laterPickup.id().toString()))
+                .andExpect(jsonPath("$.items[0].task.type").value("PICKUP"))
+                .andExpect(jsonPath("$.items[0].task.outcome").value("PENDING"))
+                .andExpect(jsonPath("$.items[0].task.branch").value("COLOMBO"))                .andExpect(jsonPath("$.items[1].parcelId").value(laterPickup.id().toString()))
                 .andExpect(jsonPath("$.items[2].parcelId").value(failedLater.id().toString()))
                 .andExpect(jsonPath("$.items[2].stop").value("DELIVERY"))
                 .andExpect(jsonPath("$.items[2].nextStatuses[0]").value("AT_BRANCH"))

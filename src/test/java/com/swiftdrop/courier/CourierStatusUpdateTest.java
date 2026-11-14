@@ -5,7 +5,11 @@ import com.swiftdrop.delivery.DeliverySnapshot;
 import com.swiftdrop.delivery.FailureReason;
 import com.swiftdrop.delivery.ParcelStatus;
 import com.swiftdrop.delivery.ParcelStatusEntry;
+import com.swiftdrop.dispatch.AssignmentStatus;
+import com.swiftdrop.dispatch.ItemOutcome;
+import com.swiftdrop.dispatch.RecordOutcomeCommand;
 import com.swiftdrop.shared.error.BusinessRuleException;
+import com.swiftdrop.shared.reference.District;
 import com.swiftdrop.shared.error.ErrorCode;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -39,7 +43,8 @@ class CourierStatusUpdateTest extends CourierApiTest {
         postStatus(parcel.id(), Map.of("status", "PICKED_UP", "note", "  Collected from front desk  "), courier.cookie())
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("PICKED_UP"))
-                .andExpect(jsonPath("$.stop").value("DELIVERY"))
+                .andExpect(jsonPath("$.stop").value("PICKUP"))
+                .andExpect(jsonPath("$.task.outcome").value("COLLECTED"))
                 .andExpect(jsonPath("$.nextStatuses[0]").value("AT_BRANCH"))
                 .andExpect(jsonPath("$.history[0].status").value("PICKED_UP"))
                 .andExpect(jsonPath("$.history[0].note").value("Collected from front desk"))
@@ -138,23 +143,53 @@ class CourierStatusUpdateTest extends CourierApiTest {
                 .andExpect(jsonPath("$.code").value("INVALID_STATUS_TRANSITION"));
     }
 
-    // ---- Known until PR (c) ----
+    // ---- Dispatch task steps ----
 
-    /**
-     * Documents current behaviour, not the wanted one. nextStatuses offers AT_BRANCH after PICKED_UP, but this
-     * endpoint has no branch field, so ChangeStatusCommand rejects the change (branch is required for AT_BRANCH) and
-     * the courier gets a 500. Nothing changes. PR (c) replaces this endpoint with assignment handovers, which send the
-     * branch; delete this test then.
-     */
     @Test
-    void atBranchWithoutABranchIs500AndNothingChanges() throws Exception {
+    void atBranchHandsOverAtTheTasksBranchAndCompletesTheTask() throws Exception {
         Courier courier = registerCourier();
         DeliverySnapshot parcel = given(parcel(courier.id(), ParcelStatus.PICKED_UP));
+        when(delivery.changeStatus(any())).thenReturn(withStatus(parcel, ParcelStatus.AT_BRANCH));
 
         postStatus(parcel.id(), Map.of("status", "AT_BRANCH"), courier.cookie())
-                .andExpect(status().isInternalServerError())
-                .andExpect(jsonPath("$.code").value("INTERNAL_ERROR"));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("AT_BRANCH"))
+                .andExpect(jsonPath("$.task.outcome").value("HANDED_OVER"))
+                .andExpect(jsonPath("$.nextStatuses").isEmpty());
+
+        assertThat(sentCommand().branch()).isEqualTo(District.COLOMBO);
+        ArgumentCaptor<RecordOutcomeCommand> outcome = ArgumentCaptor.forClass(RecordOutcomeCommand.class);
+        verify(assignments).recordOutcome(outcome.capture());
+        assertThat(outcome.getValue().outcome()).isEqualTo(ItemOutcome.HANDED_OVER);
+        assertThat(outcome.getValue().courierId()).isEqualTo(courier.id());
+        verify(assignments).complete(taskOf(parcel.id()).id(), courier.id());
+        assertThat(taskOf(parcel.id()).status()).isEqualTo(AssignmentStatus.COMPLETED);
+    }
+
+    @Test
+    void aFailedDeliveryGoesBackToTheTasksOriginBranch() throws Exception {
+        Courier courier = registerCourier();
+        DeliverySnapshot parcel = given(parcel(courier.id(), ParcelStatus.FAILED));
+        when(delivery.changeStatus(any())).thenReturn(withStatus(parcel, ParcelStatus.AT_BRANCH));
+
+        postStatus(parcel.id(), Map.of("status", "AT_BRANCH", "note", "Back at the hub"), courier.cookie())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.task.outcome").value("RETURNED"));
+
+        assertThat(sentCommand().branch()).isEqualTo(District.COLOMBO);
+    }
+
+    @Test
+    void aStepTheTaskDoesNotHaveIs409() throws Exception {
+        Courier courier = registerCourier();
+        // A delivery task waiting at the branch: the parcel status allows IN_TRANSIT, the task does not.
+        DeliverySnapshot parcel = given(parcel(courier.id(), ParcelStatus.AT_BRANCH));
+
+        postStatus(parcel.id(), Map.of("status", "IN_TRANSIT"), courier.cookie())
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("INVALID_STATUS_TRANSITION"));
         verify(delivery, never()).changeStatus(any());
+        verify(assignments, never()).recordOutcome(any());
     }
 
     // ---- Request rules (400) ----

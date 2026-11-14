@@ -1,5 +1,9 @@
 package com.swiftdrop.dispatch.internal.application;
 
+import java.util.Set;
+import java.util.EnumSet;
+import com.swiftdrop.dispatch.ItemOutcome;
+import com.swiftdrop.dispatch.AssignmentType;
 import com.swiftdrop.dispatch.AssignmentApi;
 import com.swiftdrop.dispatch.AssignmentItemView;
 import com.swiftdrop.dispatch.AssignmentView;
@@ -71,6 +75,18 @@ public class AssignmentService implements AssignmentApi {
                 ? assignments.findClosedForCourier(courierId, page)
                 : assignments.findClosedForCourierAndParcel(courierId, parcelId, page);
         return found.map(CourierAssignment::toView);
+    }
+
+    @Override
+    public Page<AssignmentItemView> findFinishedDeliveriesForCourier(UUID courierId, UUID parcelId,
+                                                                     Pageable pageable) {
+        Objects.requireNonNull(courierId, "courierId");
+        Pageable page = PageRequest.of(pageable.getPageNumber(), Math.min(pageable.getPageSize(), MAX_PAGE_SIZE));
+        Set<ItemOutcome> finished = EnumSet.of(ItemOutcome.DELIVERED, ItemOutcome.FAILED, ItemOutcome.RETURNED);
+        Page<AssignmentItem> found = parcelId == null
+                ? items.findFinishedForCourier(courierId, AssignmentType.DELIVERY, finished, page)
+                : items.findFinishedForCourierAndParcel(courierId, AssignmentType.DELIVERY, finished, parcelId, page);
+        return found.map(AssignmentItem::toView);
     }
 
     @Override

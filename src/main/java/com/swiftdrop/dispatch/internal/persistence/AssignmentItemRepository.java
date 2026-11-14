@@ -1,5 +1,7 @@
 package com.swiftdrop.dispatch.internal.persistence;
 
+import org.springframework.data.domain.Page;
+import com.swiftdrop.dispatch.AssignmentType;
 import com.swiftdrop.dispatch.ItemOutcome;
 import com.swiftdrop.dispatch.internal.domain.AssignmentItem;
 import com.swiftdrop.shared.reference.District;
@@ -26,6 +28,23 @@ public interface AssignmentItemRepository extends JpaRepository<AssignmentItem, 
     @Query("select i from AssignmentItem i join fetch i.assignment a"
             + " where i.parcelId = :parcelId and a.courierId = :courierId order by a.createdAt desc, a.id desc")
     List<AssignmentItem> findForCourierAndParcel(UUID courierId, UUID parcelId);
+
+    /** AssignmentApi.findFinishedDeliveriesForCourier, without and with a parcel. */
+    @Query(value = "select i from AssignmentItem i join fetch i.assignment a where a.courierId = :courierId"
+            + " and a.type = :type and i.outcome in :outcomes order by i.updatedAt desc, i.id desc",
+            countQuery = "select count(i) from AssignmentItem i join i.assignment a where a.courierId = :courierId"
+                    + " and a.type = :type and i.outcome in :outcomes")
+    Page<AssignmentItem> findFinishedForCourier(UUID courierId, AssignmentType type,
+                                                Collection<ItemOutcome> outcomes, Pageable pageable);
+
+    @Query(value = "select i from AssignmentItem i join fetch i.assignment a where a.courierId = :courierId"
+            + " and a.type = :type and i.outcome in :outcomes and i.parcelId = :parcelId"
+            + " order by i.updatedAt desc, i.id desc",
+            countQuery = "select count(i) from AssignmentItem i join i.assignment a where a.courierId = :courierId"
+                    + " and a.type = :type and i.outcome in :outcomes and i.parcelId = :parcelId")
+    Page<AssignmentItem> findFinishedForCourierAndParcel(UUID courierId, AssignmentType type,
+                                                         Collection<ItemOutcome> outcomes, UUID parcelId,
+                                                         Pageable pageable);
 
     /** Whether the parcel is open in an assignment (uk_assignment_items_open_parcel allows at most one). */
     boolean existsByParcelIdAndClosedAtIsNull(UUID parcelId);

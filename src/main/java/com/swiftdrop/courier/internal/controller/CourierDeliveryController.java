@@ -43,7 +43,7 @@ public class CourierDeliveryController {
     public CourierTodayResponse today(@AuthenticationPrincipal Jwt jwt) {
         CourierToday today = courierDeliveries.today(CurrentUser.id(jwt));
         return new CourierTodayResponse(today.date(), today.toDo(), today.done(),
-                today.parcels().stream().map(CourierDeliveryResponse::from).toList());
+                today.parcels().stream().map(item -> CourierDeliveryResponse.from(item.parcel(), item.task())).toList());
     }
 
     @GetMapping("/history")
@@ -53,7 +53,7 @@ public class CourierDeliveryController {
                                                          @RequestParam(defaultValue = "20") int size,
                                                          @RequestParam(required = false) String trackingNumber) {
         return PageResponse.from(courierDeliveries.history(CurrentUser.id(jwt), page, size, trackingNumber),
-                CourierDeliveryResponse::from);
+                item -> CourierDeliveryResponse.from(item.parcel(), item.task()));
     }
 
     @GetMapping("/{parcelId}")
@@ -71,6 +71,6 @@ public class CourierDeliveryController {
     }
 
     private static CourierDeliveryDetailResponse toResponse(ParcelDetail detail) {
-        return CourierDeliveryDetailResponse.from(detail.parcel(), detail.history());
+        return CourierDeliveryDetailResponse.from(detail.parcel(), detail.history(), detail.task());
     }
 }
