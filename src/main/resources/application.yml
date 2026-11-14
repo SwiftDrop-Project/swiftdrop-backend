@@ -139,3 +139,7 @@ swiftdrop:
       enabled: ${SWIFTDROP_WEBHOOKS_DISPATCHER_ENABLED:true}
       interval-ms: ${SWIFTDROP_WEBHOOKS_DISPATCHER_INTERVAL_MS:2000}
       batch-size: 10
+
+  outbox:
+    relay:
+      enabled: ${SWIFTDROP_OUTBOX_RELAY_ENABLED:false}

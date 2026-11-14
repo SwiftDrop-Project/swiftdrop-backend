@@ -30,6 +30,8 @@ public enum ErrorCode {
     INVALID_STATUS_TRANSITION(HttpStatus.CONFLICT,
             "This parcel can't move to that status now. Refresh to see its latest status."),
     PARCEL_NOT_ASSIGNABLE(HttpStatus.CONFLICT, "A courier can only be assigned before the parcel is picked up."),
+    PARCEL_NEEDS_MANUAL_QUOTE(HttpStatus.CONFLICT,
+            "This parcel is too big or too heavy for our vehicles. Contact us for a quote."),
     /** The courier's step isn't allowed for this parcel in this assignment now (dispatch {@code ItemOutcome}). */
     TASK_STEP_NOT_ALLOWED(HttpStatus.CONFLICT,
             "This step isn't possible for this parcel now. Refresh to see your task."),
@@ -54,6 +56,11 @@ public enum ErrorCode {
             "You can have up to 5 active webhooks. Turn one off before adding another."),
     /** Webhooks: retrying a delivery that is not FAILED. */
     WEBHOOK_DELIVERY_NOT_RETRYABLE(HttpStatus.CONFLICT, "Only failed deliveries can be sent again."),
+    CANNOT_CHANGE_OWN_ACCOUNT(HttpStatus.CONFLICT, "You can't block your own account."),
+    ACCOUNT_NOT_ACTIVE(HttpStatus.CONFLICT,
+            "Only active accounts can be blocked. Refresh to see the account's latest status."),
+    ACCOUNT_NOT_BLOCKED(HttpStatus.CONFLICT,
+            "Only blocked accounts can be unblocked. Refresh to see the account's latest status."),
     UNSUPPORTED_MEDIA_TYPE(HttpStatus.UNSUPPORTED_MEDIA_TYPE, "Send the request as JSON (application/json)."),
     INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "Something went wrong on our side. Please try again."),
     /** A part of SwiftDrop that another module provides is not running yet (e.g. no delivery implementation). */
