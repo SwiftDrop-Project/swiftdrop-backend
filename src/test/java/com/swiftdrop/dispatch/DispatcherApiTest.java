@@ -478,6 +478,10 @@ class DispatcherApiTest extends IntegrationTest {
         body.put("pickup", pickup);
         body.put("recipient", recipient);
         body.put("weightKg", new BigDecimal("1.50"));
+        // Packed measurements are required since WP3 PR6 (pricing chooses the vehicle from them).
+        body.put("lengthCm", 40);
+        body.put("widthCm", 30);
+        body.put("heightCm", 12);
         String response = postJson("/api/v1/deliveries", body, customer)
                 .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
