@@ -133,7 +133,8 @@ class DeliveryService implements DeliveryApi {
         DeliverySnapshot snapshot = parcel.toSnapshot();
         outbox.write(new ParcelStatusChanged(UUID.randomUUID(), parcel.getId(), snapshot.version(),
                 parcel.getTrackingNumber(), parcel.getCustomerId(), parcel.getMerchantId(), null,
-                ParcelStatus.CREATED, first.getActorId(), first.getActorRole(), null, null, now, null));
+                ParcelStatus.CREATED, first.getActorId(), first.getActorRole(), null, null, now, null,
+                parcel.getMerchantOrderRef()));
         return snapshot;
     }
 
@@ -289,7 +290,7 @@ class DeliveryService implements DeliveryApi {
                 parcel.getTrackingNumber(), parcel.getCustomerId(), parcel.getMerchantId(), from, parcel.getStatus(),
                 command.actorId(), command.actorRole(), command.note(),
                 parcel.getFailureReason() == null ? null : parcel.getFailureReason().name(), now,
-                parcel.getCurrentBranch()));
+                parcel.getCurrentBranch(), parcel.getMerchantOrderRef()));
         return snapshot;
     }
 
