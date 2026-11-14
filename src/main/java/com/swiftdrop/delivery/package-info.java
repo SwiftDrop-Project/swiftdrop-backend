@@ -19,7 +19,7 @@
  * and, for the outbox relay only, {@link com.swiftdrop.delivery.DeliveryOutboxApi} and
  * {@link com.swiftdrop.delivery.OutboxMessage}. Other modules may use only these top-level types.
  *
- * <p>Dependencies: shared only (pricing will be added, to price a new parcel). Delivery must never depend on
+ * <p>Dependencies: pricing (PricingApi prices a new parcel) and shared. Delivery must never depend on
  * identity: identity depends on notifications, and notifications will consume {@code ParcelStatusChanged}, so that
  * would be a cycle. That is why user ids are plain UUIDs and roles are plain names (e.g. {@code COURIER}). Delivery
  * does not depend on dispatch either: dispatch and courier call delivery, never the other way round.

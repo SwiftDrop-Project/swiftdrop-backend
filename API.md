@@ -70,6 +70,7 @@ Change it in the same PR as the code, and tell the frontend team.
 | 409 | `PROFILE_ALREADY_COMPLETE` | `POST /auth/complete-profile` for an account that is not `PROFILE_INCOMPLETE` |
 | 409 | `INVALID_STATUS_TRANSITION` | The parcel can't move to that status from its current one, e.g. DELIVERED → PICKED_UP or PICKED_UP → IN_TRANSIT (a picked-up parcel goes to a branch first). See [Parcel statuses](#parcel-statuses) |
 | 409 | `PARCEL_NOT_ASSIGNABLE` | Assigning a courier to a parcel that was already picked up or is finished |
+| 409 | `PARCEL_NEEDS_MANUAL_QUOTE` | Booking a parcel that no vehicle carries or fits (pricing's `MANUAL_QUOTE`) |
 | 409 | `TASK_STEP_NOT_ALLOWED` | A courier's step isn't allowed for this parcel in this task now (e.g. handing over a parcel that wasn't collected, or a step that was already done) |
 | 409 | `ASSIGNMENT_CLOSED` | Recording a step on, or completing, a courier task that is already completed or cancelled |
 | 409 | `ASSIGNMENT_NOT_FINISHED` | Completing a courier task while one of its parcels is still open |
@@ -94,6 +95,7 @@ Messages of the new codes (show them as-is):
 | `TOO_MANY_REQUESTS` | Too many attempts. Please wait a moment and try again. |
 | `INVALID_STATUS_TRANSITION` | This parcel can't move to that status now. Refresh to see its latest status. |
 | `PARCEL_NOT_ASSIGNABLE` | A courier can only be assigned before the parcel is picked up. |
+| `PARCEL_NEEDS_MANUAL_QUOTE` | This parcel is too big or too heavy for our vehicles. Contact us for a quote. |
 | `TASK_STEP_NOT_ALLOWED` | This step isn't possible for this parcel now. Refresh to see your task. |
 | `ASSIGNMENT_CLOSED` | This task is already completed or was cancelled. |
 | `ASSIGNMENT_NOT_FINISHED` | Update every parcel in this task before you finish it. |
@@ -691,11 +693,15 @@ Request:
                  "city": "Kandy", "district": "KANDY" },
   "weightKg": 2.5,
   "codAmount": 2500.00,
-  "instructions": "Call before coming"
+  "instructions": "Call before coming",
+  "lengthCm": 40,
+  "widthCm": 30,
+  "heightCm": 12,
+  "keepUpright": false
 }
 ```
-There is no customer id and no fee: the customer comes from the login, and the server sets the fee and the
-tracking number.
+There is no customer id and no fee: the customer comes from the login, and the server sets the fee (with pricing,
+the same quote as `POST /pricing/estimate`) and the tracking number.
 
 | Field | Rule | Message |
 |---|---|---|
@@ -708,8 +714,10 @@ tracking number.
 | `weightKg` | 0.01–50, up to 2 decimals | "Enter the weight." / "Enter a weight above 0 kg." / "A parcel can weigh up to 50 kg." / "Use up to 2 decimal places." |
 | `codAmount` | Optional: cash to collect on delivery; leave out when already paid. 0.01–500000, up to 2 decimals | "Enter an amount above 0, or leave it out." / "Cash on delivery can be up to Rs. 500,000." |
 | `instructions` | Optional, up to 500 characters (blank = none) | "Use 500 characters or fewer." |
+| `lengthCm`, `widthCm`, `heightCm` | Required: packed outside measurements, whole cm 1–300 | "Enter the length." / "Enter the width." / "Enter the height." / "Use whole centimetres from 1 to 300." |
+| `keepUpright` | Optional, default `false`: the parcel may not lie on its side | |
 
-Response `201`:
+Response `201`: a Delivery.
 ```json
 {
   "id": "6f1c2b8e-3a4d-4c8e-9b1a-2f3e4d5c6b7a",
@@ -722,14 +730,118 @@ Response `201`:
   "weightKg": 2.5,
   "codAmount": 2500.00,
   "instructions": "Call before coming",
-  "feeAmount": 450.00,
+  "feeAmount": 522.60,
   "currency": "LKR",
-  "createdAt": "2026-11-07T04:30:00Z"
+  "createdAt": "2026-11-07T04:30:00Z",
+  "updatedAt": "2026-11-07T04:30:00Z",
+  "currentBranch": null,
+  "failureReason": null,
+  "proof": null,
+  "size": { "lengthCm": 40, "widthCm": 30, "heightCm": 12, "keepUpright": false },
+  "vehicle": "BIKE",
+  "billableWeightKg": 3
 }
 ```
-- `feeAmount` is a flat 450.00 LKR until pricing (WP4) is connected.
-- `400` `VALIDATION_FAILED` (keys like `pickup.phone`, `weightKg`) · `401` `UNAUTHENTICATED` · `403` `FORBIDDEN`
-  (logged in, but not a `CUSTOMER`)
+- `feeAmount` is pricing's quote for the route, weight, size and cash on delivery (see "Pricing (WP4)"). The parcel
+  keeps the vehicle, billable weight, rate card version and fee lines. `size`, `vehicle` and `billableWeightKg` are
+  `null` for parcels booked before sizes.
+- `currentBranch`: set only while `AT_BRANCH` (a district, e.g. `GAMPAHA`). `failureReason`: only while `FAILED`.
+  `proof`: `{ "recipientName": "Kamala Silva", "hasPhoto": false }` once `DELIVERED`. Otherwise all three are `null`.
+- `400` `VALIDATION_FAILED` (keys like `pickup.phone`, `weightKg`, `lengthCm`) · `401` `UNAUTHENTICATED` · `403`
+  `FORBIDDEN` (logged in, but not a `CUSTOMER`) · `409` `PARCEL_NEEDS_MANUAL_QUOTE` (no vehicle carries or fits it)
+
+### My deliveries
+`GET /deliveries?page=0&size=20&status=AT_BRANCH` (logged-in `CUSTOMER`)
+
+The customer's own deliveries, newest first, as a page of Delivery (the shape above):
+```json
+{ "content": [ /* Delivery */ ], "page": 0, "size": 20, "totalElements": 3, "totalPages": 1 }
+```
+- `page` from 0 (default 0); `size` 1-100 (default 20); `status` optional, one of the parcel statuses.
+- `200` · `400` `VALIDATION_FAILED` (`fieldErrors.page`: "Use a page number of 0 or more.", `fieldErrors.size`:
+  "Use a page size from 1 to 100."; an unknown `status` too) · `401` · `403` (not a `CUSTOMER`)
+
+### One delivery with its history
+`GET /deliveries/{id}` (logged-in `CUSTOMER`)
+```json
+{
+  "delivery": { /* Delivery */ },
+  "history": [
+    { "status": "AT_BRANCH", "branch": "GAMPAHA", "note": null, "failureReason": null,
+      "occurredAt": "2026-11-08T09:15:00Z" },
+    { "status": "PICKED_UP", "branch": null, "note": "Collected from front desk", "failureReason": null,
+      "occurredAt": "2026-11-08T07:40:00Z" },
+    { "status": "CREATED", "branch": null, "note": null, "failureReason": null,
+      "occurredAt": "2026-11-07T04:30:00Z" }
+  ]
+}
+```
+- `history`: newest first. `branch` only on `AT_BRANCH` entries, `failureReason` only on `FAILED` entries.
+- `200` · `400` (`id` is not a UUID) · `401` · `403` (not a `CUSTOMER`) · `404` `NOT_FOUND`: no such delivery, or it
+  isn't yours (the same answer, so ids can't be probed).
+
+---
+
+## Pricing (WP4)
+
+### Estimate a delivery fee
+`POST /pricing/estimate` (logged-in `CUSTOMER` or `MERCHANT`). Nothing is saved.
+
+A parcel goes pickup address → pickup district branch → drop-off district branch → drop-off address. Only the two
+local legs use a vehicle; between the branches SwiftDrop's own transport carries it, whatever its size.
+
+**Estimated fee = weight charge + pickup leg + delivery leg + linehaul**, from the active rate card (version 5):
+- No base fee: the pickup and delivery legs pay for collecting and handing over the parcel (rate cards 1–4 had one,
+  LKR 150 in version 4).
+- Billable weight = the greater of the actual and the volumetric weight (L × W × H ÷ 5000), rounded up to a whole kg.
+  The first kg is included; weight charge = LKR 50 × billable kg above the first.
+- Vehicle = the first of Bike → Tuk-tuk → Lorry that carries the actual weight and fits the parcel (any orientation;
+  with `keepUpright` only length and width may swap). Each local leg costs the vehicle's fixed leg fee (Bike 150,
+  Tuk-tuk 300, Lorry 1,500), with no distance charge.
+- Linehaul = LKR 1.00 × the distance between the branches: the straight line between the district centres × 1.3
+  (0 inside one district).
+- No cash on delivery handling fee: `cashOnDelivery` is still accepted but adds nothing (rate cards 1 and 2 added
+  LKR 100). The COD amount itself is never part of the fee.
+
+Request:
+```json
+{ "pickupDistrict": "COLOMBO", "dropOffDistrict": "KANDY", "weightKg": 1.8,
+  "lengthCm": 40, "widthCm": 30, "heightCm": 12, "keepUpright": false, "cashOnDelivery": false }
+```
+
+| Field | Rule | Message |
+|---|---|---|
+| `pickupDistrict`, `dropOffDistrict` | Required, one of `GET /meta/districts` | "Select the pickup district." / "Select the drop-off district." |
+| `weightKg` | 0.01–50, up to 2 decimals (the booking's rule) | Same messages as `POST /deliveries` |
+| `lengthCm`, `widthCm`, `heightCm` | Optional, whole cm 1–300; all three or none | "Use whole centimetres from 1 to 300." / "Enter all three measurements, or leave them all empty." (on the first empty one) |
+| `keepUpright`, `cashOnDelivery` | Optional, default `false` | |
+
+Response `200`:
+```json
+{
+  "status": "COMPLETE",
+  "total": 522.60,
+  "currency": "LKR",
+  "rateCardVersion": 5,
+  "billableWeightKg": 3,
+  "volumetricWeightKg": 2.88,
+  "vehicle": "BIKE",
+  "distanceKm": 122.6,
+  "lines": [
+    { "component": "WEIGHT", "amount": 100.00 },
+    { "component": "PICKUP", "amount": 150.00 },
+    { "component": "DELIVERY", "amount": 150.00 },
+    { "component": "LINEHAUL", "amount": 122.60 }
+  ]
+}
+```
+- `distanceKm`: between the two branches. `lines`: `BASE` when the rate card has a base fee (none since version 5),
+  `WEIGHT`, `PICKUP`, `DELIVERY`, `LINEHAUL`, then `COD` when `cashOnDelivery` is true and the rate card has a COD fee
+  (none since version 3).
+- `status`: `COMPLETE`; `PROVISIONAL` without measurements (no vehicle, so no `PICKUP` and `DELIVERY` lines;
+  `vehicle` and `volumetricWeightKg` are `null`); `MANUAL_QUOTE` when no vehicle takes the parcel for the local legs
+  (`total` is `null`).
+- `400` `VALIDATION_FAILED` · `401` `UNAUTHENTICATED` · `403` `FORBIDDEN` (not a `CUSTOMER` or `MERCHANT`)
 
 ---
 
@@ -951,3 +1063,118 @@ branches for the type (400), then each parcel (404 unknown, 409 `PARCEL_NOT_READ
 **Pickup queue.** Delivery has no "waiting for pickup" query, so dispatch keeps its own list from the
 `ParcelStatusChanged` events (RabbitMQ queue `dispatch.q`). Parcels appear there only while the outbox relay runs
 (`SWIFTDROP_OUTBOX_RELAY_ENABLED=true`), and parcels created before dispatch was deployed are not in it.
+
+## Tracking (WP8, live tracking)
+
+Public tracking by tracking number, and live updates pushed over **WebSocket with STOMP** (design document 2.4.10,
+4.5). The REST lookup gives the starting point; the WebSocket sends each change after it. Updates arrive only while
+the outbox relay runs (`SWIFTDROP_OUTBOX_RELAY_ENABLED=true`).
+
+**Privacy.** Public tracking never shows names, phone numbers, addresses, notes, amounts, user ids or who made a
+change: only the status, the town and district at each end, the branch a parcel is at, and a failed delivery's
+reason code.
+
+### `GET /track/{trackingNumber}` (public)
+
+Spaces and letter case are ignored (`sd 2611 0048 17` works). At most 30 lookups per minute per IP
+(`swiftdrop.tracking.lookups-per-minute`), then `429 TOO_MANY_REQUESTS`. An unknown number, or one in the wrong
+format, is `404 NOT_FOUND` "We couldn't find a parcel with this tracking number. Check the number and try again."
+
+```json
+{
+  "trackingNumber": "SD2611004817",
+  "status": "AT_BRANCH",
+  "currentBranch": "COLOMBO",
+  "from": { "city": "Colombo 03", "district": "COLOMBO" },
+  "to": { "city": "Kandy", "district": "KANDY" },
+  "createdAt": "2026-11-13T04:10:00Z",
+  "updatedAt": "2026-11-13T06:45:00Z",
+  "version": 3,
+  "history": [
+    { "status": "CREATED", "branch": null, "failureReason": null, "occurredAt": "2026-11-13T04:10:00Z" },
+    { "status": "PICKED_UP", "branch": null, "failureReason": null, "occurredAt": "2026-11-13T05:30:00Z" },
+    { "status": "AT_BRANCH", "branch": "COLOMBO", "failureReason": null, "occurredAt": "2026-11-13T06:45:00Z" }
+  ]
+}
+```
+
+`history` is oldest first. `currentBranch` is set only while the status is `AT_BRANCH`.
+
+### WebSocket (STOMP)
+
+Plain WebSocket (no SockJS), STOMP 1.2, heart-beats every 20 s. Clients only subscribe: a `SEND`, or a subscription
+to anything not listed, gets a STOMP `ERROR` frame and the connection closes.
+
+| Handshake URL | Who | May subscribe to |
+|---|---|---|
+| `ws://<host>/api/v1/ws/public` | anyone (cookie ignored) | `/topic/parcels/{trackingNumber}` |
+| `ws://<host>/api/v1/ws` | logged in: the handshake checks the `SD_TOKEN` cookie like any request (401 without it) | the above, and `/topic/live` (DISPATCHER, ADMIN) |
+
+The tracking number in the topic must be the normalised form (`SD2611004817`). The browser origin must be
+`FRONTEND_URL`.
+
+**`/topic/parcels/{trackingNumber}`**, one message per status change:
+
+```json
+{ "trackingNumber": "SD2611004817", "status": "OUT_FOR_DELIVERY", "branch": null, "failureReason": null,
+  "occurredAt": "2026-11-13T08:02:00Z", "version": 5 }
+```
+
+Apply a message only if its `version` is higher than the one you have (events can repeat or arrive late), then add
+it to the history. After a reconnect, load `GET /track/{trackingNumber}` again: messages sent while disconnected are
+not replayed. If the WebSocket keeps failing, poll that endpoint (the frontend polls every 30 s).
+
+**`/topic/live`** (DISPATCHER, ADMIN): every parcel's status changes, for the live board.
+
+```json
+{ "eventId": "…", "parcelId": "…", "trackingNumber": "SD2611004817", "fromStatus": "PICKED_UP",
+  "toStatus": "AT_BRANCH", "branch": "COLOMBO", "origin": "COLOMBO", "destination": "KANDY",
+  "failureReason": null, "actorRole": "COURIER", "occurredAt": "2026-11-13T06:45:00Z", "version": 3 }
+```
+
+`origin` and `destination` are the sender's and recipient's districts.
+
+### `GET /tracking/live/recent?branch=COLOMBO` (DISPATCHER, ADMIN)
+
+The last 100 changes this server has seen (it keeps 200 in memory, cleared on restart), newest first, in the
+`/topic/live` shape. With `branch`, only changes whose origin, destination or arrival branch is that branch.
+
+### `GET /admin/tracking/parcels?q=&status=&district=&from=&to=&page=0&size=20` (ADMIN)
+
+Every parcel's latest status, most recently updated first. All filters are optional:
+
+| Param | Meaning |
+|---|---|
+| `q` | Part of a tracking number (spaces and case ignored, at most 40 characters). |
+| `status` | One `ParcelStatus`. |
+| `district` | The sender's or recipient's district, or the branch the parcel is at. |
+| `from`, `to` | `yyyy-MM-dd`, last updated on or after / on or before that day (Sri Lankan time). `to` before `from` is 400. |
+| `page`, `size` | `page` ≥ 0, `size` 1-100 (default 20); otherwise 400 `VALIDATION_FAILED`. |
+
+```json
+{
+  "content": [{
+    "parcelId": "0c9d82dd-b94a-40be-9a29-baeb71d909b8",
+    "trackingNumber": "SD2611406946",
+    "status": "AT_BRANCH",
+    "from": { "city": "Colombo 03", "district": "COLOMBO" },
+    "to": { "city": "Kandy", "district": "KANDY" },
+    "currentBranch": "COLOMBO",
+    "failureReason": null,
+    "createdAt": "2026-11-13T04:10:00Z",
+    "updatedAt": "2026-11-13T06:45:12Z",
+    "version": 3
+  }],
+  "page": 0, "size": 20, "totalElements": 1, "totalPages": 1
+}
+```
+
+The list is tracking's own index (`tracking.parcel_index`): a parcel is added or updated when a `ParcelStatusChanged`
+event arrives and whenever it is looked up with `GET /track/{trackingNumber}`. A parcel that has done neither since
+the index was added is not listed yet. Live changes come on `/topic/live`.
+
+### `GET /admin/tracking/parcels/counts?q=&district=&from=&to=` (ADMIN)
+
+How many indexed parcels match the same filters, per status (the status filter is ignored, so a status picker can
+show the numbers): `{ "total": 12, "byStatus": { "CREATED": 3, "AT_BRANCH": 2, ..., "DELIVERED": 7 } }`. Every
+status is present, 0 when none.

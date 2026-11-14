@@ -12,6 +12,7 @@ import com.swiftdrop.delivery.ParcelStatusEntry;
 import com.swiftdrop.delivery.ProofPhoto;
 import com.swiftdrop.delivery.ProofPhotoRef;
 import com.swiftdrop.delivery.internal.domain.Parcel;
+import com.swiftdrop.delivery.internal.domain.ParcelPrice;
 import com.swiftdrop.delivery.internal.domain.ParcelStatusHistory;
 import com.swiftdrop.delivery.internal.domain.TrackingNumberGenerator;
 import com.swiftdrop.delivery.internal.persistence.DailyTotal;
@@ -127,16 +128,16 @@ class DeliveryService implements DeliveryApi {
             }
         }
         Instant now = clock.instant();
-        FeeQuoter.Fee fee = feeQuoter.quote(command);
-        Parcel parcel = Parcel.create(UUID.randomUUID(), newTrackingNumber(now), command, fee.amount(),
-                fee.currency(), now);
+        ParcelPrice price = feeQuoter.quote(command);
+        Parcel parcel = Parcel.create(UUID.randomUUID(), newTrackingNumber(now), command, price, now);
         parcels.save(parcel);
         ParcelStatusHistory first = ParcelStatusHistory.firstEntry(UUID.randomUUID(), parcel);
         statusHistory.save(first);
         DeliverySnapshot snapshot = parcel.toSnapshot();
         outbox.write(new ParcelStatusChanged(UUID.randomUUID(), parcel.getId(), snapshot.version(),
                 parcel.getTrackingNumber(), parcel.getCustomerId(), parcel.getMerchantId(), null,
-                ParcelStatus.CREATED, first.getActorId(), first.getActorRole(), null, null, now, null));
+                ParcelStatus.CREATED, first.getActorId(), first.getActorRole(), null, null, now, null,
+                parcel.getMerchantOrderRef()));
         return snapshot;
     }
 
@@ -316,7 +317,7 @@ class DeliveryService implements DeliveryApi {
                 parcel.getTrackingNumber(), parcel.getCustomerId(), parcel.getMerchantId(), from, parcel.getStatus(),
                 command.actorId(), command.actorRole(), command.note(),
                 parcel.getFailureReason() == null ? null : parcel.getFailureReason().name(), now,
-                parcel.getCurrentBranch()));
+                parcel.getCurrentBranch(), parcel.getMerchantOrderRef()));
         return snapshot;
     }
 

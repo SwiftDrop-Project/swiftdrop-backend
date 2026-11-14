@@ -37,6 +37,11 @@ public interface DeliveryApi {
      * history entry and a {@link ParcelStatusChanged} event in one transaction. If the merchant already sent an order
      * with the same {@code merchantOrderRef}, that parcel is returned and nothing new is created, so a merchant can
      * safely retry. Errors from pricing are passed on unchanged.
+     *
+     * @throws com.swiftdrop.shared.error.FieldValidationException field {@code lengthCm} when the command has no
+     *                                                             {@link CreateDeliveryCommand#size()}
+     * @throws com.swiftdrop.shared.error.BusinessRuleException    PARCEL_NEEDS_MANUAL_QUOTE when no vehicle carries
+     *                                                             or fits the parcel
      */
     DeliverySnapshot create(CreateDeliveryCommand command);
 
