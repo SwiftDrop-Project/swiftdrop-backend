@@ -122,6 +122,10 @@ abstract class RealWorkflowTest extends IntegrationTest {
         body.put("recipient", Map.of("name", "Kamala Silva", "phone", "0719876543",
                 "addressLine", "45 Tea Estate Road", "city", recipientCity, "district", recipientDistrict));
         body.put("weightKg", new BigDecimal("1.20"));
+        // Packed measurements are required since WP3 PR6 (pricing chooses the vehicle from them).
+        body.put("lengthCm", 40);
+        body.put("widthCm", 30);
+        body.put("heightCm", 12);
         body.put("codAmount", new BigDecimal("2500.00"));
         String response = postJson("/api/v1/deliveries", body, customer)
                 .andExpect(status().isCreated())

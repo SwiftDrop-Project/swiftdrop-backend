@@ -15,11 +15,11 @@ Every direct sub-package of `com.swiftdrop` is a module. `SwiftdropBackendApplic
 | `infrastructure` | none (only `internal/`: web, config, messaging) | - | TBD |
 | `identity` | IdentityApi, UserSummary, CourierSummary, Role, UserStatus, MerchantProfiles (implemented by merchants) | `identity` | Viduranga |
 | `merchants` | MerchantApi, MerchantSummary, ApprovalStatus | `merchants` | Viduranga |
-| `pricing` | PricingApi, QuoteRequest, PriceQuote | `pricing` | TBD |
+| `pricing` | PricingApi, QuoteRequest, PriceQuote, Vehicle | `pricing` (rate_cards, vehicle_rates, district_locations) | TBD (fee estimate: Pasindu) |
 | `delivery` | DeliveryApi, DeliveryOutboxApi, OutboxMessage, DeliverySnapshot, DeliveryContact, CreateDeliveryCommand, ChangeStatusCommand, ParcelStatus (incl. `AT_BRANCH`; branch = `District`), ParcelStatusEntry, ParcelStatusChanged, FailureReason, ProofPhoto, ProofPhotoRef, DeliveryStats | `delivery` (incl. `outbox_events`) | Pasindu |
 | `dispatch` | AssignmentApi (courier-facing), AssignmentView, AssignmentItemView, RecordOutcomeCommand, AssignmentType, AssignmentStatus, ItemOutcome, TaskProblem | `dispatch` (`courier_assignments`, `assignment_items`, `pickup_queue`) | D.M.A.I. Disanayaka (WP8) |
 | `reporting` | - | none | TBD |
-| `tracking` | - | none | TBD |
+| `tracking` | - (endpoints, WebSocket/STOMP and a RabbitMQ listener only) | `tracking` (`parcel_index`) | D.M.A.I. Disanayaka (WP8) |
 | `notifications` | NotificationsApi, AccountEmail | `notifications` | TBD |
 | `webhooks` | - | `webhooks` | TBD |
 | `outbox` | - (reads the outbox only through `DeliveryOutboxApi`) | none | TBD |
@@ -47,15 +47,20 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
 - Controllers never return entities. Map to DTOs in `internal/dto`.
 - A module's public URLs: implement `shared.web.PublicEndpoints` as a bean in the module. Never edit identity's SecurityConfig for that.
 - Unbuilt modules have placeholder contracts ("Contract owned by <module> - extend in Phase 0"); the owner extends them.
-- Current dependencies: identity -> notifications, shared; merchants -> identity, shared; delivery -> shared;
-  dispatch -> delivery, identity, shared; courier -> dispatch, delivery, shared; infrastructure -> shared. Nothing
-  depends on courier.
+- Current dependencies: identity -> notifications, shared; merchants -> identity, shared; delivery -> pricing, shared;
+  dispatch -> delivery, identity, shared; tracking -> delivery, shared; courier -> dispatch, delivery, shared;
+  pricing -> shared; infrastructure -> shared. Nothing depends on courier.
 - dispatch: `AssignmentApi` is implemented; dispatcher endpoints are under `/dispatch` (DISPATCHER and ADMIN, API.md
   "Dispatch"). Delivery has no "waiting for pickup" query, so dispatch keeps `dispatch.pickup_queue` from
   `ParcelStatusChanged` (RabbitMQ queue `dispatch.q`); it fills only while the outbox relay runs
   (`SWIFTDROP_OUTBOX_RELAY_ENABLED=true`).
   Assignment status and item outcomes are separate from the parcel status: a courier's task can be completed while
   its parcels are still on their way.
+- tracking: public lookup `GET /track/{trackingNumber}` and live updates over WebSocket/STOMP (API.md "Tracking"):
+  `/api/v1/ws/public` (public, `/topic/parcels/{trackingNumber}`) and `/api/v1/ws` (cookie checked; DISPATCHER/ADMIN
+  may follow `/topic/live`). In-memory simple broker; each instance has its own auto-delete RabbitMQ queue.
+  The admin's all-parcels list (`/admin/tracking/parcels`) reads tracking's own `tracking.parcel_index`, filled from
+  `ParcelStatusChanged` and from lookups (delivery has no admin search).
 - courier gets `AssignmentApi` (dispatch) and `DeliveryApi` (delivery) by constructor injection. Each courier step
   changes the parcel status (`DeliveryApi.changeStatus`) and records the item outcome (`AssignmentApi.recordOutcome`)
   in one transaction; a clash with a dispatcher's change answers 409 `ASSIGNMENT_CHANGED` and keeps nothing.
@@ -88,8 +93,8 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
   Hikari pool: max 3, min idle 0, idle timeout 60 s, max lifetime 5 min, connection timeout 30 s.
 
 ## Database
-- One schema per stateful module: identity, merchants, pricing, delivery, dispatch, webhooks, notifications.
-  reporting, tracking, outbox and courier own no schema.
+- One schema per stateful module: identity, merchants, pricing, delivery, dispatch, tracking, webhooks, notifications.
+  reporting, outbox and courier own no schema.
 - Entities use `@Table(schema = "<module>")`. No foreign keys or joins across schemas; refer to other modules' rows by UUID only.
 - Schema changes ONLY through Flyway, in the module's folder: `src/main/resources/db/migration/<module>/`.
 - File name: `V<yyyyMMddHHmm>__<description>.sql` (current date and time, e.g. `V202611051430__add_parcels.sql`).

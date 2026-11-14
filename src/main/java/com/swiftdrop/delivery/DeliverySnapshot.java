@@ -43,6 +43,12 @@ import java.util.UUID;
  *                           late
  * @param currentBranch      the branch the parcel is at (only for AT_BRANCH), or null. Not personal data: the public
  *                           tracking page may show it
+ * @param size               the packed measurements it was priced with, or null (parcels booked before sizes)
+ * @param vehicle            the vehicle of the local legs it was priced with (a pricing Vehicle name, e.g.
+ *                           {@code BIKE}), or null
+ * @param billableWeightKg   the billable weight it was priced with, or null
+ * @param rateCardVersion    the pricing rate card of its fee, so the fee can be worked out again; null for the old
+ *                           flat fee
  */
 public record DeliverySnapshot(
         UUID id,
@@ -66,7 +72,23 @@ public record DeliverySnapshot(
         BigDecimal feeAmount,
         String currency,
         long version,
-        District currentBranch) {
+        District currentBranch,
+        ParcelSize size,
+        String vehicle,
+        Integer billableWeightKg,
+        Integer rateCardVersion) {
+
+    /** A snapshot without pricing details. Kept so callers written before parcel sizes still compile. */
+    public DeliverySnapshot(UUID id, String trackingNumber, ParcelStatus status, UUID customerId, UUID merchantId,
+                            DeliveryContact pickup, DeliveryContact recipient, BigDecimal weightKg,
+                            BigDecimal codAmount, String instructions, UUID assignedCourierId, Instant assignedAt,
+                            Instant createdAt, Instant updatedAt, String proofRecipientName, boolean hasProofPhoto,
+                            FailureReason failureReason, String merchantOrderRef, BigDecimal feeAmount,
+                            String currency, long version, District currentBranch) {
+        this(id, trackingNumber, status, customerId, merchantId, pickup, recipient, weightKg, codAmount, instructions,
+                assignedCourierId, assignedAt, createdAt, updatedAt, proofRecipientName, hasProofPhoto, failureReason,
+                merchantOrderRef, feeAmount, currency, version, currentBranch, null, null, null, null);
+    }
 
     /**
      * A snapshot without a branch (any status except AT_BRANCH). Kept so callers written before branches still
@@ -97,6 +119,8 @@ public record DeliverySnapshot(
                 + ", createdAt=" + createdAt + ", updatedAt=" + updatedAt
                 + ", hasProofPhoto=" + hasProofPhoto + ", failureReason=" + failureReason
                 + ", merchantOrderRef=" + merchantOrderRef + ", feeAmount=" + feeAmount + ", currency=" + currency
-                + ", version=" + version + ", currentBranch=" + currentBranch + "]";
+                + ", version=" + version + ", currentBranch=" + currentBranch + ", size=" + size
+                + ", vehicle=" + vehicle + ", billableWeightKg=" + billableWeightKg
+                + ", rateCardVersion=" + rateCardVersion + "]";
     }
 }
