@@ -30,6 +30,8 @@ public enum ErrorCode {
     INVALID_STATUS_TRANSITION(HttpStatus.CONFLICT,
             "This parcel can't move to that status now. Refresh to see its latest status."),
     PARCEL_NOT_ASSIGNABLE(HttpStatus.CONFLICT, "A courier can only be assigned before the parcel is picked up."),
+    PARCEL_NEEDS_MANUAL_QUOTE(HttpStatus.CONFLICT,
+            "This parcel is too big or too heavy for our vehicles. Contact us for a quote."),
     /** The courier's step isn't allowed for this parcel in this assignment now (dispatch {@code ItemOutcome}). */
     TASK_STEP_NOT_ALLOWED(HttpStatus.CONFLICT,
             "This step isn't possible for this parcel now. Refresh to see your task."),
