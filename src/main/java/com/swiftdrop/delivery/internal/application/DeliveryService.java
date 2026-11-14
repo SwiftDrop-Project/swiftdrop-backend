@@ -5,6 +5,7 @@ import com.swiftdrop.delivery.CreateDeliveryCommand;
 import com.swiftdrop.delivery.DeliveryApi;
 import com.swiftdrop.delivery.DeliverySnapshot;
 import com.swiftdrop.delivery.DeliveryStats;
+import com.swiftdrop.delivery.ParcelSearch;
 import com.swiftdrop.delivery.ParcelStatus;
 import com.swiftdrop.delivery.ParcelStatusChanged;
 import com.swiftdrop.delivery.ParcelStatusEntry;
@@ -16,6 +17,7 @@ import com.swiftdrop.delivery.internal.domain.TrackingNumberGenerator;
 import com.swiftdrop.delivery.internal.persistence.DailyTotal;
 import com.swiftdrop.delivery.internal.persistence.ParcelRepository;
 import com.swiftdrop.delivery.internal.persistence.ParcelStatusHistoryRepository;
+import com.swiftdrop.delivery.internal.persistence.StatusTotal;
 import com.swiftdrop.shared.error.ApiException;
 import com.swiftdrop.shared.error.BusinessRuleException;
 import com.swiftdrop.shared.error.ErrorCode;
@@ -39,6 +41,7 @@ import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
@@ -241,6 +244,30 @@ class DeliveryService implements DeliveryApi {
                 ? parcels.findByMerchantIdOrderByCreatedAtDescIdDesc(merchantId, page)
                 : parcels.findByMerchantIdAndStatusOrderByCreatedAtDescIdDesc(merchantId, status, page);
         return found.map(Parcel::toSnapshot);
+    }
+
+    /** For the admin's All Parcels page (WP4). The order comes from {@code search.sort()}, never from the caller. */
+    @Override
+    @Transactional(readOnly = true)
+    public Page<DeliverySnapshot> search(ParcelSearch search, Pageable pageable) {
+        Objects.requireNonNull(search, "search");
+        Pageable capped = cappedPage(pageable);
+        Pageable page = PageRequest.of(capped.getPageNumber(), capped.getPageSize(),
+                ParcelSearchSpecification.sort(search.sort()));
+        return parcels.findAll(ParcelSearchSpecification.of(search), page).map(Parcel::toSnapshot);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Map<ParcelStatus, Long> countByStatus() {
+        Map<ParcelStatus, Long> counts = new EnumMap<>(ParcelStatus.class);
+        for (ParcelStatus status : ParcelStatus.values()) {
+            counts.put(status, 0L);
+        }
+        for (StatusTotal row : parcels.countPerStatus()) {
+            counts.put(row.getStatus(), row.getTotal());
+        }
+        return counts;
     }
 
     /**

@@ -120,6 +120,16 @@ public interface DeliveryApi {
     @Deprecated
     Page<DeliverySnapshot> findFinishedForCourier(UUID courierId, String trackingNumber, Pageable pageable);
 
+    /**
+     * Every parcel matching {@code search}, in its {@link ParcelSort} order, for the admin's All Parcels page (WP4).
+     * The sort in {@code pageable} is ignored and the page size is capped at 100. Like every read here, it does not
+     * check who is asking: the caller must allow only admins.
+     */
+    Page<DeliverySnapshot> search(ParcelSearch search, Pageable pageable);
+
+    /** How many parcels are in each status right now. Every status is in the map, with 0 when there are none. */
+    Map<ParcelStatus, Long> countByStatus();
+
     /** The parcel's status history, newest first. Empty for an unknown id. */
     List<ParcelStatusEntry> history(UUID parcelId);
 

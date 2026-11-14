@@ -13,7 +13,9 @@
  * {@link com.swiftdrop.delivery.ParcelStatus} with the allowed transitions,
  * {@link com.swiftdrop.delivery.ParcelStatusEntry}, {@link com.swiftdrop.delivery.FailureReason},
  * {@link com.swiftdrop.delivery.ProofPhotoRef}, {@link com.swiftdrop.delivery.ProofPhoto},
- * {@link com.swiftdrop.delivery.DeliveryStats}); the event {@link com.swiftdrop.delivery.ParcelStatusChanged};
+ * {@link com.swiftdrop.delivery.DeliveryStats}, and for the admin's All Parcels search (WP4)
+ * {@link com.swiftdrop.delivery.ParcelSearch} and {@link com.swiftdrop.delivery.ParcelSort}); the event
+ * {@link com.swiftdrop.delivery.ParcelStatusChanged};
  * and, for the outbox relay only, {@link com.swiftdrop.delivery.DeliveryOutboxApi} and
  * {@link com.swiftdrop.delivery.OutboxMessage}. Other modules may use only these top-level types.
  *
