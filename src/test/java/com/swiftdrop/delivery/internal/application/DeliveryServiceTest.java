@@ -113,6 +113,7 @@ class DeliveryServiceTest {
         assertThat(event.getValue().parcelVersion()).isZero();
         assertThat(event.getValue().actorId()).isEqualTo(customerId);
         assertThat(event.getValue().actorRole()).isEqualTo("CUSTOMER");
+        assertThat(event.getValue().merchantOrderRef()).isNull();
         assertThat(event.getValue().occurredAt()).isEqualTo(NOW);
 
         assertThat(snapshot.trackingNumber()).isEqualTo("SD2611004817");
@@ -173,6 +174,8 @@ class DeliveryServiceTest {
         verify(outbox).write(event.capture());
         assertThat(event.getValue().actorId()).isEqualTo(merchantId);
         assertThat(event.getValue().actorRole()).isEqualTo("MERCHANT");
+        // webhooks match the event to the merchant's order without asking delivery
+        assertThat(event.getValue().merchantOrderRef()).isEqualTo("ORDER-1001");
     }
 
     @Test
@@ -409,7 +412,21 @@ class DeliveryServiceTest {
         assertThat(event.getValue().note()).isEqualTo("At the shop");
         assertThat(event.getValue().failureReason()).isNull();
         assertThat(event.getValue().branch()).isNull();
+        assertThat(event.getValue().merchantOrderRef()).isNull();
         assertThat(event.getValue().occurredAt()).isEqualTo(NOW);
+    }
+
+    @Test
+    void everyEventOfAMerchantOrderCarriesTheMerchantsOrderRef() {
+        UUID merchantId = UUID.randomUUID();
+        Parcel parcel = stored(Parcel.create(UUID.randomUUID(), "SD2611000888", merchantOrder(merchantId, "ORDER-1001"),
+                new BigDecimal("450.00"), "LKR", NOW));
+
+        service.changeStatus(pickUp(parcel.getId(), "COURIER"));
+
+        ParcelStatusChanged event = writtenEvent();
+        assertThat(event.merchantId()).isEqualTo(merchantId);
+        assertThat(event.merchantOrderRef()).isEqualTo("ORDER-1001");
     }
 
     @Test
