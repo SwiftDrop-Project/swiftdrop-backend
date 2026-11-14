@@ -9,7 +9,8 @@
  * without editing it.
  *
  * <p>Public API: {@link com.swiftdrop.identity.IdentityApi}, {@link com.swiftdrop.identity.UserSummary},
- * {@link com.swiftdrop.identity.CourierSummary}, {@link com.swiftdrop.identity.Role},
+ * {@link com.swiftdrop.identity.CourierSummary}, {@link com.swiftdrop.identity.UserRoleCounts},
+ * {@link com.swiftdrop.identity.Role},
  * {@link com.swiftdrop.identity.UserStatus}, and {@link com.swiftdrop.identity.MerchantProfiles} (implemented by
  * merchants, so identity never depends on merchants).
  *

@@ -349,6 +349,34 @@ No login → `401 UNAUTHENTICATED`; any other role → `403 FORBIDDEN`.
 - Both work from any current state (so an admin can correct a mistake) and record who reviewed it and when.
   Unknown `userId` → `404 NOT_FOUND`.
 
+### Reports (admin, WP4)
+Role `ADMIN` only: no login → `401 UNAUTHENTICATED`; any other role → `403 FORBIDDEN`.
+
+#### `GET /admin/reports/overview`
+The figures on the admin home page (`/admin`). Days are Sri Lanka days (Asia/Colombo).
+```json
+{
+  "users": { "total": 120, "customers": 90, "merchants": 20, "couriers": 6, "dispatchers": 3, "admins": 1,
+             "pendingMerchants": 4 },
+  "today": { "date": "2026-11-13", "created": 12, "delivered": 8, "failed": 1 },
+  "last7Days": {
+    "from": "2026-11-07", "to": "2026-11-13",
+    "created": 60, "delivered": 40, "failed": 5, "successRate": 88.9,
+    "perDay": [ { "date": "2026-11-07", "created": 5, "delivered": 3, "failed": 0 } ]
+  },
+  "recentUsers": [
+    { "id": "...", "fullName": "Ayesha Fernando", "role": "CUSTOMER", "status": "ACTIVE",
+      "createdAt": "2026-11-13T04:10:00Z" }
+  ]
+}
+```
+- `users`: accounts per role, every status except `REMOVED`. `pendingMerchants` = merchants with status
+  `PENDING_APPROVAL` (the ones on `GET /admin/merchants?status=PENDING`).
+- `today` and `perDay`: `created` = parcels booked that day; `delivered` / `failed` = parcels that reached that status
+  that day. `perDay` has all 7 days, oldest first, also days with nothing (all 0). `today` is the last day of `perDay`.
+- `successRate` = `delivered / (delivered + failed) × 100` over the 7 days, one decimal; `0.0` when both are 0.
+- `recentUsers`: the 5 newest accounts (not `REMOVED`), newest first. No email or phone.
+
 ---
 
 ## Cookie and token

@@ -5,6 +5,7 @@ import com.swiftdrop.identity.UserStatus;
 import com.swiftdrop.identity.internal.domain.User;
 import com.swiftdrop.shared.reference.District;
 import jakarta.persistence.LockModeType;
+import org.springframework.data.domain.Limit;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Lock;
@@ -29,6 +30,15 @@ public interface UserRepository extends JpaRepository<User, UUID>, JpaSpecificat
     List<User> findByRoleAndStatusOrderByFullNameAsc(Role role, UserStatus status);
 
     List<User> findByRoleAndStatusAndBranchOrderByFullNameAsc(Role role, UserStatus status, District branch);
+
+    /** Accounts per role, leaving out those with {@code excluded} status (the admin overview passes REMOVED). */
+    @Query("select u.role as role, count(u) as total from User u where u.status <> :excluded group by u.role")
+    List<RoleTotal> countPerRoleExcluding(UserStatus excluded);
+
+    long countByStatus(UserStatus status);
+
+    /** The newest accounts first, leaving out those with {@code excluded} status. */
+    List<User> findByStatusNotOrderByCreatedAtDesc(UserStatus excluded, Limit limit);
 
     /** Row lock, so two parallel requests for the same user run one after the other. */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
