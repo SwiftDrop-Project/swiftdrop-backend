@@ -120,6 +120,26 @@ swiftdrop:
     admin-password: ${ADMIN_PASSWORD:}
     demo-users: ${SEED_DEMO_USERS:false}
     demo-password: ${DEMO_PASSWORD:}
+  # TEMPORARY - delete when WP3 implements DeliveryApi.
+  # true: courier endpoints use an in-memory FakeDeliveryApi with demo parcels for courier@swiftdrop.lk
+  # (needs SEED_DEMO_USERS=true). Nothing is written to the database. Local demos only, never on shared servers.
+  dev:
+    fake-delivery: ${SWIFTDROP_FAKE_DELIVERY:false}
+  # Webhooks (WP6). Merchants' signing secrets are stored AES-GCM encrypted with a key derived from encryption-key.
+  # Empty WEBHOOK_ENCRYPTION_KEY: the JWT secret is used instead. Changing the value later makes the stored secrets
+  # unreadable (merchants must rotate them). The fallback is the property, not the JWT_SECRET variable, so tests
+  # (which set the property) always get the same key.
+  # allow-insecure-urls: true allows http:// and loopback receivers (http://localhost:9000) - local testing only.
+  # dispatcher: the worker that sends due deliveries. Safe on several backends at once (rows are claimed with
+  # FOR UPDATE SKIP LOCKED). false: deliveries stay PENDING until a backend with it on picks them up.
+  webhooks:
+    encryption-key: ${WEBHOOK_ENCRYPTION_KEY:${swiftdrop.security.jwt.secret:}}
+    allow-insecure-urls: ${SWIFTDROP_WEBHOOKS_ALLOW_INSECURE_URLS:false}
+    dispatcher:
+      enabled: ${SWIFTDROP_WEBHOOKS_DISPATCHER_ENABLED:true}
+      interval-ms: ${SWIFTDROP_WEBHOOKS_DISPATCHER_INTERVAL_MS:2000}
+      batch-size: 10
+
   outbox:
     relay:
       enabled: ${SWIFTDROP_OUTBOX_RELAY_ENABLED:false}

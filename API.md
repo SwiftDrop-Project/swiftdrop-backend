@@ -57,11 +57,14 @@ Change it in the same PR as the code, and tell the frontend team.
 | 400 | `TOO_MANY_ATTEMPTS` | 5 wrong tries: this code no longer works, even the right one. Ask for a new one |
 | 401 | `UNAUTHENTICATED` | Not logged in / token expired / session ended (password changed, account disabled) |
 | 401 | `INVALID_CREDENTIALS` | Wrong identifier or password |
+| 401 | `API_KEY_REVOKED` | A request uses an `X-Api-Key` that was revoked |
 | 403 | `FORBIDDEN` | Logged in, wrong role |
 | 403 | `EMAIL_NOT_VERIFIED` | Login with the right password, but the email is not confirmed yet |
 | 403 | `ACCOUNT_PENDING_APPROVAL` | Merchant not approved yet |
 | 403 | `ACCOUNT_REJECTED` | Merchant application rejected |
 | 403 | `ACCOUNT_DISABLED` | Account disabled by admin |
+| 403 | `PASSWORD_CHANGE_REQUIRED` | A staff account with a temporary password calls any protected endpoint except the password-change endpoints |
+| 403 | `MERCHANT_NOT_APPROVED` | A merchant whose account isn't approved (API key requests; creating a webhook) |
 | 403 | `PROFILE_INCOMPLETE` | Google sign-up not finished: only `GET /auth/me`, `POST /auth/logout` and `POST /auth/complete-profile` work |
 | 404 | `NOT_FOUND` | Resource not found |
 | 405 | `METHOD_NOT_ALLOWED` | Wrong HTTP method for this path |
@@ -78,7 +81,10 @@ Change it in the same PR as the code, and tell the frontend team.
 | 409 | `PARCEL_NOT_READY_FOR_TASK` | Dispatch: the parcel's status or branch doesn't suit the task (the message names the parcel) |
 | 409 | `ASSIGNMENT_STARTED` | Dispatch: cancelling or reassigning a task the courier has already started |
 | 409 | `ASSIGNMENT_NEEDS_PARCEL` | Dispatch: removing the last parcel of a task |
-| 409 | `ASSIGNMENT_CHANGED` | Dispatch or courier: someone else changed the task at the same moment |
+| 409 | `ASSIGNMENT_CHANGED` | Dispatch: someone else changed the task at the same moment |
+| 409 | `WEBHOOK_LIMIT_REACHED` | Webhooks: creating or turning on a 6th active subscription |
+| 409 | `WEBHOOK_DELIVERY_NOT_RETRYABLE` | Webhooks: retrying a delivery that is not `FAILED` |
+| 409 | `ACCOUNT_REMOVED` | An admin action or password action on a removed account |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | Request body is not `application/json` |
 | 429 | `TOO_MANY_REQUESTS` | Too many requests from this IP address; the `Retry-After` header says how many seconds to wait |
 | 500 | `INTERNAL_ERROR` | Anything unexpected (generic message only) |
@@ -104,6 +110,14 @@ Messages of the new codes (show them as-is):
 | `ASSIGNMENT_STARTED` | The courier has already started this task. |
 | `ASSIGNMENT_NEEDS_PARCEL` | A task needs at least one parcel. Cancel the task instead. |
 | `ASSIGNMENT_CHANGED` | This task was just changed by someone else. Refresh and try again. |
+| `WEBHOOK_LIMIT_REACHED` | You can have up to 5 active webhooks. Turn one off before adding another. |
+| `WEBHOOK_DELIVERY_NOT_RETRYABLE` | Only failed deliveries can be sent again. |
+| `CANNOT_CHANGE_OWN_ACCOUNT` (409) | You can't block your own account. |
+| `ACCOUNT_NOT_ACTIVE` (409) | Only active accounts can be blocked. Refresh to see the account's latest status. |
+| `ACCOUNT_NOT_BLOCKED` (409) | Only blocked accounts can be unblocked. Refresh to see the account's latest status. |
+| `PASSWORD_CHANGE_REQUIRED` | Change your temporary password to continue. |
+| `API_KEY_REVOKED` | This API key has been revoked. |
+| `ACCOUNT_REMOVED` | This account has been permanently removed and cannot be modified. |
 | `SERVICE_UNAVAILABLE` | This isn't available yet. Please try again later. |
 
 **Rate limits** (per client IP; over the limit → `429 TOO_MANY_REQUESTS` + `Retry-After: <seconds>`; CORS exposes
@@ -351,6 +365,159 @@ No login → `401 UNAUTHENTICATED`; any other role → `403 FORBIDDEN`.
 - Both work from any current state (so an admin can correct a mistake) and record who reviewed it and when.
   Unknown `userId` → `404 NOT_FOUND`.
 
+### Users (admin)
+Every account (customers, merchants, couriers, dispatchers, admins). Role `ADMIN` only: no login →
+`401 UNAUTHENTICATED`; any other role → `403 FORBIDDEN`. Responses never contain passwords, hashes, tokens or the
+Google account id.
+
+#### `GET /admin/users/stats`
+```json
+{ "total": 1250, "active": 1100, "blocked": 100, "pending": 50, "newLast30Days": 50 }
+```
+Removed accounts are never counted. `blocked` = status `DISABLED`; `pending` = `PENDING_EMAIL_VERIFICATION`,
+`PENDING_APPROVAL` or `PROFILE_INCOMPLETE`; `newLast30Days` = created in the last 30 days.
+
+#### `GET /admin/users?q=&role=&status=&registeredFrom=&registeredTo=&sort=NEWEST&page=0&size=20`
+All parameters are optional. A page of accounts (`{content, page, size, totalElements, totalPages}`, page 0-based):
+```json
+{ "content": [ { "id": "...", "fullName": "Kasun Perera", "email": "kasun@example.com", "phone": "+94771234567",
+                 "role": "CUSTOMER", "status": "ACTIVE", "createdAt": "2026-11-10T04:10:00Z" } ],
+  "page": 0, "size": 20, "totalElements": 1, "totalPages": 1 }
+```
+- `q`: part of the name, email or phone (`0771234567` and `+94771234567` both work), or a full user id.
+- `role`: `CUSTOMER` | `MERCHANT` | `COURIER` | `DISPATCHER` | `ADMIN`.
+- `status`: `ACTIVE` | `BLOCKED` (`DISABLED`) | `PENDING` (the three pending statuses above) | `REJECTED` |
+  `REMOVED`. Without `status`, removed accounts are left out.
+- `registeredFrom`, `registeredTo`: `2026-11-01` (Sri Lanka days, both included).
+- `sort`: `NEWEST` (default) | `OLDEST` | `NAME` (A–Z). `size` 1–100.
+- `400 VALIDATION_FAILED`: unknown `role`/`status`/`sort`, a bad date, or `registeredFrom` after `registeredTo`
+  (field `registeredFrom`).
+- `phone` is `null` only while a Google sign-up is not finished.
+
+#### `GET /admin/users/{id}`
+```json
+{ "id": "...", "fullName": "Kasun Perera", "email": "kasun@example.com", "phone": "+94771234567",
+  "role": "MERCHANT", "status": "ACTIVE", "mustChangePassword": false, "googleLinked": false,
+  "branch": null, "vehicleType": null,
+  "merchant": { "businessName": "Lanka Crafts", "pickupDistrict": "COLOMBO", "city": "Nugegoda",
+                "approvalStatus": "APPROVED" },
+  "createdAt": "2026-11-10T04:10:00Z", "updatedAt": "2026-11-12T08:00:00Z", "deletedAt": null }
+```
+`branch` for couriers and dispatchers, `vehicleType` for couriers, `merchant` for merchants (otherwise `null`).
+Removed accounts can be viewed. Unknown id → `404 NOT_FOUND`.
+
+#### `PUT /admin/users/{id}` `{ "fullName": "...", "phone": "0771234567", "email": "..." }`
+Edits the name, phone and email (same rules as sign-up). Role, status, password, branch and vehicle cannot be changed
+here. A new email ends the user's sessions and unlinks Google sign-in. Returns the account as in `GET`.
+`400 VALIDATION_FAILED` · `404 NOT_FOUND` · `409 EMAIL_ALREADY_REGISTERED` / `PHONE_ALREADY_REGISTERED` (another
+account has it) · `409 ACCOUNT_REMOVED`.
+
+#### `PATCH /admin/users/{id}/status` `{ "status": "BLOCKED" }` or `{ "status": "ACTIVE" }`
+- `BLOCKED`: an `ACTIVE` account becomes `DISABLED`; the user is logged out at once and cannot log in.
+- `ACTIVE`: a `DISABLED` account becomes `ACTIVE` again.
+- Asking for the status the account already has changes nothing (`200`). Returns the account as in `GET`.
+- Only `ACTIVE` accounts can be blocked (pending merchants are approved or rejected on `/admin/merchants`), so
+  unblocking never skips email verification or merchant approval.
+- Who made the change and when is written to the server log (ids only).
+- `400 VALIDATION_FAILED` (field `status`) · `404 NOT_FOUND` · `409 CANNOT_CHANGE_OWN_ACCOUNT` (an admin's own
+  account) · `409 ACCOUNT_REMOVED` · `409 ACCOUNT_NOT_ACTIVE` (blocking an account that isn't `ACTIVE`) ·
+  `409 ACCOUNT_NOT_BLOCKED` (unblocking an account that isn't blocked).
+
+### Parcels (admin, WP4)
+Every parcel on the platform, read only. Role `ADMIN` only: no login → `401 UNAUTHENTICATED`; any other role →
+`403 FORBIDDEN`. Statuses are those of "Parcel statuses" below (there is no cancelled status).
+Admins monitor parcels but do not assign or reassign couriers: that is the dispatchers' job (Dispatch, WP8), so
+there is no assign or reassign endpoint here.
+
+#### `GET /admin/parcels/stats`
+```json
+{ "total": 2450, "pending": 180, "inTransit": 320, "delivered": 1800, "failed": 150,
+  "byStatus": { "CREATED": 180, "PICKED_UP": 40, "AT_BRANCH": 120, "IN_TRANSIT": 100, "OUT_FOR_DELIVERY": 60,
+                "DELIVERED": 1800, "FAILED": 150 } }
+```
+`pending` = `CREATED`; `inTransit` = `PICKED_UP` + `AT_BRANCH` + `IN_TRANSIT` + `OUT_FOR_DELIVERY`.
+
+#### `GET /admin/parcels?q=&status=&pickupDistrict=&deliveryDistrict=&createdFrom=&createdTo=&payment=&sort=NEWEST&page=0&size=20`
+All parameters are optional. A page of parcels (`{content, page, size, totalElements, totalPages}`, page 0-based):
+```json
+{ "content": [ {
+    "id": "...", "trackingNumber": "SD2611004817", "status": "IN_TRANSIT",
+    "senderType": "CUSTOMER", "senderName": "Saman Perera", "receiverName": "Nimal Silva",
+    "pickupCity": "Colombo 05", "pickupDistrict": "COLOMBO", "deliveryCity": "Kandy", "deliveryDistrict": "KANDY",
+    "currentBranch": null, "weightKg": 2.50, "feeAmount": 450.00, "currency": "LKR", "codAmount": null,
+    "createdAt": "2026-11-12T04:10:00Z", "updatedAt": "2026-11-13T06:00:00Z" } ],
+  "page": 0, "size": 20, "totalElements": 1, "totalPages": 1 }
+```
+- `q`: part of the tracking number (spaces ignored), the sender's or receiver's name or phone (`0771234567` or
+  `+94771234567`), or the merchant's order ref; a full parcel id finds exactly that parcel.
+- `status`: one or more parcel statuses, repeated (`status=PICKED_UP&status=AT_BRANCH`).
+- `pickupDistrict`, `deliveryDistrict`: district codes from `GET /meta/districts`.
+- `createdFrom`, `createdTo`: booking days `2026-11-01` (Sri Lanka days, both included).
+- `payment`: `PREPAID` (nothing to collect) | `CASH_ON_DELIVERY`.
+- `sort`: `NEWEST` (default) | `OLDEST` | `FEE_HIGH` | `FEE_LOW`. `size` 1–100.
+- `senderType`: `CUSTOMER` or `MERCHANT`; `senderName` is the pickup contact. `codAmount` is `null` when already paid;
+  `currentBranch` is set only while `AT_BRANCH`. Rows have no phones or street addresses (see the details).
+- `400 VALIDATION_FAILED`: an unknown `status`/district/`payment`/`sort`, a bad date, or `createdFrom` after
+  `createdTo` (field `createdFrom`).
+- The assigned courier is not in the list yet: courier tasks are dispatch's (WP8).
+
+#### `GET /admin/parcels/{id}`
+```json
+{ "id": "...", "trackingNumber": "SD2611004817", "status": "IN_TRANSIT",
+  "sender": { "type": "MERCHANT", "accountId": "...", "accountName": "Nimal Perera",
+              "accountEmail": "nimal@example.com", "businessName": "Lanka Crafts" },
+  "pickup":    { "name": "Saman Perera", "phone": "+94771234567", "addressLine": "12 Galle Road",
+                 "city": "Colombo 05", "district": "COLOMBO" },
+  "recipient": { "name": "Nimal Silva", "phone": "+94711234567", "addressLine": "45 Peradeniya Road",
+                 "city": "Kandy", "district": "KANDY" },
+  "weightKg": 2.50, "codAmount": null, "instructions": "Call before coming",
+  "feeAmount": 450.00, "currency": "LKR", "merchantOrderRef": "ORD-1001", "currentBranch": null,
+  "failureReason": null, "proofRecipientName": null, "hasProofPhoto": false,
+  "createdAt": "2026-11-12T04:10:00Z", "updatedAt": "2026-11-13T06:00:00Z",
+  "history": [ { "status": "IN_TRANSIT", "occurredAt": "2026-11-13T06:00:00Z", "actorRole": "COURIER",
+                 "branch": null, "note": null, "failureReason": null } ] }
+```
+`sender.businessName` only for merchants; `accountName`/`accountEmail` are `null` if the account no longer exists.
+`history` is newest first. Unknown id → `404 NOT_FOUND`.
+
+#### `GET /admin/parcels/{id}/tracking`
+The `history` list above on its own, newest first. Unknown id → `404 NOT_FOUND`.
+
+#### `GET /admin/parcels/export` (same filters as the list, without `page`/`size`)
+`200 text/csv; charset=UTF-8`, downloaded as `swiftdrop-parcels-<date>.csv`: one row per parcel in the list's order,
+at most 5,000 rows (narrow the filters for more). Columns: tracking number, parcel id, status, sender type, sender
+name/phone/address/city/district, receiver name/phone/address/city/district, weight, fee, currency, cash on delivery,
+created and last updated (UTC). It holds personal data: keep the file private. Values a spreadsheet would treat as a
+formula start with `'`.
+
+### Reports (admin, WP4)
+Role `ADMIN` only: no login → `401 UNAUTHENTICATED`; any other role → `403 FORBIDDEN`.
+
+#### `GET /admin/reports/overview`
+The figures on the admin home page (`/admin`). Days are Sri Lanka days (Asia/Colombo).
+```json
+{
+  "users": { "total": 120, "customers": 90, "merchants": 20, "couriers": 6, "dispatchers": 3, "admins": 1,
+             "pendingMerchants": 4 },
+  "today": { "date": "2026-11-13", "created": 12, "delivered": 8, "failed": 1 },
+  "last7Days": {
+    "from": "2026-11-07", "to": "2026-11-13",
+    "created": 60, "delivered": 40, "failed": 5, "successRate": 88.9,
+    "perDay": [ { "date": "2026-11-07", "created": 5, "delivered": 3, "failed": 0 } ]
+  },
+  "recentUsers": [
+    { "id": "...", "fullName": "Ayesha Fernando", "role": "CUSTOMER", "status": "ACTIVE",
+      "createdAt": "2026-11-13T04:10:00Z" }
+  ]
+}
+```
+- `users`: accounts per role, every status except `REMOVED`. `pendingMerchants` = merchants with status
+  `PENDING_APPROVAL` (the ones on `GET /admin/merchants?status=PENDING`).
+- `today` and `perDay`: `created` = parcels booked that day; `delivered` / `failed` = parcels that reached that status
+  that day. `perDay` has all 7 days, oldest first, also days with nothing (all 0). `today` is the last day of `perDay`.
+- `successRate` = `delivered / (delivered + failed) × 100` over the 7 days, one decimal; `0.0` when both are 0.
+- `recentUsers`: the 5 newest accounts (not `REMOVED`), newest first. No email or phone.
+
 ---
 
 ## Cookie and token
@@ -498,6 +665,133 @@ Response `200` — the key with `revokedAt` set. Idempotent.
 Revokes the existing key and creates a new one with the same name.
 
 Response `200` — same shape as **Create**, with the new `rawKey` shown once.
+
+---
+
+## Webhooks (WP6)
+
+A merchant registers HTTPS URLs; SwiftDrop sends a signed `POST` to each one when one of the merchant's parcels
+changes status. Only parcels with a merchant trigger webhooks (customer bookings never do). The merchant endpoints
+require a logged-in `MERCHANT` cookie (`SD_TOKEN`) of an approved merchant; API keys can't manage webhooks (yet):
+a request authenticated with an `X-Api-Key` header gets `403 FORBIDDEN`.
+The admin endpoints require `ADMIN`.
+
+### Event types
+
+| Type | Sent when the parcel becomes |
+|---|---|
+| `parcel.created` | `CREATED` |
+| `parcel.picked_up` | `PICKED_UP` |
+| `parcel.at_branch` | `AT_BRANCH` |
+| `parcel.in_transit` | `IN_TRANSIT` |
+| `parcel.out_for_delivery` | `OUT_FOR_DELIVERY` |
+| `parcel.delivered` | `DELIVERED` |
+| `parcel.failed` | `FAILED` |
+| `webhook.ping` | Never by a parcel: only `POST /merchant/webhooks/{id}/test`, so it can't be subscribed to |
+
+### Subscription (response)
+
+```json
+{
+  "id": "uuid", "url": "https://shop.example.com/swiftdrop", "eventTypes": ["parcel.delivered", "parcel.failed"],
+  "active": true, "createdAt": "2026-11-13T09:00:00Z", "updatedAt": "2026-11-13T09:00:00Z"
+}
+```
+The secret is never in this shape. The create and rotate responses add it once:
+`"secret": "whsec_…"`. Store it securely; it can't be retrieved again (rotate to get a new one).
+
+### Delivery (response)
+
+```json
+{
+  "id": "uuid", "subscriptionId": "uuid", "eventId": "uuid", "eventType": "parcel.delivered",
+  "status": "PENDING", "attempts": 1, "lastStatusCode": 500, "lastError": "HTTP_500",
+  "nextAttemptAt": "2026-11-13T09:16:00Z", "createdAt": "2026-11-13T09:15:00Z", "deliveredAt": null
+}
+```
+- `status`: `PENDING` (waiting for the next attempt), `SUCCEEDED`, `FAILED` (no more automatic attempts).
+- `lastError`: `null`, `HTTP_<code>`, `TIMEOUT`, `CONNECTION_FAILED`, `URL_NOT_ALLOWED` (the URL resolved to a
+  private address or couldn't be resolved; nothing was sent) or `SUBSCRIPTION_INACTIVE` (the subscription was turned
+  off before it was sent; not counted as an attempt). The merchant's response body is never stored.
+- `nextAttemptAt` is `null` unless `status` is `PENDING`.
+
+### Endpoints
+
+| Method and path | What it does | Main errors |
+|---|---|---|
+| `POST /merchant/webhooks` `{"url", "eventTypes": [...]}` | Create an active subscription (201, subscription + `secret`) | 400 `url`, `eventTypes`; 403 `MERCHANT_NOT_APPROVED`; 409 `WEBHOOK_LIMIT_REACHED` |
+| `GET /merchant/webhooks` | Your subscriptions, active and turned off, newest first (array of subscriptions) | — |
+| `PATCH /merchant/webhooks/{id}` `{"url"?, "eventTypes"?, "active"?}` | Change only the fields sent (subscription) | 400; 404; 409 `WEBHOOK_LIMIT_REACHED` (turning one on) |
+| `DELETE /merchant/webhooks/{id}` | Turn off (`active: false`; history is kept). 204. Idempotent | 404 |
+| `POST /merchant/webhooks/{id}/rotate-secret` | New secret; the old one stops working at once, also for retries (200, subscription + `secret`) | 404 |
+| `POST /merchant/webhooks/{id}/test` | Queue a `webhook.ping` for this subscription, sent within seconds (202, delivery). Also works while it is turned off, so a URL can be checked before turning it on. If a ping for it is still waiting to be sent, that one is returned (202) instead of queuing another | 404 |
+| `GET /merchant/webhooks/{id}/deliveries?status=&page=0&size=20` | Delivery history of one subscription, newest first (page of deliveries) | 400 `status`, `page`, `size` (1-100); 404 |
+| `POST /merchant/webhooks/deliveries/{id}/retry` | Send a `FAILED` delivery again, with a new set of attempts: `PENDING`, `attempts: 0`, due now; `lastStatusCode`/`lastError` keep the old values until the next attempt (delivery). A parcel delivery of a turned-off subscription fails again with `SUBSCRIPTION_INACTIVE`: turn the subscription on first | 404; 409 `WEBHOOK_DELIVERY_NOT_RETRYABLE` |
+| `GET /admin/webhooks/deliveries?status=FAILED&merchantId=&page=0&size=20` | ADMIN: every merchant's deliveries, newest first (page of deliveries, each with `merchantId`) | 400 |
+| `POST /admin/webhooks/deliveries/{id}/retry` | ADMIN: same as the merchant retry | 404; 409 `WEBHOOK_DELIVERY_NOT_RETRYABLE` |
+
+Another merchant's subscription or delivery answers 404, never 403. A merchant has at most 5 active subscriptions.
+Delivery lists are newest first (`createdAt`, then `id`, both descending) and never include the payload.
+
+### Validation rules (webhooks)
+
+| Field | Rule | `fieldErrors` message |
+|---|---|---|
+| `url` | Required, at most 2048 characters, an absolute `https://` URL | Enter a full https:// address, like https://shop.example.com/webhooks |
+| `url` | No user name or password in it, and the host must not be (or resolve to) a private, loopback or link-local address | This address can't receive webhooks. Use a public https:// address. |
+| `eventTypes` | Required, 1-7 distinct parcel event types from the table above (`webhook.ping` isn't one) | Choose at least one event (empty); Choose at most 7 events; `'parcel.lost' isn't a webhook event` (unknown name) |
+| `status` (query) | `PENDING`, `SUCCEEDED` or `FAILED` | — |
+
+### What the merchant receives
+
+`POST <url>`, `Content-Type: application/json`:
+
+```json
+{
+  "id": "6f1c2a8e-4b0d-4c1e-9f3a-2d7b8e5c1a90",
+  "type": "parcel.delivered",
+  "createdAt": "2026-11-13T09:15:00Z",
+  "data": {
+    "parcelId": "uuid", "trackingNumber": "SD2611004817", "merchantOrderRef": "TECH-ORD-1001",
+    "status": "DELIVERED", "previousStatus": "OUT_FOR_DELIVERY", "sequence": 7,
+    "branch": null, "failureReason": null
+  }
+}
+```
+- `id` is the event id: the same on every attempt and retry. Ignore an `id` you already processed.
+- `createdAt` is when the parcel changed status, not when this attempt was sent.
+- `sequence` goes up with every status change of the parcel. Ignore an event whose `sequence` is lower than the last
+  one you saw for that parcel (events can arrive late or out of order).
+- `previousStatus` is `null` for `parcel.created`. `branch` (a district code) is set only for `parcel.at_branch`;
+  `failureReason` (a `FailureReason` code) only for `parcel.failed`. `merchantOrderRef` is `null` when the parcel
+  has none.
+- No customer, sender or recipient names, phone numbers, addresses or courier notes are ever sent.
+- A `webhook.ping` has `"data": { "subscriptionId": "uuid" }`.
+
+Headers:
+
+| Header | Value |
+|---|---|
+| `X-SwiftDrop-Event-Id` | Same as `id` |
+| `X-SwiftDrop-Event-Type` | Same as `type` |
+| `X-SwiftDrop-Timestamp` | Unix time in seconds when this attempt was sent (new on every attempt) |
+| `X-SwiftDrop-Signature` | `sha256=` + lowercase hex of HMAC-SHA256(secret, `<timestamp>.<raw body>`) |
+
+The HMAC key is the whole secret, including the `whsec_` prefix, as UTF-8 bytes.
+To verify a request: compute the HMAC over the timestamp header, a `.` and the **raw** request body (before any JSON
+parsing), compare it with the signature in constant time, and reject timestamps more than 5 minutes old.
+
+### Delivery and retries
+
+- A 2xx answer within 10 seconds counts as delivered. Redirects are not followed.
+- 408, 429, 5xx, timeouts, connection errors and `URL_NOT_ALLOWED` are retried: right away, then after 1 min, 5 min,
+  15 min, 1 h and 6 h (6 attempts in all).
+- Any other 4xx or a 3xx, or the 6th failed attempt, makes the delivery `FAILED`. The merchant or an admin can retry
+  it.
+- Delivery is at-least-once and not ordered: use `id` and `sequence`, as above.
+- A change to a subscription (URL, event types, turned off) applies to new events. A turned-off subscription gets no
+  new parcel events, and its `PENDING` parcel deliveries are not sent: they become `FAILED` with `lastError`
+  `SUBSCRIPTION_INACTIVE` (a test ping is still sent).
 
 ---
 

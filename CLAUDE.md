@@ -13,7 +13,7 @@ Every direct sub-package of `com.swiftdrop` is a module. `SwiftdropBackendApplic
 |---|---|---|---|
 | `shared` (OPEN) | `error/` ApiError, ErrorCode, ApiException + NotFound/Forbidden/Conflict/BusinessRule/FieldValidation exceptions; `web/` CurrentUser, PageResponse, PublicEndpoints, ApiPaths; `reference/` District, ParcelsPerMonth; `validation/` PhoneNumberNormalizer, @SriLankanMobile | - | TBD |
 | `infrastructure` | none (only `internal/`: web, config, messaging) | - | TBD |
-| `identity` | IdentityApi, UserSummary, CourierSummary, Role, UserStatus, MerchantProfiles (implemented by merchants) | `identity` | Viduranga |
+| `identity` | IdentityApi, UserSummary, CourierSummary, UserRoleCounts, Role, UserStatus, MerchantProfiles (implemented by merchants) | `identity` | Viduranga |
 | `merchants` | MerchantApi, MerchantSummary, ApprovalStatus | `merchants` | Viduranga |
 | `pricing` | PricingApi, QuoteRequest, PriceQuote, Vehicle | `pricing` (rate_cards, vehicle_rates, district_locations) | TBD (fee estimate: Pasindu) |
 | `delivery` | DeliveryApi, DeliveryOutboxApi, OutboxMessage, DeliverySnapshot, DeliveryContact, CreateDeliveryCommand, ChangeStatusCommand, ParcelStatus (incl. `AT_BRANCH`; branch = `District`), ParcelStatusEntry, ParcelStatusChanged, FailureReason, ProofPhoto, ProofPhotoRef, DeliveryStats | `delivery` (incl. `outbox_events`) | Pasindu |
@@ -21,7 +21,7 @@ Every direct sub-package of `com.swiftdrop` is a module. `SwiftdropBackendApplic
 | `reporting` | - | none | TBD |
 | `tracking` | - (endpoints, WebSocket/STOMP and a RabbitMQ listener only) | `tracking` (`parcel_index`) | D.M.A.I. Disanayaka (WP8) |
 | `notifications` | NotificationsApi, AccountEmail | `notifications` | TBD |
-| `webhooks` | - | `webhooks` | TBD |
+| `webhooks` | - | `webhooks` (`subscriptions`, `deliveries`) | chanuka (WP6) |
 | `outbox` | - (reads the outbox only through `DeliveryOutboxApi`) | none | TBD |
 | `courier` | - (endpoints only; uses `AssignmentApi` and `DeliveryApi`) | none | Kalpani |
 
@@ -48,8 +48,16 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
 - A module's public URLs: implement `shared.web.PublicEndpoints` as a bean in the module. Never edit identity's SecurityConfig for that.
 - Unbuilt modules have placeholder contracts ("Contract owned by <module> - extend in Phase 0"); the owner extends them.
 - Current dependencies: identity -> notifications, shared; merchants -> identity, shared; delivery -> pricing, shared;
-  dispatch -> delivery, identity, shared; tracking -> delivery, shared; courier -> dispatch, delivery, shared;
-  pricing -> shared; infrastructure -> shared. Nothing depends on courier.
+  dispatch -> delivery, identity, shared; tracking -> delivery, shared; courier -> delivery, identity, shared;
+  pricing -> shared; infrastructure -> shared; webhooks -> delivery, merchants, shared. Nothing depends on courier or
+  webhooks. Planned: courier -> dispatch (courier tasks).
+- webhooks (contract in API.md "Webhooks", being built): reads `ParcelStatusChanged` from `webhooks.q` (declared by
+  infrastructure; never declare it again with other arguments), stores one delivery row per event and subscription,
+  and a scheduled worker sends them. Retries live in the database (`webhooks.deliveries`), not in RabbitMQ queues.
+  Signing secrets are stored encrypted (AES-GCM), never hashed and never logged. Merchants get a public payload,
+  never the raw event (no customer ids, actor ids or notes). The worker (`WebhookDispatcher`, on unless
+  `SWIFTDROP_WEBHOOKS_DISPATCHER_ENABLED=false`; off in tests, which call `dispatchDue()`) leases rows and never holds
+  a transaction during the HTTP call; result updates are guarded by the lease.
 - dispatch: `AssignmentApi` is implemented; dispatcher endpoints are under `/dispatch` (DISPATCHER and ADMIN, API.md
   "Dispatch"). Delivery has no "waiting for pickup" query, so dispatch keeps `dispatch.pickup_queue` from
   `ParcelStatusChanged` (RabbitMQ queue `dispatch.q`); it fills only while the outbox relay runs
