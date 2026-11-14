@@ -981,6 +981,56 @@ Response `200`:
   (`total` is `null`).
 - `400` `VALIDATION_FAILED` · `401` `UNAUTHENTICATED` · `403` `FORBIDDEN` (not a `CUSTOMER` or `MERCHANT`)
 
+### Zones & pricing (admin, WP4)
+The admin's Zones & Pricing page (`/admin/zones`). Role `ADMIN` only: no login → `401 UNAUTHENTICATED`; any other
+role → `403 FORBIDDEN`. **Read only**: nothing is saved, and rate cards and district centres change only through
+Flyway migrations. Every figure comes from the active rate card and the same distance rule as a quote, so it is
+what a booking on that route is charged.
+
+#### `GET /admin/pricing/rate-card`
+The active rate card with its vehicles, smallest first.
+```json
+{ "version": 5, "active": true, "currency": "LKR", "baseFee": 0.00, "baseWeightKg": 1, "perKgFee": 50.00,
+  "volumetricDivisor": 5000, "codFee": 0.00, "linehaulPerKm": 1.00, "roadFactor": 1.30,
+  "createdAt": "2026-11-14T05:55:00Z",
+  "vehicles": [ { "vehicle": "BIKE", "checkOrder": 1, "maxLengthCm": 45, "maxWidthCm": 35, "maxHeightCm": 35,
+                  "maxWeightKg": 10.00, "legFee": 150.00 } ] }
+```
+
+#### `GET /admin/pricing/rate-cards`
+Every rate card version, **newest first**, each in the same shape as `GET /admin/pricing/rate-card` with its own
+vehicles. Exactly one has `"active": true`. Previous versions never change: a parcel keeps the `rateCardVersion` it
+was priced with, so its fee can be worked out again from that version.
+```json
+[ { "version": 5, "active": true, "baseFee": 0.00, "...": "...", "vehicles": [ ... ] },
+  { "version": 4, "active": false, "baseFee": 150.00, "...": "...", "vehicles": [ ... ] } ]
+```
+
+#### `GET /admin/pricing/districts`
+All 25 districts (a branch is a district) in `GET /meta/districts` order, with the centre distances are measured
+from. `priced` is false (and `latitude`/`longitude` null) for a district without a centre: routes to it can't be
+priced.
+```json
+[ { "district": "AMPARA", "name": "Ampara", "priced": true, "latitude": 7.29760, "longitude": 81.68200 } ]
+```
+
+#### `GET /admin/pricing/routes?from=COLOMBO`
+Distance and linehaul from one branch to every district (25 rows, district order). `from` is required, one of
+`GET /meta/districts`; missing or unknown → `400 VALIDATION_FAILED`.
+```json
+{ "from": "COLOMBO", "fromName": "Colombo", "rateCardVersion": 5, "currency": "LKR", "roadFactor": 1.30,
+  "linehaulPerKm": 1.00,
+  "routes": [ { "to": "KANDY", "toName": "Kandy", "distanceKm": 122.6, "linehaul": 122.60 } ] }
+```
+- `distanceKm` = straight line between the centres × `roadFactor`, one decimal; `0.0` for the `from` district itself.
+- `linehaul` = `distanceKm` × `linehaulPerKm`, two decimals (the quote's `LINEHAUL` line).
+- Both are `null` when either district has no centre.
+
+#### `POST /admin/pricing/estimate`
+The price calculator: the same request, rules, messages and response as `POST /pricing/estimate`, for an admin.
+Nothing is saved. A `MANUAL_QUOTE` result is a parcel that booking refuses with `409 PARCEL_NEEDS_MANUAL_QUOTE`.
+- `400` `VALIDATION_FAILED` · `401` `UNAUTHENTICATED` · `403` `FORBIDDEN` (not an `ADMIN`)
+
 ---
 
 ## Merchant Orders (WP5 — coming in PR 3, after WP3 merges)
