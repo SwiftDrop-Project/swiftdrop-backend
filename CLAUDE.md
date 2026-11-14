@@ -23,7 +23,7 @@ Every direct sub-package of `com.swiftdrop` is a module. `SwiftdropBackendApplic
 | `notifications` | NotificationsApi, AccountEmail | `notifications` | TBD |
 | `webhooks` | - | `webhooks` (`subscriptions`, `deliveries`) | chanuka (WP6) |
 | `outbox` | - (reads the outbox only through `DeliveryOutboxApi`) | none | TBD |
-| `courier` | - (endpoints only; uses `DeliveryApi`) | none | Kalpani |
+| `courier` | - (endpoints only; uses `AssignmentApi` and `DeliveryApi`) | none | Kalpani |
 
 ```
 com.swiftdrop.<module>/
@@ -69,9 +69,11 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
   may follow `/topic/live`). In-memory simple broker; each instance has its own auto-delete RabbitMQ queue.
   The admin's all-parcels list (`/admin/tracking/parcels`) reads tracking's own `tracking.parcel_index`, filled from
   `ParcelStatusChanged` and from lookups (delivery has no admin search).
-- courier gets `DeliveryApi` through an `ObjectProvider` and answers 503 SERVICE_UNAVAILABLE while nothing implements
-  it. TEMPORARY: `courier/internal/fake` (`SWIFTDROP_FAKE_DELIVERY=true`) is an in-memory `DeliveryApi` for demos;
-  delete it (and its property and tests) when delivery is implemented.
+- courier gets `AssignmentApi` (dispatch) and `DeliveryApi` (delivery) by constructor injection. Each courier step
+  changes the parcel status (`DeliveryApi.changeStatus`) and records the item outcome (`AssignmentApi.recordOutcome`)
+  in one transaction; a clash with a dispatcher's change answers 409 `ASSIGNMENT_CHANGED` and keeps nothing.
+  `scheduledFor` is information only: couriers see and may work tasks scheduled for a later day.
+  `CourierWorkflowIntegrationTest` / `CourierWorkflowRollbackTest` run on the real modules; keep them green.
 - delivery must never depend on identity: identity -> notifications, and notifications will consume
   `ParcelStatusChanged` (notifications -> delivery), so that would be a cycle. User ids are plain UUIDs and roles are
   plain names (e.g. `COURIER`). Multi-branch: several couriers handle one parcel, so callers authorize
