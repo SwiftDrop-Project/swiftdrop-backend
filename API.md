@@ -560,13 +560,14 @@ The secret is never in this shape. The create and rotate responses add it once:
 | `PATCH /merchant/webhooks/{id}` `{"url"?, "eventTypes"?, "active"?}` | Change only the fields sent (subscription) | 400; 404; 409 `WEBHOOK_LIMIT_REACHED` (turning one on) |
 | `DELETE /merchant/webhooks/{id}` | Turn off (`active: false`; history is kept). 204. Idempotent | 404 |
 | `POST /merchant/webhooks/{id}/rotate-secret` | New secret; the old one stops working at once, also for retries (200, subscription + `secret`) | 404 |
-| `POST /merchant/webhooks/{id}/test` | Queue a `webhook.ping` for this subscription, sent within seconds (202, delivery). Also works while it is turned off, so a URL can be checked before turning it on | 404 |
+| `POST /merchant/webhooks/{id}/test` | Queue a `webhook.ping` for this subscription, sent within seconds (202, delivery). Also works while it is turned off, so a URL can be checked before turning it on. If a ping for it is still waiting to be sent, that one is returned (202) instead of queuing another | 404 |
 | `GET /merchant/webhooks/{id}/deliveries?status=&page=0&size=20` | Delivery history of one subscription, newest first (page of deliveries) | 400 `status`, `page`, `size` (1-100); 404 |
-| `POST /merchant/webhooks/deliveries/{id}/retry` | Send a `FAILED` delivery again, with a new set of attempts (delivery) | 404; 409 `WEBHOOK_DELIVERY_NOT_RETRYABLE` |
+| `POST /merchant/webhooks/deliveries/{id}/retry` | Send a `FAILED` delivery again, with a new set of attempts: `PENDING`, `attempts: 0`, due now; `lastStatusCode`/`lastError` keep the old values until the next attempt (delivery). A parcel delivery of a turned-off subscription fails again with `SUBSCRIPTION_INACTIVE`: turn the subscription on first | 404; 409 `WEBHOOK_DELIVERY_NOT_RETRYABLE` |
 | `GET /admin/webhooks/deliveries?status=FAILED&merchantId=&page=0&size=20` | ADMIN: every merchant's deliveries, newest first (page of deliveries, each with `merchantId`) | 400 |
 | `POST /admin/webhooks/deliveries/{id}/retry` | ADMIN: same as the merchant retry | 404; 409 `WEBHOOK_DELIVERY_NOT_RETRYABLE` |
 
 Another merchant's subscription or delivery answers 404, never 403. A merchant has at most 5 active subscriptions.
+Delivery lists are newest first (`createdAt`, then `id`, both descending) and never include the payload.
 
 ### Validation rules (webhooks)
 

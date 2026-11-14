@@ -19,9 +19,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.IOException;
-import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -66,6 +67,12 @@ class WebhookDispatcherTest extends IntegrationTest {
 
     @Autowired
     SecretCipher cipher;
+
+    @Autowired
+    WebhookPayloadFactory payloads;
+
+    @Autowired
+    PlatformTransactionManager transactionManager;
 
     @Autowired
     JdbcTemplate jdbc;
@@ -267,6 +274,39 @@ class WebhookDispatcherTest extends IntegrationTest {
     }
 
     @Test
+    void aQueuedTestPingReachesTheMerchantSigned() throws Exception {
+        WebhookSubscription subscription = subscribe(hookUrl, SECRET);
+        WebhookDeliveryService service = new WebhookDeliveryService(deliveries, subscriptions, payloads, clock);
+
+        inTransaction().executeWithoutResult(tx -> service.queuePing(merchant, subscription.getId()));
+        assertThat(dispatcher.dispatchDue()).isEqualTo(1);
+
+        Received ping = received.poll(5, TimeUnit.SECONDS);
+        assertThat(ping).isNotNull();
+        assertThat(ping.eventType()).isEqualTo("webhook.ping");
+        assertThat(ping.body()).contains("\"type\":\"webhook.ping\"")
+                .contains("\"data\":{\"subscriptionId\":\"" + subscription.getId() + "\"}");
+        assertThat(signer.matches(SECRET, ping.timestamp(), ping.body(), ping.signature())).isTrue();
+    }
+
+    @Test
+    void aRetriedDeliveryIsSentAgain() throws Exception {
+        answer.set(400);
+        WebhookDelivery delivery = due(subscribe(hookUrl, SECRET), WebhookEventType.PARCEL_DELIVERED);
+        dispatcher.dispatchDue();
+        assertThat(row(delivery)).containsEntry("status", "FAILED");
+        WebhookDeliveryService service = new WebhookDeliveryService(deliveries, subscriptions, payloads, clock);
+
+        answer.set(200);
+        // built by hand (to share the test clock), so the transaction @Transactional gives in the app is opened here
+        inTransaction().executeWithoutResult(tx -> service.retry(merchant, delivery.getId()));
+        assertThat(dispatcher.dispatchDue()).isEqualTo(1);
+
+        assertThat(received).hasSize(2);
+        assertThat(row(delivery)).containsEntry("status", "SUCCEEDED").containsEntry("attempts", 1);
+    }
+
+    @Test
     void severalDueDeliveriesAreSentInOneRound() {
         WebhookSubscription subscription = subscribe(hookUrl, SECRET);
         for (int i = 0; i < 5; i++) {
@@ -281,6 +321,10 @@ class WebhookDispatcherTest extends IntegrationTest {
     }
 
     // ---------- helpers ----------
+
+    private TransactionTemplate inTransaction() {
+        return new TransactionTemplate(transactionManager);
+    }
 
     private WebhookSubscription subscribe(String url, String secret) {
         return subscribeWithCiphertext(url, cipher.encrypt(secret));

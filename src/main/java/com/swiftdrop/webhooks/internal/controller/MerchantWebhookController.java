@@ -3,9 +3,13 @@ package com.swiftdrop.webhooks.internal.controller;
 import com.swiftdrop.shared.error.ErrorCode;
 import com.swiftdrop.shared.error.ForbiddenException;
 import com.swiftdrop.shared.web.CurrentUser;
+import com.swiftdrop.shared.web.PageResponse;
+import com.swiftdrop.webhooks.internal.application.WebhookDeliveryService;
 import com.swiftdrop.webhooks.internal.application.WebhookSubscriptionService;
+import com.swiftdrop.webhooks.internal.domain.DeliveryStatus;
 import com.swiftdrop.webhooks.internal.dto.CreateWebhookRequest;
 import com.swiftdrop.webhooks.internal.dto.UpdateWebhookRequest;
+import com.swiftdrop.webhooks.internal.dto.WebhookDeliveryResponse;
 import com.swiftdrop.webhooks.internal.dto.WebhookResponse;
 import com.swiftdrop.webhooks.internal.dto.WebhookWithSecretResponse;
 import io.swagger.v3.oas.annotations.Operation;
@@ -23,6 +27,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -39,9 +44,11 @@ import java.util.UUID;
 public class MerchantWebhookController {
 
     private final WebhookSubscriptionService service;
+    private final WebhookDeliveryService deliveries;
 
-    public MerchantWebhookController(WebhookSubscriptionService service) {
+    public MerchantWebhookController(WebhookSubscriptionService service, WebhookDeliveryService deliveries) {
         this.service = service;
+        this.deliveries = deliveries;
     }
 
     @PostMapping
@@ -75,6 +82,27 @@ public class MerchantWebhookController {
     @Operation(summary = "Replace the signing secret (the new secret is shown once; the old one stops working)")
     public WebhookWithSecretResponse rotateSecret(Authentication authentication, @PathVariable UUID id) {
         return service.rotateSecret(merchantId(authentication), id);
+    }
+
+    @PostMapping("/{id}/test")
+    @Operation(summary = "Send a test ping to this subscription within seconds (also while it is turned off)")
+    public ResponseEntity<WebhookDeliveryResponse> test(Authentication authentication, @PathVariable UUID id) {
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(deliveries.queuePing(merchantId(authentication), id));
+    }
+
+    @GetMapping("/{id}/deliveries")
+    @Operation(summary = "Delivery history of one subscription, newest first")
+    public PageResponse<WebhookDeliveryResponse> deliveries(Authentication authentication, @PathVariable UUID id,
+                                                            @RequestParam(required = false) DeliveryStatus status,
+                                                            @RequestParam(defaultValue = "0") int page,
+                                                            @RequestParam(defaultValue = "20") int size) {
+        return deliveries.history(merchantId(authentication), id, status, page, size);
+    }
+
+    @PostMapping("/deliveries/{deliveryId}/retry")
+    @Operation(summary = "Send a FAILED delivery again, with a new set of attempts")
+    public WebhookDeliveryResponse retry(Authentication authentication, @PathVariable UUID deliveryId) {
+        return deliveries.retry(merchantId(authentication), deliveryId);
     }
 
     /** Cookie (JWT) logins only; API-key requests are refused. */

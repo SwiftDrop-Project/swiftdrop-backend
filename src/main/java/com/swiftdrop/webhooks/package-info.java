@@ -24,9 +24,10 @@
  * milliseconds is not caught (pinning the checked address is a possible hardening step).
  * Signing secrets are stored encrypted (they are needed in plain form to sign), never hashed and never logged.
  *
- * <p>Status: subscriptions API ({@code /merchant/webhooks}), the {@code webhooks.q} consumer (events become PENDING
- * deliveries; events from before a subscription was created are not replayed to it) and the sending worker with
- * retries are built. The test ping, delivery history, manual retry and the admin endpoints are in progress.
+ * <p>Status: built. Subscriptions API, test ping, delivery history and manual retry ({@code /merchant/webhooks}),
+ * the admin delivery list and retry ({@code /admin/webhooks/deliveries}), the {@code webhooks.q} consumer (events
+ * from before a subscription was created are not replayed to it) and the sending worker with retries. A ping or a
+ * retry only makes a row PENDING and due now; the worker sends it.
  *
  * <p>Database schema {@code webhooks} (no foreign keys; merchant ids are identity user ids):
  * <ul>

@@ -70,6 +70,16 @@ class WebhookPayloadFactoryTest {
                 .contains("\"merchantOrderRef\":null");
     }
 
+    @Test
+    void aPingCarriesOnlyTheSubscriptionId() {
+        UUID subscription = UUID.fromString("77777777-7777-7777-7777-777777777777");
+
+        assertThat(factory.ping(EVENT, subscription, OCCURRED)).isEqualTo(
+                "{\"id\":\"6f1c2a8e-4b0d-4c1e-9f3a-2d7b8e5c1a90\",\"type\":\"webhook.ping\","
+                        + "\"createdAt\":\"2026-11-13T09:15:00Z\","
+                        + "\"data\":{\"subscriptionId\":\"77777777-7777-7777-7777-777777777777\"}}");
+    }
+
     private static ParcelStatusChanged event(ParcelStatus from, ParcelStatus to, District branch, String failure) {
         return new ParcelStatusChanged(EVENT, PARCEL, 7, "SD2611004817", CUSTOMER, MERCHANT, from, to, ACTOR,
                 "COURIER", NOTE, failure, OCCURRED, branch);

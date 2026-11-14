@@ -33,6 +33,12 @@ public class WebhookPayloadFactory {
         return jsonMapper.writeValueAsString(payload);
     }
 
+    /** The body of a test ping: {@code "data": {"subscriptionId": ...}} (API.md). */
+    public String ping(UUID eventId, UUID subscriptionId, Instant createdAt) {
+        return jsonMapper.writeValueAsString(new Payload(eventId.toString(), WebhookEventType.WEBHOOK_PING.wireName(),
+                createdAt, new PingData(subscriptionId)));
+    }
+
     /** {@code id} is the event id (the same on every attempt); {@code createdAt} is when the status changed. */
     record Payload(String id, String type, Instant createdAt, Object data) {
     }
@@ -40,5 +46,8 @@ public class WebhookPayloadFactory {
     /** {@code sequence} is the parcel version: merchants ignore an event with a lower one than the last seen. */
     record ParcelData(UUID parcelId, String trackingNumber, String merchantOrderRef, ParcelStatus status,
                       ParcelStatus previousStatus, long sequence, District branch, String failureReason) {
+    }
+
+    record PingData(UUID subscriptionId) {
     }
 }
