@@ -13,7 +13,7 @@ Every direct sub-package of `com.swiftdrop` is a module. `SwiftdropBackendApplic
 |---|---|---|---|
 | `shared` (OPEN) | `error/` ApiError, ErrorCode, ApiException + NotFound/Forbidden/Conflict/BusinessRule/FieldValidation exceptions; `web/` CurrentUser, PageResponse, PublicEndpoints, ApiPaths; `reference/` District, ParcelsPerMonth; `validation/` PhoneNumberNormalizer, @SriLankanMobile | - | TBD |
 | `infrastructure` | none (only `internal/`: web, config, messaging) | - | TBD |
-| `identity` | IdentityApi, UserSummary, CourierSummary, Role, UserStatus, MerchantProfiles (implemented by merchants) | `identity` | Viduranga |
+| `identity` | IdentityApi, UserSummary, CourierSummary, UserRoleCounts, Role, UserStatus, MerchantProfiles (implemented by merchants) | `identity` | Viduranga |
 | `merchants` | MerchantApi, MerchantSummary, ApprovalStatus | `merchants` | Viduranga |
 | `pricing` | PricingApi, QuoteRequest, PriceQuote, Vehicle | `pricing` (rate_cards, vehicle_rates, district_locations) | TBD (fee estimate: Pasindu) |
 | `delivery` | DeliveryApi, DeliveryOutboxApi, OutboxMessage, DeliverySnapshot, DeliveryContact, CreateDeliveryCommand, ChangeStatusCommand, ParcelStatus (incl. `AT_BRANCH`; branch = `District`), ParcelStatusEntry, ParcelStatusChanged, FailureReason, ProofPhoto, ProofPhotoRef, DeliveryStats | `delivery` (incl. `outbox_events`) | Pasindu |

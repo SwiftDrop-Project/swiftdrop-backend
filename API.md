@@ -104,6 +104,9 @@ Messages of the new codes (show them as-is):
 | `ASSIGNMENT_STARTED` | The courier has already started this task. |
 | `ASSIGNMENT_NEEDS_PARCEL` | A task needs at least one parcel. Cancel the task instead. |
 | `ASSIGNMENT_CHANGED` | This task was just changed by someone else. Refresh and try again. |
+| `CANNOT_CHANGE_OWN_ACCOUNT` (409) | You can't block your own account. |
+| `ACCOUNT_NOT_ACTIVE` (409) | Only active accounts can be blocked. Refresh to see the account's latest status. |
+| `ACCOUNT_NOT_BLOCKED` (409) | Only blocked accounts can be unblocked. Refresh to see the account's latest status. |
 | `SERVICE_UNAVAILABLE` | This isn't available yet. Please try again later. |
 
 **Rate limits** (per client IP; over the limit → `429 TOO_MANY_REQUESTS` + `Retry-After: <seconds>`; CORS exposes
@@ -350,6 +353,159 @@ No login → `401 UNAUTHENTICATED`; any other role → `403 FORBIDDEN`.
 - `POST /admin/merchants/{userId}/reject` → `200` User (status becomes `REJECTED`, `merchant.approvalStatus` `REJECTED`)
 - Both work from any current state (so an admin can correct a mistake) and record who reviewed it and when.
   Unknown `userId` → `404 NOT_FOUND`.
+
+### Users (admin)
+Every account (customers, merchants, couriers, dispatchers, admins). Role `ADMIN` only: no login →
+`401 UNAUTHENTICATED`; any other role → `403 FORBIDDEN`. Responses never contain passwords, hashes, tokens or the
+Google account id.
+
+#### `GET /admin/users/stats`
+```json
+{ "total": 1250, "active": 1100, "blocked": 100, "pending": 50, "newLast30Days": 50 }
+```
+Removed accounts are never counted. `blocked` = status `DISABLED`; `pending` = `PENDING_EMAIL_VERIFICATION`,
+`PENDING_APPROVAL` or `PROFILE_INCOMPLETE`; `newLast30Days` = created in the last 30 days.
+
+#### `GET /admin/users?q=&role=&status=&registeredFrom=&registeredTo=&sort=NEWEST&page=0&size=20`
+All parameters are optional. A page of accounts (`{content, page, size, totalElements, totalPages}`, page 0-based):
+```json
+{ "content": [ { "id": "...", "fullName": "Kasun Perera", "email": "kasun@example.com", "phone": "+94771234567",
+                 "role": "CUSTOMER", "status": "ACTIVE", "createdAt": "2026-11-10T04:10:00Z" } ],
+  "page": 0, "size": 20, "totalElements": 1, "totalPages": 1 }
+```
+- `q`: part of the name, email or phone (`0771234567` and `+94771234567` both work), or a full user id.
+- `role`: `CUSTOMER` | `MERCHANT` | `COURIER` | `DISPATCHER` | `ADMIN`.
+- `status`: `ACTIVE` | `BLOCKED` (`DISABLED`) | `PENDING` (the three pending statuses above) | `REJECTED` |
+  `REMOVED`. Without `status`, removed accounts are left out.
+- `registeredFrom`, `registeredTo`: `2026-11-01` (Sri Lanka days, both included).
+- `sort`: `NEWEST` (default) | `OLDEST` | `NAME` (A–Z). `size` 1–100.
+- `400 VALIDATION_FAILED`: unknown `role`/`status`/`sort`, a bad date, or `registeredFrom` after `registeredTo`
+  (field `registeredFrom`).
+- `phone` is `null` only while a Google sign-up is not finished.
+
+#### `GET /admin/users/{id}`
+```json
+{ "id": "...", "fullName": "Kasun Perera", "email": "kasun@example.com", "phone": "+94771234567",
+  "role": "MERCHANT", "status": "ACTIVE", "mustChangePassword": false, "googleLinked": false,
+  "branch": null, "vehicleType": null,
+  "merchant": { "businessName": "Lanka Crafts", "pickupDistrict": "COLOMBO", "city": "Nugegoda",
+                "approvalStatus": "APPROVED" },
+  "createdAt": "2026-11-10T04:10:00Z", "updatedAt": "2026-11-12T08:00:00Z", "deletedAt": null }
+```
+`branch` for couriers and dispatchers, `vehicleType` for couriers, `merchant` for merchants (otherwise `null`).
+Removed accounts can be viewed. Unknown id → `404 NOT_FOUND`.
+
+#### `PUT /admin/users/{id}` `{ "fullName": "...", "phone": "0771234567", "email": "..." }`
+Edits the name, phone and email (same rules as sign-up). Role, status, password, branch and vehicle cannot be changed
+here. A new email ends the user's sessions and unlinks Google sign-in. Returns the account as in `GET`.
+`400 VALIDATION_FAILED` · `404 NOT_FOUND` · `409 EMAIL_ALREADY_REGISTERED` / `PHONE_ALREADY_REGISTERED` (another
+account has it) · `409 ACCOUNT_REMOVED`.
+
+#### `PATCH /admin/users/{id}/status` `{ "status": "BLOCKED" }` or `{ "status": "ACTIVE" }`
+- `BLOCKED`: an `ACTIVE` account becomes `DISABLED`; the user is logged out at once and cannot log in.
+- `ACTIVE`: a `DISABLED` account becomes `ACTIVE` again.
+- Asking for the status the account already has changes nothing (`200`). Returns the account as in `GET`.
+- Only `ACTIVE` accounts can be blocked (pending merchants are approved or rejected on `/admin/merchants`), so
+  unblocking never skips email verification or merchant approval.
+- Who made the change and when is written to the server log (ids only).
+- `400 VALIDATION_FAILED` (field `status`) · `404 NOT_FOUND` · `409 CANNOT_CHANGE_OWN_ACCOUNT` (an admin's own
+  account) · `409 ACCOUNT_REMOVED` · `409 ACCOUNT_NOT_ACTIVE` (blocking an account that isn't `ACTIVE`) ·
+  `409 ACCOUNT_NOT_BLOCKED` (unblocking an account that isn't blocked).
+
+### Parcels (admin, WP4)
+Every parcel on the platform, read only. Role `ADMIN` only: no login → `401 UNAUTHENTICATED`; any other role →
+`403 FORBIDDEN`. Statuses are those of "Parcel statuses" below (there is no cancelled status).
+Admins monitor parcels but do not assign or reassign couriers: that is the dispatchers' job (Dispatch, WP8), so
+there is no assign or reassign endpoint here.
+
+#### `GET /admin/parcels/stats`
+```json
+{ "total": 2450, "pending": 180, "inTransit": 320, "delivered": 1800, "failed": 150,
+  "byStatus": { "CREATED": 180, "PICKED_UP": 40, "AT_BRANCH": 120, "IN_TRANSIT": 100, "OUT_FOR_DELIVERY": 60,
+                "DELIVERED": 1800, "FAILED": 150 } }
+```
+`pending` = `CREATED`; `inTransit` = `PICKED_UP` + `AT_BRANCH` + `IN_TRANSIT` + `OUT_FOR_DELIVERY`.
+
+#### `GET /admin/parcels?q=&status=&pickupDistrict=&deliveryDistrict=&createdFrom=&createdTo=&payment=&sort=NEWEST&page=0&size=20`
+All parameters are optional. A page of parcels (`{content, page, size, totalElements, totalPages}`, page 0-based):
+```json
+{ "content": [ {
+    "id": "...", "trackingNumber": "SD2611004817", "status": "IN_TRANSIT",
+    "senderType": "CUSTOMER", "senderName": "Saman Perera", "receiverName": "Nimal Silva",
+    "pickupCity": "Colombo 05", "pickupDistrict": "COLOMBO", "deliveryCity": "Kandy", "deliveryDistrict": "KANDY",
+    "currentBranch": null, "weightKg": 2.50, "feeAmount": 450.00, "currency": "LKR", "codAmount": null,
+    "createdAt": "2026-11-12T04:10:00Z", "updatedAt": "2026-11-13T06:00:00Z" } ],
+  "page": 0, "size": 20, "totalElements": 1, "totalPages": 1 }
+```
+- `q`: part of the tracking number (spaces ignored), the sender's or receiver's name or phone (`0771234567` or
+  `+94771234567`), or the merchant's order ref; a full parcel id finds exactly that parcel.
+- `status`: one or more parcel statuses, repeated (`status=PICKED_UP&status=AT_BRANCH`).
+- `pickupDistrict`, `deliveryDistrict`: district codes from `GET /meta/districts`.
+- `createdFrom`, `createdTo`: booking days `2026-11-01` (Sri Lanka days, both included).
+- `payment`: `PREPAID` (nothing to collect) | `CASH_ON_DELIVERY`.
+- `sort`: `NEWEST` (default) | `OLDEST` | `FEE_HIGH` | `FEE_LOW`. `size` 1–100.
+- `senderType`: `CUSTOMER` or `MERCHANT`; `senderName` is the pickup contact. `codAmount` is `null` when already paid;
+  `currentBranch` is set only while `AT_BRANCH`. Rows have no phones or street addresses (see the details).
+- `400 VALIDATION_FAILED`: an unknown `status`/district/`payment`/`sort`, a bad date, or `createdFrom` after
+  `createdTo` (field `createdFrom`).
+- The assigned courier is not in the list yet: courier tasks are dispatch's (WP8).
+
+#### `GET /admin/parcels/{id}`
+```json
+{ "id": "...", "trackingNumber": "SD2611004817", "status": "IN_TRANSIT",
+  "sender": { "type": "MERCHANT", "accountId": "...", "accountName": "Nimal Perera",
+              "accountEmail": "nimal@example.com", "businessName": "Lanka Crafts" },
+  "pickup":    { "name": "Saman Perera", "phone": "+94771234567", "addressLine": "12 Galle Road",
+                 "city": "Colombo 05", "district": "COLOMBO" },
+  "recipient": { "name": "Nimal Silva", "phone": "+94711234567", "addressLine": "45 Peradeniya Road",
+                 "city": "Kandy", "district": "KANDY" },
+  "weightKg": 2.50, "codAmount": null, "instructions": "Call before coming",
+  "feeAmount": 450.00, "currency": "LKR", "merchantOrderRef": "ORD-1001", "currentBranch": null,
+  "failureReason": null, "proofRecipientName": null, "hasProofPhoto": false,
+  "createdAt": "2026-11-12T04:10:00Z", "updatedAt": "2026-11-13T06:00:00Z",
+  "history": [ { "status": "IN_TRANSIT", "occurredAt": "2026-11-13T06:00:00Z", "actorRole": "COURIER",
+                 "branch": null, "note": null, "failureReason": null } ] }
+```
+`sender.businessName` only for merchants; `accountName`/`accountEmail` are `null` if the account no longer exists.
+`history` is newest first. Unknown id → `404 NOT_FOUND`.
+
+#### `GET /admin/parcels/{id}/tracking`
+The `history` list above on its own, newest first. Unknown id → `404 NOT_FOUND`.
+
+#### `GET /admin/parcels/export` (same filters as the list, without `page`/`size`)
+`200 text/csv; charset=UTF-8`, downloaded as `swiftdrop-parcels-<date>.csv`: one row per parcel in the list's order,
+at most 5,000 rows (narrow the filters for more). Columns: tracking number, parcel id, status, sender type, sender
+name/phone/address/city/district, receiver name/phone/address/city/district, weight, fee, currency, cash on delivery,
+created and last updated (UTC). It holds personal data: keep the file private. Values a spreadsheet would treat as a
+formula start with `'`.
+
+### Reports (admin, WP4)
+Role `ADMIN` only: no login → `401 UNAUTHENTICATED`; any other role → `403 FORBIDDEN`.
+
+#### `GET /admin/reports/overview`
+The figures on the admin home page (`/admin`). Days are Sri Lanka days (Asia/Colombo).
+```json
+{
+  "users": { "total": 120, "customers": 90, "merchants": 20, "couriers": 6, "dispatchers": 3, "admins": 1,
+             "pendingMerchants": 4 },
+  "today": { "date": "2026-11-13", "created": 12, "delivered": 8, "failed": 1 },
+  "last7Days": {
+    "from": "2026-11-07", "to": "2026-11-13",
+    "created": 60, "delivered": 40, "failed": 5, "successRate": 88.9,
+    "perDay": [ { "date": "2026-11-07", "created": 5, "delivered": 3, "failed": 0 } ]
+  },
+  "recentUsers": [
+    { "id": "...", "fullName": "Ayesha Fernando", "role": "CUSTOMER", "status": "ACTIVE",
+      "createdAt": "2026-11-13T04:10:00Z" }
+  ]
+}
+```
+- `users`: accounts per role, every status except `REMOVED`. `pendingMerchants` = merchants with status
+  `PENDING_APPROVAL` (the ones on `GET /admin/merchants?status=PENDING`).
+- `today` and `perDay`: `created` = parcels booked that day; `delivered` / `failed` = parcels that reached that status
+  that day. `perDay` has all 7 days, oldest first, also days with nothing (all 0). `today` is the last day of `perDay`.
+- `successRate` = `delivered / (delivered + failed) × 100` over the 7 days, one decimal; `0.0` when both are 0.
+- `recentUsers`: the 5 newest accounts (not `REMOVED`), newest first. No email or phone.
 
 ---
 
