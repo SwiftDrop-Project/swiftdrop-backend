@@ -676,6 +676,22 @@ require a logged-in `MERCHANT` cookie (`SD_TOKEN`) of an approved merchant; API 
 a request authenticated with an `X-Api-Key` header gets `403 FORBIDDEN`.
 The admin endpoints require `ADMIN`.
 
+### One subscription per destination
+
+A subscription is one destination: a callback URL, its signing secret and the events that destination needs.
+Use one subscription per server or system and select all the events it handles; your endpoint tells them apart by
+`type` (or the `X-SwiftDrop-Event-Type` header). You don't need a separate subscription for each status: change the
+events of an existing one with `PATCH`. Use several subscriptions only for different destinations, for example:
+
+| Callback URL | Events |
+|---|---|
+| `https://shop.example.com/webhooks` | All parcel events |
+| `https://shop.example.com/billing-webhook` | `parcel.delivered` |
+| `https://shop.example.com/support-webhook` | `parcel.failed` |
+
+Each event is sent once to every active subscription that selected it, so two subscriptions that both select an
+event both receive it.
+
 ### Event types
 
 | Type | Sent when the parcel becomes |

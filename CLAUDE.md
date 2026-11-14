@@ -57,7 +57,9 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
   Signing secrets are stored encrypted (AES-GCM), never hashed and never logged. Merchants get a public payload,
   never the raw event (no customer ids, actor ids or notes). The worker (`WebhookDispatcher`, on unless
   `SWIFTDROP_WEBHOOKS_DISPATCHER_ENABLED=false`; off in tests, which call `dispatchDue()`) leases rows and never holds
-  a transaction during the HTTP call; result updates are guarded by the lease.
+  a transaction during the HTTP call; result updates are guarded by the lease. One subscription is one destination
+  (callback URL + signing secret + one or more event types), never one per event: merchants select several events on
+  one subscription and use more subscriptions only for different systems (at most 5 active per merchant).
 - dispatch: `AssignmentApi` is implemented; dispatcher endpoints are under `/dispatch` (DISPATCHER and ADMIN, API.md
   "Dispatch"). Delivery has no "waiting for pickup" query, so dispatch keeps `dispatch.pickup_queue` from
   `ParcelStatusChanged` (RabbitMQ queue `dispatch.q`); it fills only while the outbox relay runs

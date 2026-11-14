@@ -2,6 +2,10 @@
  * Webhooks: merchants register HTTPS URLs, and SwiftDrop sends them a signed POST when one of their parcels changes
  * status, retrying failed deliveries (see API.md "Webhooks").
  *
+ * <p>Model: one subscription is one destination (a callback URL, its signing secret and one or more event types),
+ * not one event. A merchant uses one subscription per server or system with all the events it needs, and several
+ * subscriptions only for different destinations (at most 5 active).
+ *
  * <p>Public API: none (endpoints only, under {@code /merchant/webhooks} and {@code /admin/webhooks}). Nothing depends
  * on webhooks.
  *
