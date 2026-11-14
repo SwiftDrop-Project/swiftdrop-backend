@@ -8,6 +8,7 @@ import com.swiftdrop.delivery.FailureReason;
 import com.swiftdrop.delivery.ParcelStatusChanged;
 import com.swiftdrop.shared.reference.District;
 import com.swiftdrop.tracking.internal.dto.LiveEvent;
+import com.swiftdrop.tracking.internal.dto.OwnParcelUpdate;
 import com.swiftdrop.tracking.internal.dto.TrackingUpdate;
 import java.time.Duration;
 import java.util.ArrayDeque;
@@ -22,7 +23,8 @@ import org.springframework.stereotype.Service;
 
 /**
  * Turns each {@link ParcelStatusChanged} into live updates: a public {@link TrackingUpdate} on
- * {@value #PARCEL_TOPIC}{trackingNumber} and a {@link LiveEvent} on {@value #LIVE_TOPIC} for the dispatchers' board.
+ * {@value #PARCEL_TOPIC}{trackingNumber}, a private {@link OwnParcelUpdate} to the parcel's customer and merchant on
+ * {@value #OWNER_QUEUE_SUBSCRIPTION}, and a {@link LiveEvent} on {@value #LIVE_TOPIC} for the dispatchers' board.
  * Also keeps the last {@value #RECENT_SIZE} events in memory, so the board isn't empty when it opens, and writes the
  * parcel's latest status to the all-parcels index.
  *
@@ -34,6 +36,10 @@ public class LiveUpdates {
 
     public static final String PARCEL_TOPIC = "/topic/parcels/";
     public static final String LIVE_TOPIC = "/topic/live";
+    /** Where {@code convertAndSendToUser} sends an owner's updates; the broker turns it into one queue per session. */
+    static final String OWNER_QUEUE = "/queue/parcels";
+    /** What the owner subscribes to (on the logged-in endpoint only). */
+    public static final String OWNER_QUEUE_SUBSCRIPTION = "/user" + OWNER_QUEUE;
     static final int RECENT_SIZE = 200;
 
     private static final Logger log = LoggerFactory.getLogger(LiveUpdates.class);
@@ -65,6 +71,10 @@ public class LiveUpdates {
         messaging.convertAndSend(PARCEL_TOPIC + event.trackingNumber(), new TrackingUpdate(
                 event.trackingNumber(), event.toStatus(), event.branch(), reason, event.occurredAt(),
                 event.parcelVersion()));
+        OwnParcelUpdate own = new OwnParcelUpdate(event.parcelId(), event.trackingNumber(), event.toStatus(),
+                event.branch(), reason, event.occurredAt(), event.parcelVersion());
+        sendToOwner(event.customerId(), own);
+        sendToOwner(event.merchantId(), own);
 
         Optional<DeliverySnapshot> parcel = deliveries.findById(event.parcelId());
         District origin = parcel.map(p -> p.pickup() == null ? null : p.pickup().district()).orElse(null);
@@ -76,6 +86,13 @@ public class LiveUpdates {
         messaging.convertAndSend(LIVE_TOPIC, live);
         parcel.ifPresent(indexer::index);
         log.debug("Pushed {} -> {}", event.trackingNumber(), event.toStatus());
+    }
+
+    private void sendToOwner(UUID userId, OwnParcelUpdate update) {
+        if (userId != null) {
+            // The user name is the JWT subject, the user's id. Nothing is sent when they have no open session.
+            messaging.convertAndSendToUser(userId.toString(), OWNER_QUEUE, update);
+        }
     }
 
     /** The latest events, newest first, optionally only those that concern one branch. */
