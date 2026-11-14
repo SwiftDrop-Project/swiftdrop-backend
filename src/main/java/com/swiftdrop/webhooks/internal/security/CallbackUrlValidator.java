@@ -91,8 +91,11 @@ public class CallbackUrlValidator {
         return Optional.empty();
     }
 
-    /** Lower-case ASCII host without IPv6 brackets; non-Latin names become xn-- names. */
-    private static Optional<String> asciiHost(URI uri) {
+    /**
+     * Lower-case ASCII host without IPv6 brackets; non-Latin names become xn-- names. Also used by
+     * {@link CallbackDestination}, so "same host" means the same thing in both places.
+     */
+    static Optional<String> asciiHost(URI uri) {
         String host = uri.getHost();
         if (host == null) {
             // java.net.URI leaves the host empty for non-ASCII names: take it from the authority (minus the port)

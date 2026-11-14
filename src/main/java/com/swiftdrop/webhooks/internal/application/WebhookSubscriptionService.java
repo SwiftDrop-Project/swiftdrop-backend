@@ -14,6 +14,7 @@ import com.swiftdrop.webhooks.internal.dto.UpdateWebhookRequest;
 import com.swiftdrop.webhooks.internal.dto.WebhookResponse;
 import com.swiftdrop.webhooks.internal.dto.WebhookWithSecretResponse;
 import com.swiftdrop.webhooks.internal.persistence.WebhookSubscriptionRepository;
+import com.swiftdrop.webhooks.internal.security.CallbackDestination;
 import com.swiftdrop.webhooks.internal.security.CallbackUrlValidator;
 import com.swiftdrop.webhooks.internal.security.SecretCipher;
 import com.swiftdrop.webhooks.internal.security.WebhookSecretGenerator;
@@ -67,7 +68,11 @@ public class WebhookSubscriptionService {
         this.clock = clock;
     }
 
-    /** Checks run cheapest first: approval, limit, event types, then the URL (which may do a DNS lookup). */
+    /**
+     * Checks run cheapest first: approval, limit, event types, the URL (which may do a DNS lookup), then whether
+     * another active subscription of this merchant already uses that URL. The merchant lock taken by the limit check
+     * covers the URL check too.
+     */
     @Transactional
     public WebhookWithSecretResponse create(UUID merchantId, CreateWebhookRequest request) {
         requireApproved(merchantId);
@@ -75,6 +80,7 @@ public class WebhookSubscriptionService {
         Set<WebhookEventType> types = toEventTypes(request.eventTypes());
         String url = request.url().trim();
         urlValidator.validateForRegistration(url);
+        requireUrlFree(merchantId, url, null);
 
         String secret = secretGenerator.newSecret();
         WebhookSubscription saved = subscriptions.save(
@@ -89,20 +95,37 @@ public class WebhookSubscriptionService {
                 .toList();
     }
 
+    /**
+     * Changes only the fields sent. When the subscription ends up active with a new URL, or is being turned on, no
+     * other active subscription of this merchant may use the same URL (checked under the merchant lock, so two
+     * requests at the same moment can't both pass). Changing only the events or turning it off needs no URL check.
+     */
     @Transactional
     public WebhookResponse update(UUID merchantId, UUID id, UpdateWebhookRequest request) {
         WebhookSubscription subscription = owned(merchantId, id);
         Instant now = now();
+        boolean turningOn = Boolean.TRUE.equals(request.active()) && !subscription.isActive();
+        boolean endsActive = Boolean.TRUE.equals(request.active())
+                || (request.active() == null && subscription.isActive());
+        String url = request.url() == null ? null : request.url().trim();
+
         if (request.eventTypes() != null) {
             subscription.changeEventTypes(toEventTypes(request.eventTypes()), now);
         }
-        if (request.url() != null) {
-            String url = request.url().trim();
+        if (url != null) {
             urlValidator.validateForRegistration(url);
+        }
+        if (turningOn) {
+            requireRoomForOneMore(merchantId); // takes the merchant lock
+        }
+        if (endsActive && (turningOn || url != null)) {
+            subscriptions.lockMerchant(merchantId); // a URL change alone wouldn't have taken it yet
+            requireUrlFree(merchantId, url != null ? url : subscription.getUrl(), subscription.getId());
+        }
+        if (url != null) {
             subscription.changeUrl(url, now);
         }
-        if (Boolean.TRUE.equals(request.active()) && !subscription.isActive()) {
-            requireRoomForOneMore(merchantId);
+        if (turningOn) {
             subscription.activate(now);
         } else if (Boolean.FALSE.equals(request.active())) {
             subscription.deactivate(now);
@@ -138,6 +161,23 @@ public class WebhookSubscriptionService {
         subscriptions.lockMerchant(merchantId);
         if (subscriptions.countByMerchantIdAndActiveTrue(merchantId) >= MAX_ACTIVE) {
             throw new ConflictException(ErrorCode.WEBHOOK_LIMIT_REACHED);
+        }
+    }
+
+    /**
+     * One active subscription per destination, per merchant: another merchant's subscriptions are never looked at,
+     * turned-off ones don't count, and {@code exceptId} (the subscription being changed) is skipped. "Same" follows
+     * {@link CallbackDestination} (letter case of the host, default port and the like are ignored; path and query
+     * are not). Call it while holding the merchant lock.
+     */
+    private void requireUrlFree(UUID merchantId, String url, UUID exceptId) {
+        CallbackDestination destination = CallbackDestination.of(url);
+        boolean taken = subscriptions.findByMerchantIdOrderByCreatedAtDesc(merchantId).stream()
+                .filter(WebhookSubscription::isActive)
+                .filter(other -> !other.getId().equals(exceptId))
+                .anyMatch(other -> CallbackDestination.of(other.getUrl()).equals(destination));
+        if (taken) {
+            throw new ConflictException(ErrorCode.WEBHOOK_URL_IN_USE);
         }
     }
 

@@ -56,6 +56,9 @@ public enum ErrorCode {
             "You can have up to 5 active webhooks. Turn one off before adding another."),
     /** Webhooks: retrying a delivery that is not FAILED. */
     WEBHOOK_DELIVERY_NOT_RETRYABLE(HttpStatus.CONFLICT, "Only failed deliveries can be sent again."),
+    /** Webhooks: another active subscription of the same merchant already uses this callback URL. */
+    WEBHOOK_URL_IN_USE(HttpStatus.CONFLICT,
+            "You already have a webhook for this address. Add the events to it instead."),
     CANNOT_CHANGE_OWN_ACCOUNT(HttpStatus.CONFLICT, "You can't block your own account."),
     ACCOUNT_NOT_ACTIVE(HttpStatus.CONFLICT,
             "Only active accounts can be blocked. Refresh to see the account's latest status."),

@@ -59,7 +59,9 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
   `SWIFTDROP_WEBHOOKS_DISPATCHER_ENABLED=false`; off in tests, which call `dispatchDue()`) leases rows and never holds
   a transaction during the HTTP call; result updates are guarded by the lease. One subscription is one destination
   (callback URL + signing secret + one or more event types), never one per event: merchants select several events on
-  one subscription and use more subscriptions only for different systems (at most 5 active per merchant).
+  one subscription and use more subscriptions only for different systems (at most 5 active per merchant). A callback
+  URL may be used by only one active subscription per merchant (`WEBHOOK_URL_IN_USE`, compared with
+  `CallbackDestination`; other merchants may use the same URL).
 - dispatch: `AssignmentApi` is implemented; dispatcher endpoints are under `/dispatch` (DISPATCHER and ADMIN, API.md
   "Dispatch"). Delivery has no "waiting for pickup" query, so dispatch keeps `dispatch.pickup_queue` from
   `ParcelStatusChanged` (RabbitMQ queue `dispatch.q`); it fills only while the outbox relay runs

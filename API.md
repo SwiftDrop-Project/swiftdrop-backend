@@ -84,6 +84,7 @@ Change it in the same PR as the code, and tell the frontend team.
 | 409 | `ASSIGNMENT_CHANGED` | Dispatch: someone else changed the task at the same moment |
 | 409 | `WEBHOOK_LIMIT_REACHED` | Webhooks: creating or turning on a 6th active subscription |
 | 409 | `WEBHOOK_DELIVERY_NOT_RETRYABLE` | Webhooks: retrying a delivery that is not `FAILED` |
+| 409 | `WEBHOOK_URL_IN_USE` | Webhooks: another of your active subscriptions already uses this callback URL |
 | 409 | `ACCOUNT_REMOVED` | An admin action or password action on a removed account |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | Request body is not `application/json` |
 | 429 | `TOO_MANY_REQUESTS` | Too many requests from this IP address; the `Retry-After` header says how many seconds to wait |
@@ -112,6 +113,7 @@ Messages of the new codes (show them as-is):
 | `ASSIGNMENT_CHANGED` | This task was just changed by someone else. Refresh and try again. |
 | `WEBHOOK_LIMIT_REACHED` | You can have up to 5 active webhooks. Turn one off before adding another. |
 | `WEBHOOK_DELIVERY_NOT_RETRYABLE` | Only failed deliveries can be sent again. |
+| `WEBHOOK_URL_IN_USE` | You already have a webhook for this address. Add the events to it instead. |
 | `CANNOT_CHANGE_OWN_ACCOUNT` (409) | You can't block your own account. |
 | `ACCOUNT_NOT_ACTIVE` (409) | Only active accounts can be blocked. Refresh to see the account's latest status. |
 | `ACCOUNT_NOT_BLOCKED` (409) | Only blocked accounts can be unblocked. Refresh to see the account's latest status. |
@@ -692,6 +694,13 @@ events of an existing one with `PATCH`. Use several subscriptions only for diffe
 Each event is sent once to every active subscription that selected it, so two subscriptions that both select an
 event both receive it.
 
+A callback URL can be used by only one of your active subscriptions (`409 WEBHOOK_URL_IN_USE` when creating one,
+changing the URL of an active one, or turning one on); turned-off subscriptions don't count, and other merchants may
+use the same URL.
+Two URLs are the same when they differ only in the letter case of the scheme or host, a default port written out
+(`:443`), an empty path vs `/`, or a `#fragment`. A different path (including a trailing slash), query, port or scheme
+is a different URL: `https://shop.example.com/hook` and `https://shop.example.com/hook/` can both be active.
+
 ### Event types
 
 | Type | Sent when the parcel becomes |
@@ -735,9 +744,9 @@ The secret is never in this shape. The create and rotate responses add it once:
 
 | Method and path | What it does | Main errors |
 |---|---|---|
-| `POST /merchant/webhooks` `{"url", "eventTypes": [...]}` | Create an active subscription (201, subscription + `secret`) | 400 `url`, `eventTypes`; 403 `MERCHANT_NOT_APPROVED`; 409 `WEBHOOK_LIMIT_REACHED` |
+| `POST /merchant/webhooks` `{"url", "eventTypes": [...]}` | Create an active subscription (201, subscription + `secret`) | 400 `url`, `eventTypes`; 403 `MERCHANT_NOT_APPROVED`; 409 `WEBHOOK_LIMIT_REACHED`, `WEBHOOK_URL_IN_USE` |
 | `GET /merchant/webhooks` | Your subscriptions, active and turned off, newest first (array of subscriptions) | — |
-| `PATCH /merchant/webhooks/{id}` `{"url"?, "eventTypes"?, "active"?}` | Change only the fields sent (subscription) | 400; 404; 409 `WEBHOOK_LIMIT_REACHED` (turning one on) |
+| `PATCH /merchant/webhooks/{id}` `{"url"?, "eventTypes"?, "active"?}` | Change only the fields sent (subscription) | 400; 404; 409 `WEBHOOK_LIMIT_REACHED` (turning one on), `WEBHOOK_URL_IN_USE` (new URL or turning one on) |
 | `DELETE /merchant/webhooks/{id}` | Turn off (`active: false`; history is kept). 204. Idempotent | 404 |
 | `POST /merchant/webhooks/{id}/rotate-secret` | New secret; the old one stops working at once, also for retries (200, subscription + `secret`) | 404 |
 | `POST /merchant/webhooks/{id}/test` | Queue a `webhook.ping` for this subscription, sent within seconds (202, delivery). Also works while it is turned off, so a URL can be checked before turning it on. If a ping for it is still waiting to be sent, that one is returned (202) instead of queuing another | 404 |

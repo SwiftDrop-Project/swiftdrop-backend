@@ -4,7 +4,9 @@
  *
  * <p>Model: one subscription is one destination (a callback URL, its signing secret and one or more event types),
  * not one event. A merchant uses one subscription per server or system with all the events it needs, and several
- * subscriptions only for different destinations (at most 5 active).
+ * subscriptions only for different destinations (at most 5 active). A callback URL can be used by only one of a
+ * merchant's active subscriptions ({@code WEBHOOK_URL_IN_USE}; "same URL" is defined by {@code CallbackDestination});
+ * other merchants may use the same URL.
  *
  * <p>Public API: none (endpoints only, under {@code /merchant/webhooks} and {@code /admin/webhooks}). Nothing depends
  * on webhooks.
