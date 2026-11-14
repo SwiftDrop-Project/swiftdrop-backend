@@ -1,8 +1,8 @@
 
 package com.swiftdrop.notifications.internal.provider;
 
-import com.swiftdrop.identity.IdentityApi;
-import com.swiftdrop.identity.UserSummary;
+import com.swiftdrop.notifications.CustomerRecipientLookup;
+import com.swiftdrop.notifications.CustomerRecipientLookup.CustomerRecipient;
 import jakarta.mail.internet.MimeMessage;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
@@ -16,15 +16,16 @@ public class ParcelEmailSender {
 
     private final JavaMailSender mailSender;
     private final MailProperties mailProperties;
-    private final IdentityApi identityApi;
+    private final CustomerRecipientLookup recipientLookup;
 
     public ParcelEmailSender(
             JavaMailSender mailSender,
             MailProperties mailProperties,
-            IdentityApi identityApi) {
+            CustomerRecipientLookup recipientLookup) {
+
         this.mailSender = mailSender;
         this.mailProperties = mailProperties;
-        this.identityApi = identityApi;
+        this.recipientLookup = recipientLookup;
     }
 
     public void sendStatusEmail(
@@ -33,43 +34,36 @@ public class ParcelEmailSender {
             String parcelStatus) {
 
         if (customerId == null) {
-            throw new IllegalArgumentException(
-                    "Customer ID is required");
+            throw new IllegalArgumentException("Customer ID is required");
         }
 
-        UserSummary customer = identityApi.findById(customerId)
-                .orElseThrow(() -> new IllegalArgumentException(
-                        "Customer not found"));
+        CustomerRecipient customer = recipientLookup.findById(customerId)
+                .orElseThrow(() ->
+                        new IllegalArgumentException("Customer not found"));
 
         String recipient = customer.email();
 
         if (recipient == null || recipient.isBlank()) {
-            throw new IllegalArgumentException(
-                    "Customer email is missing");
+            throw new IllegalArgumentException("Customer email is missing");
         }
 
         try {
             MimeMessage message = mailSender.createMimeMessage();
 
-            MimeMessageHelper helper =
-                    new MimeMessageHelper(
-                            message,
-                            true,
-                            StandardCharsets.UTF_8.name());
+            MimeMessageHelper helper = new MimeMessageHelper(
+                    message, true, StandardCharsets.UTF_8.name());
 
             helper.setFrom(mailProperties.sender());
             helper.setTo(recipient);
             helper.setSubject("SwiftDrop Parcel Status Update");
 
-            String body =
-                    "Hello " + customer.fullName() + ",\n\n" +
-                    "Your parcel status has been updated.\n\n" +
-                    "Tracking Number: " + trackingNumber + "\n" +
-                    "Current Status: " + parcelStatus + "\n\n" +
-                    "Thank you for using SwiftDrop.";
+            String body = "Hello " + customer.fullName() + ",\n\n"
+                    + "Your parcel status has been updated.\n\n"
+                    + "Tracking Number: " + trackingNumber + "\n"
+                    + "Current Status: " + parcelStatus + "\n\n"
+                    + "Thank you for using SwiftDrop.";
 
             helper.setText(body);
-
             mailSender.send(message);
 
         } catch (Exception ex) {
