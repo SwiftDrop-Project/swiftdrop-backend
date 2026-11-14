@@ -226,6 +226,9 @@ class AdminParcelsTest extends IntegrationTest {
         body.put("pickup", pickup);
         body.put("recipient", recipient);
         body.put("weightKg", new BigDecimal("2.50"));
+        body.put("lengthCm", 30);
+        body.put("widthCm", 20);
+        body.put("heightCm", 10);
         if (codAmount != null) {
             body.put("codAmount", codAmount);
         }

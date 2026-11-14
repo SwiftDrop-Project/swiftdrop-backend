@@ -1,5 +1,8 @@
 package com.swiftdrop.tracking;
 
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.hamcrest.Matchers.containsString;
+import com.swiftdrop.tracking.internal.dto.OwnParcelUpdate;
 import com.swiftdrop.IntegrationTest;
 import com.swiftdrop.delivery.ChangeStatusCommand;
 import com.swiftdrop.delivery.DeliveryApi;
@@ -169,6 +172,52 @@ class TrackingApiTest extends IntegrationTest {
                 parcel.trackingNumber(), parcel.customerId(), null, null, ParcelStatus.CREATED, null, "CUSTOMER",
                 null, null, Instant.now(), null));
         assertThat(sentTo("/topic/parcels/" + parcel.trackingNumber())).hasSize(1);
+    }
+
+    @Test
+    void ownersGetTheirParcelsUpdatesPrivately() throws Exception {
+        DeliverySnapshot parcel = book("KURUNEGALA", "PUTTALAM");
+        UUID merchant = UUID.randomUUID();
+        liveUpdates.handle(new ParcelStatusChanged(UUID.randomUUID(), parcel.id(), parcel.version() + 1,
+                parcel.trackingNumber(), parcel.customerId(), merchant, ParcelStatus.CREATED, ParcelStatus.AT_BRANCH,
+                UUID.randomUUID(), "COURIER", "Left with the guard", null, Instant.now(), District.KURUNEGALA));
+
+        List<Message<?>> toCustomer = sentTo("/user/" + parcel.customerId() + "/queue/parcels");
+        assertThat(toCustomer).hasSize(1);
+        String body = new String((byte[]) toCustomer.getFirst().getPayload(), StandardCharsets.UTF_8);
+        OwnParcelUpdate update = json.readValue(body, OwnParcelUpdate.class);
+        assertThat(update.parcelId()).isEqualTo(parcel.id());
+        assertThat(update.status()).isEqualTo(ParcelStatus.AT_BRANCH);
+        assertThat(update.branch()).isEqualTo(District.KURUNEGALA);
+        assertThat(body).doesNotContain("Left with the guard", "Ayesha", "0771234567", "COURIER");
+        assertThat(sentTo("/user/" + merchant + "/queue/parcels")).hasSize(1);
+    }
+
+    @Test
+    void customersListTheirOwnParcels() throws Exception {
+        DeliverySnapshot mine = book("HAMBANTOTA", "MATARA");
+        Cookie other = registerCustomer(uniqueEmail(), uniquePhone());
+
+        mvc.perform(get("/api/v1/tracking/mine").cookie(customer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].parcelId").value(mine.id().toString()))
+                .andExpect(jsonPath("$.content[0].trackingNumber").value(mine.trackingNumber()))
+                .andExpect(jsonPath("$.content[0].status").value("CREATED"))
+                .andExpect(jsonPath("$.content[0].from.district").value("HAMBANTOTA"))
+                .andExpect(jsonPath("$.content[0].to.district").value("MATARA"))
+                .andExpect(content().string(not(containsString("Ayesha"))));
+        mvc.perform(get("/api/v1/tracking/mine").cookie(other))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(0));
+        mvc.perform(get("/api/v1/tracking/mine").param("status", "DELIVERED").cookie(customer))
+                .andExpect(jsonPath("$.totalElements").value(0));
+
+        mvc.perform(get("/api/v1/tracking/mine")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/v1/tracking/mine").cookie(loginAsAdmin())).andExpect(status().isForbidden());
+        mvc.perform(get("/api/v1/tracking/mine").param("size", "0").cookie(customer))
+                .andExpect(status().isBadRequest());
+        mvc.perform(get("/api/v1/tracking/mine").param("page", "-1").cookie(customer))
+                .andExpect(status().isBadRequest());
     }
 
     @Test

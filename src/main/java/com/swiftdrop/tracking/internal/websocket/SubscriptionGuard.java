@@ -20,7 +20,9 @@ import org.springframework.stereotype.Component;
  * <ul>
  *   <li>{@code /topic/parcels/{trackingNumber}}: anyone, for a well-formed (normalised) tracking number;</li>
  *   <li>{@code /topic/live}: only a DISPATCHER or ADMIN, who connected through the staff endpoint with a valid
- *   cookie (the public endpoint never has a user).</li>
+ *   cookie (the public endpoint never has a user);</li>
+ *   <li>{@code /user/queue/parcels}: only a logged-in CUSTOMER or MERCHANT, on the same endpoint. Spring sends each
+ *   user only their own parcels' updates there (by user id), so nobody can follow someone else's parcels.</li>
  * </ul>
  * Anything else (SEND, other destinations) is refused, and the client gets a STOMP ERROR frame.
  */
@@ -28,6 +30,7 @@ import org.springframework.stereotype.Component;
 class SubscriptionGuard implements ChannelInterceptor {
 
     private static final Set<String> STAFF_ROLES = Set.of("ROLE_DISPATCHER", "ROLE_ADMIN");
+    private static final Set<String> OWNER_ROLES = Set.of("ROLE_CUSTOMER", "ROLE_MERCHANT");
 
     @Override
     public Message<?> preSend(Message<?> message, MessageChannel channel) {
@@ -57,20 +60,26 @@ class SubscriptionGuard implements ChannelInterceptor {
             return;
         }
         if (destination.equals(LiveUpdates.LIVE_TOPIC)) {
-            if (!isStaff(user)) {
+            if (!hasRole(user, STAFF_ROLES)) {
                 throw new MessageDeliveryException("Only dispatchers can follow all parcels.");
+            }
+            return;
+        }
+        if (destination.equals(LiveUpdates.OWNER_QUEUE_SUBSCRIPTION)) {
+            if (!hasRole(user, OWNER_ROLES)) {
+                throw new MessageDeliveryException("Log in as a customer or merchant to follow your parcels.");
             }
             return;
         }
         throw new MessageDeliveryException("You can't subscribe to that.");
     }
 
-    private static boolean isStaff(Principal user) {
+    private static boolean hasRole(Principal user, Set<String> roles) {
         if (!(user instanceof Authentication authentication) || !authentication.isAuthenticated()) {
             return false;
         }
         return authentication.getAuthorities().stream()
                 .map(GrantedAuthority::getAuthority)
-                .anyMatch(STAFF_ROLES::contains);
+                .anyMatch(roles::contains);
     }
 }

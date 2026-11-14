@@ -3,6 +3,7 @@ package com.swiftdrop.courier;
 
 import com.swiftdrop.IntegrationTest;
 import jakarta.servlet.http.Cookie;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.TestPropertySource;
@@ -24,6 +25,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "swiftdrop.seed.demo-users=true",
         "swiftdrop.seed.demo-password=" + FakeDeliveryWiringTest.DEMO_PASSWORD
 })
+@Disabled("Courier screens now read dispatch tasks, which the in-memory fake delivery has no part in. Delete with courier/internal/fake (CLAUDE.md).")
 class FakeDeliveryWiringTest extends IntegrationTest {
 
     static final String DEMO_PASSWORD = "Demo12345";

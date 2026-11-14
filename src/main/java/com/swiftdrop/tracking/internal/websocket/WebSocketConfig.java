@@ -17,7 +17,8 @@ import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerCo
  * <ul>
  *   <li>{@value #PUBLIC_ENDPOINT}: anyone; may subscribe only to {@code /topic/parcels/{trackingNumber}}.</li>
  *   <li>{@value #STAFF_ENDPOINT}: the handshake goes through the normal security chain, so it needs a valid
- *   {@code SD_TOKEN} cookie; a DISPATCHER or ADMIN may also subscribe to {@code /topic/live}.</li>
+ *   {@code SD_TOKEN} cookie; a DISPATCHER or ADMIN may also subscribe to {@code /topic/live}, and a CUSTOMER or
+ *   MERCHANT to {@code /user/queue/parcels} (their own parcels' updates).</li>
  * </ul>
  * In-memory broker: every backend instance gets every parcel event from its own RabbitMQ queue, so each pushes to its
  * own clients. Clients can't send messages; {@link SubscriptionGuard} checks every subscription.
@@ -47,11 +48,12 @@ class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     @Override
     public void configureMessageBroker(MessageBrokerRegistry registry) {
-        registry.enableSimpleBroker("/topic")
+        registry.enableSimpleBroker("/topic", "/queue")
                 .setHeartbeatValue(new long[] {20_000, 20_000})
                 .setTaskScheduler(heartbeatScheduler);
         // No @MessageMapping handlers: nothing a client sends is processed.
         registry.setApplicationDestinationPrefixes("/app");
+        registry.setUserDestinationPrefix("/user");
     }
 
     @Override
