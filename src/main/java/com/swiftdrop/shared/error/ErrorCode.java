@@ -51,6 +51,11 @@ public enum ErrorCode {
     ASSIGNMENT_CHANGED(HttpStatus.CONFLICT, "This task was just changed by someone else. Refresh and try again."),
     COURIER_NOT_ASSIGNABLE(HttpStatus.CONFLICT, "This courier is not active and cannot be assigned parcels."),
     ACCOUNT_REMOVED(HttpStatus.CONFLICT, "This account has been permanently removed and cannot be modified."),
+    /** Webhooks: creating or turning on a 6th active subscription. */
+    WEBHOOK_LIMIT_REACHED(HttpStatus.CONFLICT,
+            "You can have up to 5 active webhooks. Turn one off before adding another."),
+    /** Webhooks: retrying a delivery that is not FAILED. */
+    WEBHOOK_DELIVERY_NOT_RETRYABLE(HttpStatus.CONFLICT, "Only failed deliveries can be sent again."),
     CANNOT_CHANGE_OWN_ACCOUNT(HttpStatus.CONFLICT, "You can't block your own account."),
     ACCOUNT_NOT_ACTIVE(HttpStatus.CONFLICT,
             "Only active accounts can be blocked. Refresh to see the account's latest status."),
