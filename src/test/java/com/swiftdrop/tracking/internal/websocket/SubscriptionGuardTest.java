@@ -42,6 +42,25 @@ class SubscriptionGuardTest {
     }
 
     @Test
+    void onlyCustomersAndMerchantsMayFollowTheirOwnParcels() {
+        assertThatThrownBy(() -> guard.preSend(subscribe("/user/queue/parcels", null), null))
+                .isInstanceOf(MessageDeliveryException.class);
+        assertThatThrownBy(() -> guard.preSend(subscribe("/user/queue/parcels", user("ROLE_COURIER")), null))
+                .isInstanceOf(MessageDeliveryException.class);
+        assertThatCode(() -> guard.preSend(subscribe("/user/queue/parcels", user("ROLE_CUSTOMER")), null))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> guard.preSend(subscribe("/user/queue/parcels", user("ROLE_MERCHANT")), null))
+                .doesNotThrowAnyException();
+        // Another user's resolved queue, or the queue without the /user prefix, is never allowed.
+        assertThatThrownBy(() -> guard.preSend(subscribe("/queue/parcels", user("ROLE_CUSTOMER")), null))
+                .isInstanceOf(MessageDeliveryException.class);
+        assertThatThrownBy(() -> guard.preSend(subscribe("/queue/parcels-userabc", user("ROLE_CUSTOMER")), null))
+                .isInstanceOf(MessageDeliveryException.class);
+        assertThatThrownBy(() -> guard.preSend(subscribe("/user/someone/queue/parcels", user("ROLE_CUSTOMER")), null))
+                .isInstanceOf(MessageDeliveryException.class);
+    }
+
+    @Test
     void otherDestinationsAndSendingAreRefused() {
         assertThatThrownBy(() -> guard.preSend(subscribe("/topic/anything", user("ROLE_ADMIN")), null))
                 .isInstanceOf(MessageDeliveryException.class);

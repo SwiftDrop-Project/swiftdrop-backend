@@ -58,7 +58,8 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
   its parcels are still on their way.
 - tracking: public lookup `GET /track/{trackingNumber}` and live updates over WebSocket/STOMP (API.md "Tracking"):
   `/api/v1/ws/public` (public, `/topic/parcels/{trackingNumber}`) and `/api/v1/ws` (cookie checked; DISPATCHER/ADMIN
-  may follow `/topic/live`). In-memory simple broker; each instance has its own auto-delete RabbitMQ queue.
+  may follow `/topic/live`; CUSTOMER/MERCHANT get their own parcels on `/user/queue/parcels`, loaded first with
+  `GET /tracking/mine`). In-memory simple broker; each instance has its own auto-delete RabbitMQ queue.
   The admin's all-parcels list (`/admin/tracking/parcels`) reads tracking's own `tracking.parcel_index`, filled from
   `ParcelStatusChanged` and from lookups (delivery has no admin search).
 - courier gets `DeliveryApi` through an `ObjectProvider` and answers 503 SERVICE_UNAVAILABLE while nothing implements

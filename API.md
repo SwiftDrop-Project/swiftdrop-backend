@@ -1108,7 +1108,7 @@ to anything not listed, gets a STOMP `ERROR` frame and the connection closes.
 | Handshake URL | Who | May subscribe to |
 |---|---|---|
 | `ws://<host>/api/v1/ws/public` | anyone (cookie ignored) | `/topic/parcels/{trackingNumber}` |
-| `ws://<host>/api/v1/ws` | logged in: the handshake checks the `SD_TOKEN` cookie like any request (401 without it) | the above, and `/topic/live` (DISPATCHER, ADMIN) |
+| `ws://<host>/api/v1/ws` | logged in: the handshake checks the `SD_TOKEN` cookie like any request (401 without it) | the above, `/topic/live` (DISPATCHER, ADMIN) and `/user/queue/parcels` (CUSTOMER, MERCHANT) |
 
 The tracking number in the topic must be the normalised form (`SD2611004817`). The browser origin must be
 `FRONTEND_URL`.
@@ -1134,10 +1134,27 @@ not replayed. If the WebSocket keeps failing, poll that endpoint (the frontend p
 
 `origin` and `destination` are the sender's and recipient's districts.
 
+**`/user/queue/parcels`** (CUSTOMER, MERCHANT, logged-in endpoint only): private updates for the parcels the user
+booked (customer) or created (merchant), and nobody else's. The server picks the parcels by the logged-in user's
+id, so there is nothing to choose. Same shape as `/topic/parcels/{trackingNumber}` plus `parcelId`:
+
+```json
+{ "parcelId": "…", "trackingNumber": "SD2611004817", "status": "AT_BRANCH", "branch": "KANDY",
+  "failureReason": null, "occurredAt": "2026-11-13T06:45:00Z", "version": 3 }
+```
+
+Same rules: apply only a higher `version`; after a reconnect load `GET /tracking/mine` again.
+
 ### `GET /tracking/live/recent?branch=COLOMBO` (DISPATCHER, ADMIN)
 
 The last 100 changes this server has seen (it keeps 200 in memory, cleared on restart), newest first, in the
 `/topic/live` shape. With `branch`, only changes whose origin, destination or arrival branch is that branch.
+
+### `GET /tracking/mine?status=&page=0&size=20` (CUSTOMER, MERCHANT)
+
+The logged-in customer's bookings or merchant's orders, newest first (page of rows in the
+`GET /admin/tracking/parcels` row shape), as the starting point for `/user/queue/parcels`. `status` optional.
+`400` `page` < 0, `size` outside 1-100 · `401` · `403` (any other role).
 
 ### `GET /admin/tracking/parcels?q=&status=&district=&from=&to=&page=0&size=20` (ADMIN)
 
