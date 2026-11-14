@@ -9,7 +9,8 @@ import java.util.Objects;
  * The prices of one rate card version (pricing.rate_cards with its vehicle_rates). A booking keeps the version it
  * was quoted with, so the quote can be worked out again later.
  *
- * @param baseFee            covers the first {@code baseWeightKg} billable kilograms
+ * @param baseFee            covers the first {@code baseWeightKg} billable kilograms; 0 for none (the quote then has
+ *                           no BASE line)
  * @param perKgFee           for every billable kilogram above them
  * @param volumetricDivisor  volumetric weight (kg) = length x width x height (cm) / this
  * @param codFee             handling fee when the courier collects cash on delivery; 0 for none (the quote then has

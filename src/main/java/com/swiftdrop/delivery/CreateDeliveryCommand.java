@@ -13,8 +13,8 @@ import java.util.UUID;
  *
  * <p>There is no fee here: the delivery module asks pricing for it, so a caller can never choose its own price.
  *
- * @param size the packed measurements; a customer booking always has them. Without them pricing can't choose the
- *             vehicle, so the fee has no local legs
+ * @param size the packed measurements, needed to book: {@link DeliveryApi#create} refuses a command without them
+ *             (400 VALIDATION_FAILED on {@code lengthCm}), because without them pricing can't choose the vehicle
  */
 public record CreateDeliveryCommand(
         UUID customerId,
@@ -36,7 +36,10 @@ public record CreateDeliveryCommand(
         Objects.requireNonNull(weightKg, "weightKg");
     }
 
-    /** A command without measurements. Kept so callers written before parcel sizes still compile. */
+    /**
+     * A command without measurements. Kept so code written before parcel sizes still compiles, but
+     * {@link DeliveryApi#create} refuses it: pass a {@link ParcelSize} to book.
+     */
     public CreateDeliveryCommand(UUID customerId, UUID merchantId, String merchantOrderRef, DeliveryContact pickup,
                                  DeliveryContact recipient, BigDecimal weightKg, BigDecimal codAmount,
                                  String instructions) {

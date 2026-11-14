@@ -11,6 +11,7 @@ import com.swiftdrop.pricing.QuoteRequest;
 import com.swiftdrop.pricing.Vehicle;
 import com.swiftdrop.shared.error.BusinessRuleException;
 import com.swiftdrop.shared.error.ErrorCode;
+import com.swiftdrop.shared.error.FieldValidationException;
 import com.swiftdrop.shared.reference.District;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.json.JsonMapper;
@@ -22,6 +23,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /** A booking is priced with pricing's quote, and the parcel keeps how the fee was worked out. */
@@ -57,8 +59,16 @@ class PricingFeeQuoterTest {
 
         assertThat(PricingFeeQuoter.quoteRequest(booking)).isEqualTo(new QuoteRequest(District.COLOMBO,
                 District.KANDY, new BigDecimal("1.80"), 10, 10, 70, true, true));
-        // without a size (a caller from before sizes) pricing gets no measurements
-        assertThat(PricingFeeQuoter.quoteRequest(booking(null, null)).hasDimensions()).isFalse();
+    }
+
+    @Test
+    void aBookingWithoutASizeIsRefusedBeforeAskingPricing() {
+        // e.g. a caller still using the command without measurements: its quote would have no local legs
+        var booking = booking(null, null);
+
+        assertThatThrownBy(() -> quoter.quote(booking)).isInstanceOfSatisfying(FieldValidationException.class,
+                e -> assertThat(e.fieldErrors()).containsEntry("lengthCm", "Enter the length."));
+        verifyNoInteractions(pricing);
     }
 
     @Test
