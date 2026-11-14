@@ -20,8 +20,8 @@ import java.util.Optional;
  * two local legs depend on the vehicle; between the branches SwiftDrop's own transport carries it.
  *
  * <pre>
- * fee = base fee (includes the first base kg)
- *     + per-kg fee x billable kg above the base kg
+ * fee = base fee, when the rate card has one (none since rate card 5)
+ *     + per-kg fee x billable kg above the base kg (the first kg is included)
  *     + the vehicle's leg fee for the pickup leg
  *     + the vehicle's leg fee for the delivery leg
  *     + linehaul per km x the distance between the branches (0 inside one district)
@@ -46,11 +46,13 @@ public class FeeCalculator {
 
         BigDecimal volumetricKg = parcel.hasDimensions() ? volumetricWeight(card, parcel.dimensions()) : null;
         int billableKg = billableWeight(card, parcel);
-        FeeLine base = new FeeLine(FeeComponent.BASE, Money.of(card.baseFee()));
+        // A card without a base fee (0) gives no BASE line, rather than a line of 0.00; the same for COD below.
+        FeeLine base = card.baseFee().signum() > 0
+                ? new FeeLine(FeeComponent.BASE, Money.of(card.baseFee()))
+                : null;
         FeeLine weight = new FeeLine(FeeComponent.WEIGHT, weightCharge(card, billableKg));
         FeeLine linehaul = new FeeLine(FeeComponent.LINEHAUL,
                 Money.of(branchDistanceKm.multiply(card.linehaulPerKm())));
-        // A card without a COD fee (0) gives no COD line, rather than a line of 0.00.
         FeeLine cod = cashOnDelivery && card.codFee().signum() > 0
                 ? new FeeLine(FeeComponent.COD, Money.of(card.codFee()))
                 : null;
@@ -97,7 +99,7 @@ public class FeeCalculator {
         return Math.max(actual, volumetric);
     }
 
-    /** The per-kg fee for every billable kilogram above the ones the base fee covers. */
+    /** The per-kg fee for every billable kilogram above the rate card's base kilograms. */
     static BigDecimal weightCharge(RateCard card, int billableKg) {
         int extraKg = Math.max(0, billableKg - card.baseWeightKg());
         return Money.of(card.perKgFee().multiply(BigDecimal.valueOf(extraKg)));

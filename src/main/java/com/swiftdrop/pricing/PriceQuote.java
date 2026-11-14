@@ -38,7 +38,7 @@ public record PriceQuote(
     }
 
     public enum Component {
-        /** Includes the first kilogram. */
+        /** Includes the first kilogram; only when the rate card has a base fee (none since version 5). */
         BASE,
         /** Billable kilograms above the first. */
         WEIGHT,
