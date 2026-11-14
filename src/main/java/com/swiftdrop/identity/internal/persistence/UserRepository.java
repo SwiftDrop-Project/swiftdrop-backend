@@ -11,6 +11,8 @@ import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 
+import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -36,6 +38,12 @@ public interface UserRepository extends JpaRepository<User, UUID>, JpaSpecificat
     List<RoleTotal> countPerRoleExcluding(UserStatus excluded);
 
     long countByStatus(UserStatus status);
+
+    long countByStatusNot(UserStatus status);
+
+    long countByStatusIn(Collection<UserStatus> statuses);
+
+    long countByStatusNotAndCreatedAtGreaterThanEqual(UserStatus status, Instant since);
 
     /** The newest accounts first, leaving out those with {@code excluded} status. */
     List<User> findByStatusNotOrderByCreatedAtDesc(UserStatus excluded, Limit limit);

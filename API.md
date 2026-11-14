@@ -102,6 +102,9 @@ Messages of the new codes (show them as-is):
 | `ASSIGNMENT_STARTED` | The courier has already started this task. |
 | `ASSIGNMENT_NEEDS_PARCEL` | A task needs at least one parcel. Cancel the task instead. |
 | `ASSIGNMENT_CHANGED` | This task was just changed by someone else. Refresh and try again. |
+| `CANNOT_CHANGE_OWN_ACCOUNT` (409) | You can't block your own account. |
+| `ACCOUNT_NOT_ACTIVE` (409) | Only active accounts can be blocked. Refresh to see the account's latest status. |
+| `ACCOUNT_NOT_BLOCKED` (409) | Only blocked accounts can be unblocked. Refresh to see the account's latest status. |
 | `SERVICE_UNAVAILABLE` | This isn't available yet. Please try again later. |
 
 **Rate limits** (per client IP; over the limit → `429 TOO_MANY_REQUESTS` + `Retry-After: <seconds>`; CORS exposes
@@ -348,6 +351,64 @@ No login → `401 UNAUTHENTICATED`; any other role → `403 FORBIDDEN`.
 - `POST /admin/merchants/{userId}/reject` → `200` User (status becomes `REJECTED`, `merchant.approvalStatus` `REJECTED`)
 - Both work from any current state (so an admin can correct a mistake) and record who reviewed it and when.
   Unknown `userId` → `404 NOT_FOUND`.
+
+### Users (admin)
+Every account (customers, merchants, couriers, dispatchers, admins). Role `ADMIN` only: no login →
+`401 UNAUTHENTICATED`; any other role → `403 FORBIDDEN`. Responses never contain passwords, hashes, tokens or the
+Google account id.
+
+#### `GET /admin/users/stats`
+```json
+{ "total": 1250, "active": 1100, "blocked": 100, "pending": 50, "newLast30Days": 50 }
+```
+Removed accounts are never counted. `blocked` = status `DISABLED`; `pending` = `PENDING_EMAIL_VERIFICATION`,
+`PENDING_APPROVAL` or `PROFILE_INCOMPLETE`; `newLast30Days` = created in the last 30 days.
+
+#### `GET /admin/users?q=&role=&status=&registeredFrom=&registeredTo=&sort=NEWEST&page=0&size=20`
+All parameters are optional. A page of accounts (`{content, page, size, totalElements, totalPages}`, page 0-based):
+```json
+{ "content": [ { "id": "...", "fullName": "Kasun Perera", "email": "kasun@example.com", "phone": "+94771234567",
+                 "role": "CUSTOMER", "status": "ACTIVE", "createdAt": "2026-11-10T04:10:00Z" } ],
+  "page": 0, "size": 20, "totalElements": 1, "totalPages": 1 }
+```
+- `q`: part of the name, email or phone (`0771234567` and `+94771234567` both work), or a full user id.
+- `role`: `CUSTOMER` | `MERCHANT` | `COURIER` | `DISPATCHER` | `ADMIN`.
+- `status`: `ACTIVE` | `BLOCKED` (`DISABLED`) | `PENDING` (the three pending statuses above) | `REJECTED` |
+  `REMOVED`. Without `status`, removed accounts are left out.
+- `registeredFrom`, `registeredTo`: `2026-11-01` (Sri Lanka days, both included).
+- `sort`: `NEWEST` (default) | `OLDEST` | `NAME` (A–Z). `size` 1–100.
+- `400 VALIDATION_FAILED`: unknown `role`/`status`/`sort`, a bad date, or `registeredFrom` after `registeredTo`
+  (field `registeredFrom`).
+- `phone` is `null` only while a Google sign-up is not finished.
+
+#### `GET /admin/users/{id}`
+```json
+{ "id": "...", "fullName": "Kasun Perera", "email": "kasun@example.com", "phone": "+94771234567",
+  "role": "MERCHANT", "status": "ACTIVE", "mustChangePassword": false, "googleLinked": false,
+  "branch": null, "vehicleType": null,
+  "merchant": { "businessName": "Lanka Crafts", "pickupDistrict": "COLOMBO", "city": "Nugegoda",
+                "approvalStatus": "APPROVED" },
+  "createdAt": "2026-11-10T04:10:00Z", "updatedAt": "2026-11-12T08:00:00Z", "deletedAt": null }
+```
+`branch` for couriers and dispatchers, `vehicleType` for couriers, `merchant` for merchants (otherwise `null`).
+Removed accounts can be viewed. Unknown id → `404 NOT_FOUND`.
+
+#### `PUT /admin/users/{id}` `{ "fullName": "...", "phone": "0771234567", "email": "..." }`
+Edits the name, phone and email (same rules as sign-up). Role, status, password, branch and vehicle cannot be changed
+here. A new email ends the user's sessions and unlinks Google sign-in. Returns the account as in `GET`.
+`400 VALIDATION_FAILED` · `404 NOT_FOUND` · `409 EMAIL_ALREADY_REGISTERED` / `PHONE_ALREADY_REGISTERED` (another
+account has it) · `409 ACCOUNT_REMOVED`.
+
+#### `PATCH /admin/users/{id}/status` `{ "status": "BLOCKED" }` or `{ "status": "ACTIVE" }`
+- `BLOCKED`: an `ACTIVE` account becomes `DISABLED`; the user is logged out at once and cannot log in.
+- `ACTIVE`: a `DISABLED` account becomes `ACTIVE` again.
+- Asking for the status the account already has changes nothing (`200`). Returns the account as in `GET`.
+- Only `ACTIVE` accounts can be blocked (pending merchants are approved or rejected on `/admin/merchants`), so
+  unblocking never skips email verification or merchant approval.
+- Who made the change and when is written to the server log (ids only).
+- `400 VALIDATION_FAILED` (field `status`) · `404 NOT_FOUND` · `409 CANNOT_CHANGE_OWN_ACCOUNT` (an admin's own
+  account) · `409 ACCOUNT_REMOVED` · `409 ACCOUNT_NOT_ACTIVE` (blocking an account that isn't `ACTIVE`) ·
+  `409 ACCOUNT_NOT_BLOCKED` (unblocking an account that isn't blocked).
 
 ### Reports (admin, WP4)
 Role `ADMIN` only: no login → `401 UNAUTHENTICATED`; any other role → `403 FORBIDDEN`.
