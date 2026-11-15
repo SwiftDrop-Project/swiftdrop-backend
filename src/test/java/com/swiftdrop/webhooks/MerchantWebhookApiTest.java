@@ -166,7 +166,7 @@ class MerchantWebhookApiTest extends IntegrationTest {
         Cookie merchant = approvedMerchant();
         String first = createdId(merchant);
         for (int i = 0; i < 4; i++) {
-            createdId(merchant);
+            createdId(merchant, "/" + i); // one active subscription per URL
         }
         mvc.perform(delete(PATH + "/" + first).cookie(merchant)).andExpect(status().isNoContent());
 
@@ -182,8 +182,8 @@ class MerchantWebhookApiTest extends IntegrationTest {
     @Test
     void listShowsOnlyYourSubscriptionsNewestFirstWithoutSecrets() throws Exception {
         Cookie merchant = approvedMerchant();
-        String older = createdId(merchant);
-        String newer = createdId(merchant);
+        String older = createdId(merchant, "/older");
+        String newer = createdId(merchant, "/newer");
         createdId(approvedMerchant()); // another merchant's
 
         mvc.perform(get(PATH).cookie(merchant))
@@ -303,6 +303,108 @@ class MerchantWebhookApiTest extends IntegrationTest {
         mvc.perform(delete(PATH + "/not-a-uuid").cookie(merchant)).andExpect(status().isBadRequest());
     }
 
+    // ---------- one active subscription per callback URL (per merchant) ----------
+
+    private static final String URL_IN_USE = "You already have a webhook for this address. Add the events to it instead.";
+
+    @Test
+    void aSecondActiveSubscriptionForTheSameUrlIsRefused() throws Exception {
+        Cookie merchant = approvedMerchant();
+        create(merchant, URL, List.of("parcel.delivered")).andExpect(status().isCreated());
+
+        create(merchant, URL, List.of("parcel.failed"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("WEBHOOK_URL_IN_USE"))
+                .andExpect(jsonPath("$.message").value(URL_IN_USE));
+        // the same destination written differently: host letter case, default port, a fragment
+        create(merchant, "HTTPS://SHOP.Example.com:443/swiftdrop#orders", List.of("parcel.failed"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("WEBHOOK_URL_IN_USE"));
+
+        assertThat(count(merchant)).isEqualTo(1);
+    }
+
+    @Test
+    void aDifferentPathQueryOrPortIsADifferentDestination() throws Exception {
+        Cookie merchant = approvedMerchant();
+        create(merchant, URL, List.of("parcel.delivered")).andExpect(status().isCreated());
+
+        create(merchant, URL + "/", List.of("parcel.delivered")).andExpect(status().isCreated());
+        create(merchant, URL + "?env=staging", List.of("parcel.delivered")).andExpect(status().isCreated());
+        create(merchant, "https://shop.example.com:8443/swiftdrop", List.of("parcel.delivered"))
+                .andExpect(status().isCreated());
+
+        assertThat(count(merchant)).isEqualTo(4);
+    }
+
+    @Test
+    void anotherMerchantMayUseTheSameUrl() throws Exception {
+        create(approvedMerchant(), URL, List.of("parcel.delivered")).andExpect(status().isCreated());
+
+        create(approvedMerchant(), URL, List.of("parcel.delivered")).andExpect(status().isCreated());
+    }
+
+    @Test
+    void aTurnedOffSubscriptionDoesNotBlockItsUrlButCantBeTurnedOnAgainWhileItIsInUse() throws Exception {
+        Cookie merchant = approvedMerchant();
+        String old = createdId(merchant);
+        mvc.perform(delete(PATH + "/" + old).cookie(merchant)).andExpect(status().isNoContent());
+
+        String replacement = createdId(merchant); // same URL: the old one is off
+        update(merchant, old, Map.of("active", true))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("WEBHOOK_URL_IN_USE"));
+        mvc.perform(get(PATH).cookie(merchant))
+                .andExpect(jsonPath("$[?(@.id == '" + old + "')].active").value(false));
+
+        // once the replacement is off, the old one can come back
+        mvc.perform(delete(PATH + "/" + replacement).cookie(merchant)).andExpect(status().isNoContent());
+        update(merchant, old, Map.of("active", true)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.active").value(true));
+    }
+
+    @Test
+    void changingTheUrlToOneInUseIsRefusedButItsOwnUrlIsFine() throws Exception {
+        Cookie merchant = approvedMerchant();
+        String first = createdId(merchant);
+        String second = createdId(merchant, "/billing");
+
+        update(merchant, second, Map.of("url", URL))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("WEBHOOK_URL_IN_USE"));
+        // its own URL, written differently, isn't "in use by another"
+        update(merchant, first, Map.of("url", "https://SHOP.example.com/swiftdrop")).andExpect(status().isOk());
+        // turning a subscription on and moving it to a free URL in one request
+        mvc.perform(delete(PATH + "/" + second).cookie(merchant)).andExpect(status().isNoContent());
+        update(merchant, second, Map.of("active", true, "url", URL + "/support")).andExpect(status().isOk())
+                .andExpect(jsonPath("$.active").value(true));
+    }
+
+    @Test
+    void aTurnedOffSubscriptionCanMoveToAUrlInUse() throws Exception {
+        Cookie merchant = approvedMerchant();
+        createdId(merchant);
+        String other = createdId(merchant, "/other");
+        mvc.perform(delete(PATH + "/" + other).cookie(merchant)).andExpect(status().isNoContent());
+
+        // it stays off, so it doesn't compete for the URL (turning it on later would be refused)
+        update(merchant, other, Map.of("url", URL)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.active").value(false));
+    }
+
+    @Test
+    void existingDuplicatesKeepWorkingAndOnlyTheirEventsCanBeEdited() throws Exception {
+        Cookie merchant = approvedMerchant();
+        createdId(merchant);
+        String legacy = createdId(merchant, "/legacy");
+        // a duplicate made before this rule existed
+        jdbc.update("update webhooks.subscriptions set url = ? where id = ?::uuid", URL, legacy);
+
+        update(merchant, legacy, Map.of("eventTypes", List.of("parcel.failed"))).andExpect(status().isOk())
+                .andExpect(jsonPath("$.eventTypes", contains("parcel.failed")));
+        mvc.perform(post(PATH + "/" + legacy + "/rotate-secret").cookie(merchant)).andExpect(status().isOk());
+    }
+
     // ---------- secrets never reach the logs ----------
 
     @Test
@@ -341,7 +443,12 @@ class MerchantWebhookApiTest extends IntegrationTest {
     }
 
     private String createdId(Cookie merchant) throws Exception {
-        return readJson(create(merchant, URL, List.of("parcel.delivered")).andExpect(status().isCreated()))
+        return createdId(merchant, "");
+    }
+
+    /** A subscription for URL + {@code path}: a merchant can't have two active ones for the same URL. */
+    private String createdId(Cookie merchant, String path) throws Exception {
+        return readJson(create(merchant, URL + path, List.of("parcel.delivered")).andExpect(status().isCreated()))
                 .get("id").asString();
     }
 

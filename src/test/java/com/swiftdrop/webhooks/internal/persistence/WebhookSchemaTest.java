@@ -233,7 +233,71 @@ class WebhookSchemaTest extends IntegrationTest {
                 .containsExactly(NOW.plusSeconds(2), NOW.plusSeconds(1));
     }
 
+    // ---------- parcel fields for search (V202611151200) ----------
+
+    @Test
+    void deliveriesHaveSearchableParcelColumnsAndIndexes() {
+        assertThat(jdbc.queryForList("""
+                select column_name from information_schema.columns
+                where table_schema = 'webhooks' and table_name = 'deliveries'
+                  and column_name in ('parcel_id', 'tracking_number', 'merchant_order_ref')""", String.class))
+                .containsExactlyInAnyOrder("parcel_id", "tracking_number", "merchant_order_ref");
+        assertThat(jdbc.queryForList("select indexname from pg_indexes where schemaname = 'webhooks'", String.class))
+                .contains("idx_deliveries_tracking_number", "idx_deliveries_parcel");
+    }
+
+    @Test
+    void theMigrationFillsExistingRowsFromTheirPayloadAndLeavesPingsAndOddRowsAlone() throws Exception {
+        UUID parcel = UUID.randomUUID();
+        UUID old = insertOldDelivery("parcel.delivered", """
+                {"id":"e1","type":"parcel.delivered","data":{"parcelId":"%s","trackingNumber":"SD2611007001",\
+                "merchantOrderRef":"TECH-ORD-7001","status":"DELIVERED"}}""".formatted(parcel));
+        UUID ping = insertOldDelivery("webhook.ping", "{\"id\":\"e2\",\"data\":{\"subscriptionId\":\"" + parcel + "\"}}");
+        UUID odd = insertOldDelivery("parcel.failed", """
+                {"id":"e3","data":{"parcelId":"not-a-uuid","trackingNumber":"SD2611007003","merchantOrderRef":null}}""");
+
+        jdbc.update(backfillStatementLimitedTo(old, ping, odd));
+
+        assertThat(jdbc.queryForMap("select parcel_id, tracking_number, merchant_order_ref from webhooks.deliveries"
+                + " where id = ?", old))
+                .containsEntry("parcel_id", parcel)
+                .containsEntry("tracking_number", "SD2611007001")
+                .containsEntry("merchant_order_ref", "TECH-ORD-7001");
+        assertThat(jdbc.queryForMap("select parcel_id, tracking_number from webhooks.deliveries where id = ?", ping))
+                .containsEntry("parcel_id", null)
+                .containsEntry("tracking_number", null);
+        assertThat(jdbc.queryForMap("select parcel_id, tracking_number, merchant_order_ref from webhooks.deliveries"
+                + " where id = ?", odd))
+                .containsEntry("parcel_id", null)                 // malformed id: left empty, no failure
+                .containsEntry("tracking_number", "SD2611007003")
+                .containsEntry("merchant_order_ref", null);
+    }
+
     // ---------- helpers ----------
+
+    /** A delivery as rows looked before V202611151200: no parcel columns filled. */
+    private UUID insertOldDelivery(String eventType, String payload) {
+        UUID id = UUID.randomUUID();
+        jdbc.update("""
+                insert into webhooks.deliveries
+                    (id, event_id, subscription_id, merchant_id, event_type, payload, status, attempts,
+                     next_attempt_at, created_at, updated_at)
+                values (?, ?, ?, ?, ?, ?, 'PENDING', 0, now(), now(), now())""",
+                id, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(), eventType, payload);
+        return id;
+    }
+
+    /** The migration's own backfill UPDATE, limited to these rows so other tests' data is never touched. */
+    private static String backfillStatementLimitedTo(UUID... ids) throws java.io.IOException {
+        String sql = new org.springframework.core.io.ClassPathResource(
+                "db/migration/webhooks/V202611151200__add_parcel_fields_to_deliveries.sql")
+                .getContentAsString(java.nio.charset.StandardCharsets.UTF_8);
+        String update = sql.substring(sql.indexOf("UPDATE webhooks.deliveries"));
+        update = update.substring(0, update.indexOf(';'));
+        String idList = java.util.Arrays.stream(ids).map(id -> "'" + id + "'").collect(
+                java.util.stream.Collectors.joining(", "));
+        return update + " AND d.id IN (" + idList + ")";
+    }
 
     private static WebhookSubscription subscription(UUID merchant, Set<WebhookEventType> types) {
         return WebhookSubscription.create(merchant, URL, "encrypted-secret", types, NOW);
