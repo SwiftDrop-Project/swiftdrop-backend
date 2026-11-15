@@ -2,6 +2,8 @@ package com.swiftdrop.courier;
 
 import com.swiftdrop.delivery.DeliverySnapshot;
 import com.swiftdrop.delivery.ParcelStatus;
+import com.swiftdrop.dispatch.AssignmentItemView;
+import com.swiftdrop.dispatch.ItemOutcome;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.data.domain.PageImpl;
@@ -9,6 +11,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -24,32 +27,49 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class CourierHistoryTest extends CourierApiTest {
 
     @Test
-    void passesThePageAndTheNormalisedTrackingNumber() throws Exception {
+    void passesThePageAndTheParcelOfTheNormalisedTrackingNumber() throws Exception {
         Courier courier = registerCourier();
-        DeliverySnapshot delivered = parcel(courier.id(), ParcelStatus.DELIVERED);
-        when(delivery.findFinishedForCourier(eq(courier.id()), eq("SD2611004817"), any()))
-                .thenReturn(new PageImpl<>(List.of(delivered), PageRequest.of(1, 5), 6));
+        DeliverySnapshot delivered = given(parcel(courier.id(), ParcelStatus.DELIVERED));
+        when(delivery.findByTrackingNumber("SD2611004817")).thenReturn(Optional.of(delivered));
+        AssignmentItemView item = taskOf(delivered.id()).items().getFirst();
+        when(assignments.findFinishedDeliveriesForCourier(eq(courier.id()), eq(delivered.id()), any()))
+                .thenReturn(new PageImpl<>(List.of(item), PageRequest.of(1, 5), 6));
 
         mvc.perform(get(BASE + "/history").cookie(courier.cookie())
                         .param("page", "1").param("size", "5").param("trackingNumber", " sd 2611 0048 17 "))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content[0].parcelId").value(delivered.id().toString()))
                 .andExpect(jsonPath("$.content[0].status").value("DELIVERED"))
+                .andExpect(jsonPath("$.content[0].task.outcome").value(ItemOutcome.DELIVERED.name()))
+                .andExpect(jsonPath("$.content[0].nextStatuses").isEmpty())
                 .andExpect(jsonPath("$.page").value(1))
                 .andExpect(jsonPath("$.size").value(5))
                 .andExpect(jsonPath("$.totalElements").value(6))
                 .andExpect(jsonPath("$.totalPages").value(2));
 
         ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
-        verify(delivery).findFinishedForCourier(eq(courier.id()), eq("SD2611004817"), pageable.capture());
+        verify(assignments).findFinishedDeliveriesForCourier(eq(courier.id()), eq(delivered.id()), pageable.capture());
         assertThat(pageable.getValue().getPageNumber()).isEqualTo(1);
         assertThat(pageable.getValue().getPageSize()).isEqualTo(5);
     }
 
     @Test
+    void anUnknownTrackingNumberIsAnEmptyPage() throws Exception {
+        Courier courier = registerCourier();
+        when(delivery.findByTrackingNumber(any())).thenReturn(Optional.empty());
+
+        mvc.perform(get(BASE + "/history").cookie(courier.cookie()).param("trackingNumber", "SD2611999999"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content").isEmpty())
+                .andExpect(jsonPath("$.totalElements").value(0));
+
+        verify(assignments, never()).findFinishedDeliveriesForCourier(any(), any(), any());
+    }
+
+    @Test
     void defaultsToTheFirstPageOf20WithoutAFilter() throws Exception {
         Courier courier = registerCourier();
-        when(delivery.findFinishedForCourier(eq(courier.id()), isNull(), any()))
+        when(assignments.findFinishedDeliveriesForCourier(eq(courier.id()), isNull(), any()))
                 .thenReturn(new PageImpl<>(List.of(), PageRequest.of(0, 20), 0));
 
         mvc.perform(get(BASE + "/history").cookie(courier.cookie()))
@@ -59,7 +79,7 @@ class CourierHistoryTest extends CourierApiTest {
                 .andExpect(jsonPath("$.size").value(20));
 
         ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
-        verify(delivery).findFinishedForCourier(eq(courier.id()), isNull(), pageable.capture());
+        verify(assignments).findFinishedDeliveriesForCourier(eq(courier.id()), isNull(), pageable.capture());
         assertThat(pageable.getValue().getPageSize()).isEqualTo(20);
     }
 
@@ -79,6 +99,6 @@ class CourierHistoryTest extends CourierApiTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"));
 
-        verify(delivery, never()).findFinishedForCourier(any(), any(), any());
+        verify(assignments, never()).findFinishedDeliveriesForCourier(any(), any(), any());
     }
 }

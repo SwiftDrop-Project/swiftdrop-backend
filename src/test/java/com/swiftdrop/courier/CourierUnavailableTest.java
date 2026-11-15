@@ -6,6 +6,7 @@ import com.swiftdrop.identity.IdentityApi;
 import com.swiftdrop.identity.Role;
 import com.swiftdrop.identity.UserStatus;
 import jakarta.servlet.http.Cookie;
+import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
@@ -18,6 +19,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /** The normal test context has no DeliveryApi at all (no fake, no mock): the app starts and courier answers 503. */
+@Disabled("DeliveryApi is implemented now, so the courier endpoints never answer 503. Delete with courier/internal/fake (CLAUDE.md).")
 class CourierUnavailableTest extends IntegrationTest {
 
     @Autowired
