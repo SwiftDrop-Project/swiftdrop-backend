@@ -39,7 +39,7 @@ architecture diagram). `SwiftdropBackendApplication` stays at the root.
 | `reporting` | Delivery and cash-on-delivery reports | - | TBD | Placeholder |
 | `tracking` | Parcel tracking by tracking number, live updates (SSE) | - | TBD | Placeholder |
 | `notifications` | Emails (and later SMS) to users | `notifications` | TBD | Placeholder |
-| `webhooks` | Merchant webhooks | `webhooks` | TBD | Placeholder |
+| `webhooks` | Merchant webhook subscriptions and signed, retried delivery of parcel events (API.md "Webhooks") | `webhooks` | chanuka (WP6) | Contract ready (implementation next) |
 | `outbox` | Relays delivery's outbox events to RabbitMQ | - | TBD | Placeholder |
 | `courier` | The courier's parcels: today's pickups and deliveries, status updates, delivery history (through `DeliveryApi`) | - | Kalpani | Built (answers 503 until delivery is implemented) |
 

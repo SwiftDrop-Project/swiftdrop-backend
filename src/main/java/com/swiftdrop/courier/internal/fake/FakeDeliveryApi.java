@@ -6,6 +6,7 @@ import com.swiftdrop.delivery.CreateDeliveryCommand;
 import com.swiftdrop.delivery.DeliveryApi;
 import com.swiftdrop.delivery.DeliverySnapshot;
 import com.swiftdrop.delivery.DeliveryStats;
+import com.swiftdrop.delivery.ParcelSearch;
 import com.swiftdrop.delivery.ParcelStatus;
 import com.swiftdrop.delivery.ParcelStatusEntry;
 import com.swiftdrop.delivery.ProofPhoto;
@@ -215,6 +216,16 @@ class FakeDeliveryApi implements DeliveryApi {
 
     @Override
     public DeliveryStats stats(LocalDate from, LocalDate to) {
+        throw new UnsupportedOperationException(UNSUPPORTED);
+    }
+
+    @Override
+    public Page<DeliverySnapshot> search(ParcelSearch search, Pageable pageable) {
+        throw new UnsupportedOperationException(UNSUPPORTED);
+    }
+
+    @Override
+    public Map<ParcelStatus, Long> countByStatus() {
         throw new UnsupportedOperationException(UNSUPPORTED);
     }
 }

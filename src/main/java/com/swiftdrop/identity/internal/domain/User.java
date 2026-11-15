@@ -179,6 +179,26 @@ public class User {
         return emailChanged;
     }
 
+    /**
+     * Updates the name, email and phone (admin user management). Role, status, password and staff fields are not
+     * touched. If the login email changed, unlinks any Google identity bound to the previous email and ends all
+     * existing sessions.
+     *
+     * @return true when the email address changed
+     */
+    public boolean updateContactDetails(String fullName, String email, String phone) {
+        String normalizedEmail = email.toLowerCase(Locale.ROOT);
+        boolean emailChanged = !this.email.equals(normalizedEmail);
+        this.fullName = fullName;
+        this.email = normalizedEmail;
+        this.phone = phone;
+        if (emailChanged) {
+            this.googleSub = null;
+            endSessions();
+        }
+        return emailChanged;
+    }
+
     /** Blocks the account and revokes all active sessions. */
     public void block() {
         this.status = UserStatus.DISABLED;

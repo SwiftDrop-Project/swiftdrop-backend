@@ -6,6 +6,7 @@ import com.swiftdrop.shared.reference.District;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 
 import java.time.Instant;
@@ -14,7 +15,11 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
-public interface ParcelRepository extends JpaRepository<Parcel, UUID> {
+public interface ParcelRepository extends JpaRepository<Parcel, UUID>, JpaSpecificationExecutor<Parcel> {
+
+    /** countByStatus: parcels per status. Statuses with no parcels are missing; the caller fills them with 0. */
+    @Query("select p.status as status, count(p) as total from Parcel p group by p.status")
+    List<StatusTotal> countPerStatus();
 
     /** DeliveryApi.findByTrackingNumber. The caller has already normalised the number (no spaces, upper case). */
     Optional<Parcel> findByTrackingNumber(String trackingNumber);

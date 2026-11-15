@@ -3,10 +3,12 @@ package com.swiftdrop.identity.internal.application;
 import com.swiftdrop.identity.CourierSummary;
 import com.swiftdrop.identity.IdentityApi;
 import com.swiftdrop.identity.Role;
+import com.swiftdrop.identity.UserRoleCounts;
 import com.swiftdrop.identity.UserStatus;
 import com.swiftdrop.identity.UserSummary;
 import com.swiftdrop.identity.internal.domain.User;
 import com.swiftdrop.identity.internal.domain.VerificationPurpose;
+import com.swiftdrop.identity.internal.persistence.RoleTotal;
 import com.swiftdrop.identity.internal.persistence.UserRepository;
 import com.swiftdrop.identity.internal.security.SessionStateCache;
 import com.swiftdrop.shared.error.ApiException;
@@ -15,13 +17,16 @@ import com.swiftdrop.shared.error.ConflictException;
 import com.swiftdrop.shared.error.ErrorCode;
 import com.swiftdrop.shared.error.NotFoundException;
 import com.swiftdrop.shared.reference.District;
+import org.springframework.data.domain.Limit;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Collection;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
@@ -30,6 +35,9 @@ import java.util.UUID;
 @Service
 @Transactional(readOnly = true)
 public class UserService implements IdentityApi {
+
+    /** The most accounts {@link #findRecentUsers} returns. */
+    static final int MAX_RECENT_USERS = 50;
 
     private final UserRepository users;
     private final PasswordEncoder passwordEncoder;
@@ -127,6 +135,33 @@ public class UserService implements IdentityApi {
             throw new BusinessRuleException(ErrorCode.COURIER_NOT_ASSIGNABLE);
         }
         return toCourierSummary(user);
+    }
+
+    @Override
+    public UserRoleCounts getUserRoleCounts() {
+        Map<Role, Long> perRole = new EnumMap<>(Role.class);
+        for (RoleTotal row : users.countPerRoleExcluding(UserStatus.REMOVED)) {
+            perRole.put(row.getRole(), row.getTotal());
+        }
+        long total = perRole.values().stream().mapToLong(Long::longValue).sum();
+        return new UserRoleCounts(total,
+                perRole.getOrDefault(Role.CUSTOMER, 0L),
+                perRole.getOrDefault(Role.MERCHANT, 0L),
+                perRole.getOrDefault(Role.COURIER, 0L),
+                perRole.getOrDefault(Role.DISPATCHER, 0L),
+                perRole.getOrDefault(Role.ADMIN, 0L),
+                users.countByStatus(UserStatus.PENDING_APPROVAL));
+    }
+
+    @Override
+    public List<UserSummary> findRecentUsers(int limit) {
+        if (limit < 1) {
+            throw new IllegalArgumentException("limit must be at least 1, was " + limit);
+        }
+        return users.findByStatusNotOrderByCreatedAtDesc(UserStatus.REMOVED,
+                        Limit.of(Math.min(limit, MAX_RECENT_USERS))).stream()
+                .map(UserService::toView)
+                .toList();
     }
 
     /**

@@ -4,6 +4,7 @@ import com.swiftdrop.delivery.ChangeStatusCommand;
 import com.swiftdrop.delivery.CreateDeliveryCommand;
 import com.swiftdrop.delivery.DeliverySnapshot;
 import com.swiftdrop.delivery.FailureReason;
+import com.swiftdrop.delivery.ParcelSize;
 import com.swiftdrop.delivery.ParcelStatus;
 import com.swiftdrop.shared.error.BusinessRuleException;
 import com.swiftdrop.shared.error.ErrorCode;
@@ -20,6 +21,8 @@ import jakarta.persistence.Version;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -90,6 +93,35 @@ public class Parcel {
     @Column(nullable = false, length = 3)
     private String currency;
 
+    /** Packed measurements in cm; all three or none (parcels booked before sizes have none). */
+    @Column(name = "length_cm")
+    private Integer lengthCm;
+
+    @Column(name = "width_cm")
+    private Integer widthCm;
+
+    @Column(name = "height_cm")
+    private Integer heightCm;
+
+    @Column(name = "keep_upright", nullable = false)
+    private boolean keepUpright;
+
+    /** The local legs' vehicle the fee was worked out with (a pricing Vehicle name), or null. */
+    @Column(length = 20)
+    private String vehicle;
+
+    @Column(name = "billable_weight_kg")
+    private Integer billableWeightKg;
+
+    /** The pricing rate card of the fee, so the price can be worked out again; null for the old flat fee. */
+    @Column(name = "rate_card_version")
+    private Integer rateCardVersion;
+
+    /** The fee lines as JSON. Hibernate stores the text in the jsonb column as it is. */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "fee_breakdown")
+    private String feeBreakdown;
+
     @Column(name = "assigned_courier_id")
     private UUID assignedCourierId;
 
@@ -123,12 +155,18 @@ public class Parcel {
     @Version
     private Long version;
 
-    /**
-     * A new parcel in CREATED. The fee comes from pricing, never from the caller; the tracking number from
-     * TrackingNumberGenerator.
-     */
+    /** A new parcel with only a fee amount (no pricing details), as before pricing was connected. */
     public static Parcel create(UUID id, String trackingNumber, CreateDeliveryCommand command,
                                 BigDecimal feeAmount, String currency, Instant now) {
+        return create(id, trackingNumber, command, ParcelPrice.flat(feeAmount, currency), now);
+    }
+
+    /**
+     * A new parcel in CREATED. The fee comes from pricing, never from the caller, and is kept with how it was worked
+     * out; the tracking number comes from TrackingNumberGenerator.
+     */
+    public static Parcel create(UUID id, String trackingNumber, CreateDeliveryCommand command, ParcelPrice price,
+                                Instant now) {
         Parcel parcel = new Parcel();
         parcel.id = id;
         parcel.trackingNumber = trackingNumber;
@@ -141,8 +179,18 @@ public class Parcel {
         parcel.weightKg = command.weightKg();
         parcel.codAmount = command.codAmount();
         parcel.instructions = command.instructions();
-        parcel.feeAmount = feeAmount;
-        parcel.currency = currency;
+        if (command.size() != null) {
+            parcel.lengthCm = command.size().lengthCm();
+            parcel.widthCm = command.size().widthCm();
+            parcel.heightCm = command.size().heightCm();
+            parcel.keepUpright = command.size().keepUpright();
+        }
+        parcel.feeAmount = price.amount();
+        parcel.currency = price.currency();
+        parcel.vehicle = price.vehicle();
+        parcel.billableWeightKg = price.billableWeightKg();
+        parcel.rateCardVersion = price.rateCardVersion();
+        parcel.feeBreakdown = price.breakdownJson();
         parcel.createdAt = now;
         parcel.updatedAt = now;
         parcel.statusChangedAt = now;
@@ -199,6 +247,12 @@ public class Parcel {
         return new DeliverySnapshot(id, trackingNumber, status, customerId, merchantId, pickup.toContact(),
                 recipient.toContact(), weightKg, codAmount, instructions, assignedCourierId, assignedAt, createdAt,
                 updatedAt, proofRecipientName, proofPhotoId != null, failureReason, merchantOrderRef, feeAmount,
-                currency, version == null ? 0L : version, currentBranch);
+                currency, version == null ? 0L : version, currentBranch, size(), vehicle, billableWeightKg,
+                rateCardVersion);
+    }
+
+    /** The measurements, or null for a parcel booked before sizes. */
+    private ParcelSize size() {
+        return lengthCm == null ? null : new ParcelSize(lengthCm, widthCm, heightCm, keepUpright);
     }
 }

@@ -1,5 +1,6 @@
 package com.swiftdrop.courier.internal.dto;
 
+import com.swiftdrop.courier.internal.application.CourierTask;
 import com.swiftdrop.delivery.DeliverySnapshot;
 import com.swiftdrop.delivery.FailureReason;
 import com.swiftdrop.delivery.ParcelStatus;
@@ -29,18 +30,21 @@ public record CourierDeliveryDetailResponse(
         List<ParcelStatus> nextStatuses,
         List<HistoryEntryResponse> history,
         ProofResponse proof,
-        FailureReason failureReason) {
+        FailureReason failureReason,
+        TaskResponse task) {
 
-    public static CourierDeliveryDetailResponse from(DeliverySnapshot parcel, List<ParcelStatusEntry> history) {
+    public static CourierDeliveryDetailResponse from(DeliverySnapshot parcel, List<ParcelStatusEntry> history,
+                                                     CourierTask task) {
         ProofResponse proof = parcel.status() == ParcelStatus.DELIVERED
                 ? new ProofResponse(parcel.proofRecipientName(), parcel.hasProofPhoto())
                 : null;
         return new CourierDeliveryDetailResponse(parcel.id(), parcel.trackingNumber(), parcel.status(),
-                Stop.of(parcel.status()), ContactResponse.from(parcel.pickup()), ContactResponse.from(parcel.recipient()),
-                parcel.weightKg(), parcel.codAmount(), parcel.instructions(), parcel.assignedAt(), parcel.updatedAt(),
-                CourierDeliveryResponse.nextStatuses(parcel.status()),
+                Stop.of(task), ContactResponse.from(parcel.pickup()), ContactResponse.from(parcel.recipient()),
+                parcel.weightKg(), parcel.codAmount(), parcel.instructions(), task.assignedAt(), parcel.updatedAt(),
+                task.nextStatuses(parcel.status()),
                 history.stream().map(HistoryEntryResponse::from).toList(),
                 proof,
-                parcel.status() == ParcelStatus.FAILED ? parcel.failureReason() : null);
+                parcel.status() == ParcelStatus.FAILED ? parcel.failureReason() : null,
+                TaskResponse.from(task));
     }
 }

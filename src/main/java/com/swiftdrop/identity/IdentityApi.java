@@ -45,4 +45,14 @@ public interface IdentityApi {
      * @throws com.swiftdrop.shared.error.BusinessRuleException COURIER_NOT_ASSIGNABLE when the courier is blocked or removed
      */
     CourierSummary requireAssignableCourier(UUID courierId);
+
+    /** Account counts per role, plus merchants waiting for approval, for the admin overview. Removed accounts are left out. */
+    UserRoleCounts getUserRoleCounts();
+
+    /**
+     * The newest accounts first, at most {@code limit} (capped at 50). Removed accounts are left out.
+     *
+     * @throws IllegalArgumentException when {@code limit} is less than 1
+     */
+    List<UserSummary> findRecentUsers(int limit);
 }

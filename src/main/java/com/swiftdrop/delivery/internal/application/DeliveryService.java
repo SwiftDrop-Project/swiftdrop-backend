@@ -5,17 +5,20 @@ import com.swiftdrop.delivery.CreateDeliveryCommand;
 import com.swiftdrop.delivery.DeliveryApi;
 import com.swiftdrop.delivery.DeliverySnapshot;
 import com.swiftdrop.delivery.DeliveryStats;
+import com.swiftdrop.delivery.ParcelSearch;
 import com.swiftdrop.delivery.ParcelStatus;
 import com.swiftdrop.delivery.ParcelStatusChanged;
 import com.swiftdrop.delivery.ParcelStatusEntry;
 import com.swiftdrop.delivery.ProofPhoto;
 import com.swiftdrop.delivery.ProofPhotoRef;
 import com.swiftdrop.delivery.internal.domain.Parcel;
+import com.swiftdrop.delivery.internal.domain.ParcelPrice;
 import com.swiftdrop.delivery.internal.domain.ParcelStatusHistory;
 import com.swiftdrop.delivery.internal.domain.TrackingNumberGenerator;
 import com.swiftdrop.delivery.internal.persistence.DailyTotal;
 import com.swiftdrop.delivery.internal.persistence.ParcelRepository;
 import com.swiftdrop.delivery.internal.persistence.ParcelStatusHistoryRepository;
+import com.swiftdrop.delivery.internal.persistence.StatusTotal;
 import com.swiftdrop.shared.error.ApiException;
 import com.swiftdrop.shared.error.BusinessRuleException;
 import com.swiftdrop.shared.error.ErrorCode;
@@ -39,6 +42,7 @@ import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
@@ -124,16 +128,16 @@ class DeliveryService implements DeliveryApi {
             }
         }
         Instant now = clock.instant();
-        FeeQuoter.Fee fee = feeQuoter.quote(command);
-        Parcel parcel = Parcel.create(UUID.randomUUID(), newTrackingNumber(now), command, fee.amount(),
-                fee.currency(), now);
+        ParcelPrice price = feeQuoter.quote(command);
+        Parcel parcel = Parcel.create(UUID.randomUUID(), newTrackingNumber(now), command, price, now);
         parcels.save(parcel);
         ParcelStatusHistory first = ParcelStatusHistory.firstEntry(UUID.randomUUID(), parcel);
         statusHistory.save(first);
         DeliverySnapshot snapshot = parcel.toSnapshot();
         outbox.write(new ParcelStatusChanged(UUID.randomUUID(), parcel.getId(), snapshot.version(),
                 parcel.getTrackingNumber(), parcel.getCustomerId(), parcel.getMerchantId(), null,
-                ParcelStatus.CREATED, first.getActorId(), first.getActorRole(), null, null, now, null));
+                ParcelStatus.CREATED, first.getActorId(), first.getActorRole(), null, null, now, null,
+                parcel.getMerchantOrderRef()));
         return snapshot;
     }
 
@@ -243,6 +247,30 @@ class DeliveryService implements DeliveryApi {
         return found.map(Parcel::toSnapshot);
     }
 
+    /** For the admin's All Parcels page (WP4). The order comes from {@code search.sort()}, never from the caller. */
+    @Override
+    @Transactional(readOnly = true)
+    public Page<DeliverySnapshot> search(ParcelSearch search, Pageable pageable) {
+        Objects.requireNonNull(search, "search");
+        Pageable capped = cappedPage(pageable);
+        Pageable page = PageRequest.of(capped.getPageNumber(), capped.getPageSize(),
+                ParcelSearchSpecification.sort(search.sort()));
+        return parcels.findAll(ParcelSearchSpecification.of(search), page).map(Parcel::toSnapshot);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Map<ParcelStatus, Long> countByStatus() {
+        Map<ParcelStatus, Long> counts = new EnumMap<>(ParcelStatus.class);
+        for (ParcelStatus status : ParcelStatus.values()) {
+            counts.put(status, 0L);
+        }
+        for (StatusTotal row : parcels.countPerStatus()) {
+            counts.put(row.getStatus(), row.getTotal());
+        }
+        return counts;
+    }
+
     /**
      * The caller's page number, at most MAX_PAGE_SIZE items, and no sort: the order is always newest first (it is in
      * the repository method names). "Unpaged" becomes the first page.
@@ -289,7 +317,7 @@ class DeliveryService implements DeliveryApi {
                 parcel.getTrackingNumber(), parcel.getCustomerId(), parcel.getMerchantId(), from, parcel.getStatus(),
                 command.actorId(), command.actorRole(), command.note(),
                 parcel.getFailureReason() == null ? null : parcel.getFailureReason().name(), now,
-                parcel.getCurrentBranch()));
+                parcel.getCurrentBranch(), parcel.getMerchantOrderRef()));
         return snapshot;
     }
 

@@ -36,6 +36,14 @@ public interface AssignmentApi {
      */
     Page<AssignmentView> findClosedForCourier(UUID courierId, UUID parcelId, Pageable pageable);
 
+    /**
+     * The parcels the courier delivered or failed to deliver: items of the courier's DELIVERY assignments whose
+     * outcome is DELIVERED, FAILED or RETURNED, most recently changed first; the page size is capped at 100.
+     *
+     * @param parcelId optional; when not null, only this parcel's items
+     */
+    Page<AssignmentItemView> findFinishedDeliveriesForCourier(UUID courierId, UUID parcelId, Pageable pageable);
+
     /** The assignment, if it belongs to {@code courierId}; empty otherwise (the caller answers 404). */
     Optional<AssignmentView> findByIdForCourier(UUID assignmentId, UUID courierId);
 

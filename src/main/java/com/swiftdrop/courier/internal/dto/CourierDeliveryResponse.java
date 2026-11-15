@@ -1,5 +1,6 @@
 package com.swiftdrop.courier.internal.dto;
 
+import com.swiftdrop.courier.internal.application.CourierTask;
 import com.swiftdrop.delivery.DeliverySnapshot;
 import com.swiftdrop.delivery.ParcelStatus;
 
@@ -27,17 +28,14 @@ public record CourierDeliveryResponse(
         String instructions,
         Instant assignedAt,
         Instant updatedAt,
-        List<ParcelStatus> nextStatuses) {
+        List<ParcelStatus> nextStatuses,
+        TaskResponse task) {
 
-    public static CourierDeliveryResponse from(DeliverySnapshot parcel) {
+    /** {@code nextStatuses}: only the next step of the courier's dispatch task (none once it is done). */
+    public static CourierDeliveryResponse from(DeliverySnapshot parcel, CourierTask task) {
         return new CourierDeliveryResponse(parcel.id(), parcel.trackingNumber(), parcel.status(),
-                Stop.of(parcel.status()), ContactResponse.from(parcel.pickup()), ContactResponse.from(parcel.recipient()),
-                parcel.weightKg(), parcel.codAmount(), parcel.instructions(), parcel.assignedAt(), parcel.updatedAt(),
-                nextStatuses(parcel.status()));
-    }
-
-    /** {@link ParcelStatus#next()} in life-cycle order (an EnumSet iterates in declaration order). */
-    static List<ParcelStatus> nextStatuses(ParcelStatus status) {
-        return List.copyOf(status.next());
+                Stop.of(task), ContactResponse.from(parcel.pickup()), ContactResponse.from(parcel.recipient()),
+                parcel.weightKg(), parcel.codAmount(), parcel.instructions(), task.assignedAt(), parcel.updatedAt(),
+                task.nextStatuses(parcel.status()), TaskResponse.from(task));
     }
 }
