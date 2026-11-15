@@ -63,6 +63,24 @@ class WebhookFanOutTest extends IntegrationTest {
     }
 
     @Test
+    void eachDeliveryKeepsItsParcelForSearch() {
+        UUID merchant = UUID.randomUUID();
+        subscribe(merchant, Set.of(PARCEL_DELIVERED));
+        UUID parcel = UUID.randomUUID();
+        ParcelStatusChanged event = new ParcelStatusChanged(UUID.randomUUID(), parcel, 5, "SD2611009001", null,
+                merchant, ParcelStatus.OUT_FOR_DELIVERY, ParcelStatus.DELIVERED, UUID.randomUUID(), "COURIER", null,
+                null, LATER, null, "TECH-ORD-9001");
+
+        fanOut.handle(event);
+
+        assertThat(rows(event.eventId())).singleElement().satisfies(row -> {
+            assertThat(row.get("parcel_id")).isEqualTo(parcel);
+            assertThat(row.get("tracking_number")).isEqualTo("SD2611009001");
+            assertThat(row.get("merchant_order_ref")).isEqualTo("TECH-ORD-9001");
+        });
+    }
+
+    @Test
     void theSameEventTwiceAddsNothingMore() {
         UUID merchant = UUID.randomUUID();
         subscribe(merchant, Set.of(PARCEL_DELIVERED));

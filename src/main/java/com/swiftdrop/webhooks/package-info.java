@@ -38,7 +38,8 @@
  * <ul>
  *   <li>{@code webhooks.subscriptions}: one row per merchant URL, with its event types and encrypted secret.</li>
  *   <li>{@code webhooks.deliveries}: one row per event and subscription (unique), with the exact payload sent,
- *       attempts, next attempt time and the last result.</li>
+ *       attempts, next attempt time and the last result, plus the parcel id, tracking number and merchant order
+ *       number (null for test pings) so the delivery history can be searched.</li>
  * </ul>
  */
 @ApplicationModule(displayName = "Webhooks")

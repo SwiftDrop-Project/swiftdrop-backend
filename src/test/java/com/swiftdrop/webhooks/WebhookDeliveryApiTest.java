@@ -280,6 +280,217 @@ class WebhookDeliveryApiTest extends IntegrationTest {
                 .andExpect(jsonPath("$.fieldErrors.eventType").exists());
     }
 
+    // ---------- history: search and dates ----------
+
+    @Test
+    void aTrackingNumberFindsEveryDeliveryOfThatParcelEvenWrittenLoosely() throws Exception {
+        Cookie merchant = approvedMerchant();
+        String subscription = subscribe(merchant);
+        UUID parcel = UUID.randomUUID();
+        Instant base = Instant.now();
+        UUID pickedUp = parcelDelivery(subscription, WebhookEventType.PARCEL_PICKED_UP, base.minusSeconds(300),
+                parcel, "SD2611000777", "TECH-ORD-1001");
+        UUID outForDelivery = parcelDelivery(subscription, WebhookEventType.PARCEL_OUT_FOR_DELIVERY,
+                base.minusSeconds(200), parcel, "SD2611000777", "TECH-ORD-1001");
+        UUID delivered = parcelDelivery(subscription, WebhookEventType.PARCEL_DELIVERED, base.minusSeconds(100),
+                parcel, "SD2611000777", "TECH-ORD-1001");
+        parcelDelivery(subscription, WebhookEventType.PARCEL_DELIVERED, base, UUID.randomUUID(), "SD2611000888",
+                "TECH-ORD-2002");
+        String[] expected = {delivered.toString(), outForDelivery.toString(), pickedUp.toString()};
+
+        for (String term : new String[] {"SD2611000777", "sd 2611 0007 77", "  sd2611000777  "}) {
+            searchHistory(merchant, subscription, term)
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.content[*].id", contains(expected)))
+                    .andExpect(jsonPath("$.content[0].trackingNumber").value("SD2611000777"))
+                    .andExpect(jsonPath("$.content[0].merchantOrderRef").value("TECH-ORD-1001"));
+        }
+    }
+
+    @Test
+    void partOfTheOrderNumberMatchesIgnoringCase() throws Exception {
+        Cookie merchant = approvedMerchant();
+        String subscription = subscribe(merchant);
+        UUID first = parcelDelivery(subscription, WebhookEventType.PARCEL_DELIVERED, Instant.now().minusSeconds(60),
+                UUID.randomUUID(), "SD2611000101", "TECH-ORD-1001");
+        UUID second = parcelDelivery(subscription, WebhookEventType.PARCEL_DELIVERED, Instant.now(),
+                UUID.randomUUID(), "SD2611000102", "TECH-ORD-2002");
+
+        history(merchant, subscription, "search=ord-1001")
+                .andExpect(jsonPath("$.content[*].id", contains(first.toString())));
+        history(merchant, subscription, "search=tech-ORD")
+                .andExpect(jsonPath("$.content[*].id", contains(second.toString(), first.toString())));
+    }
+
+    @Test
+    void wildcardCharactersInTheSearchAreTakenLiterally() throws Exception {
+        Cookie merchant = approvedMerchant();
+        String subscription = subscribe(merchant);
+        UUID literal = parcelDelivery(subscription, WebhookEventType.PARCEL_DELIVERED, Instant.now().minusSeconds(60),
+                UUID.randomUUID(), "SD2611000201", "SALE_50%");
+        parcelDelivery(subscription, WebhookEventType.PARCEL_DELIVERED, Instant.now(), UUID.randomUUID(),
+                "SD2611000202", "SALEX50Y");
+
+        searchHistory(merchant, subscription, "sale_50%")
+                .andExpect(jsonPath("$.content[*].id", contains(literal.toString())));
+    }
+
+    @Test
+    void anIdFindsExactlyItsDeliveryEventOrParcel() throws Exception {
+        Cookie merchant = approvedMerchant();
+        String subscription = subscribe(merchant);
+        UUID parcel = UUID.randomUUID();
+        UUID older = parcelDelivery(subscription, WebhookEventType.PARCEL_PICKED_UP, Instant.now().minusSeconds(60),
+                parcel, "SD2611000301", null);
+        UUID newer = parcelDelivery(subscription, WebhookEventType.PARCEL_DELIVERED, Instant.now(), parcel,
+                "SD2611000301", null);
+        String newerEvent = jdbc.queryForObject("select event_id::text from webhooks.deliveries where id = ?",
+                String.class, newer);
+
+        history(merchant, subscription, "search=" + older)
+                .andExpect(jsonPath("$.content[*].id", contains(older.toString())));
+        history(merchant, subscription, "search=" + newerEvent.toUpperCase())
+                .andExpect(jsonPath("$.content[*].id", contains(newer.toString())));
+        history(merchant, subscription, "search=" + parcel)
+                .andExpect(jsonPath("$.content[*].id", contains(newer.toString(), older.toString())));
+        history(merchant, subscription, "search=" + UUID.randomUUID())
+                .andExpect(jsonPath("$.totalElements").value(0));
+    }
+
+    @Test
+    void testPingsHaveNoParcelSoOnlyTheirIdFindsThem() throws Exception {
+        Cookie merchant = approvedMerchant();
+        String subscription = subscribe(merchant);
+        JsonNode ping = readJson(mvc.perform(post(PATH + "/" + subscription + "/test").cookie(merchant))
+                .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.trackingNumber").isEmpty())
+                .andExpect(jsonPath("$.merchantOrderRef").isEmpty()));
+
+        history(merchant, subscription, "search=SD").andExpect(jsonPath("$.totalElements").value(0));
+        history(merchant, subscription, "search=" + ping.get("id").asString())
+                .andExpect(jsonPath("$.content[*].id", contains(ping.get("id").asString())));
+    }
+
+    @Test
+    void searchCombinesWithStatusAndEventType() throws Exception {
+        Cookie merchant = approvedMerchant();
+        String subscription = subscribe(merchant);
+        UUID parcel = UUID.randomUUID();
+        UUID failedDelivery = parcelDelivery(subscription, WebhookEventType.PARCEL_FAILED,
+                Instant.now().minusSeconds(300), parcel, "SD2611000401", "ORD-401");
+        UUID pendingFailure = parcelDelivery(subscription, WebhookEventType.PARCEL_FAILED,
+                Instant.now().minusSeconds(200), parcel, "SD2611000401", "ORD-401");
+        UUID failedPickup = parcelDelivery(subscription, WebhookEventType.PARCEL_PICKED_UP,
+                Instant.now().minusSeconds(100), parcel, "SD2611000401", "ORD-401");
+        markFailed(failedDelivery);
+        markFailed(failedPickup);
+
+        history(merchant, subscription, "search=SD2611000401&status=FAILED")
+                .andExpect(jsonPath("$.content[*].id", contains(failedPickup.toString(), failedDelivery.toString())));
+        history(merchant, subscription, "search=SD2611000401&eventType=parcel.failed")
+                .andExpect(jsonPath("$.content[*].id", contains(pendingFailure.toString(), failedDelivery.toString())));
+        history(merchant, subscription, "search=ORD-401&status=FAILED&eventType=parcel.failed")
+                .andExpect(jsonPath("$.content[*].id", contains(failedDelivery.toString())));
+    }
+
+    @Test
+    void dateRangeUsesWholeSriLankanDaysWithBothEndsIncluded() throws Exception {
+        Cookie merchant = approvedMerchant();
+        String subscription = subscribe(merchant);
+        // 10 Nov 2026 in Sri Lanka (UTC+05:30) runs from 2026-11-09T18:30:00Z to 2026-11-10T18:29:59.999Z
+        UUID beforeStart = delivery(subscription, WebhookEventType.PARCEL_DELIVERED, Instant.parse("2026-11-09T18:29:59Z"));
+        UUID atStart = delivery(subscription, WebhookEventType.PARCEL_DELIVERED, Instant.parse("2026-11-09T18:30:00Z"));
+        UUID atEnd = delivery(subscription, WebhookEventType.PARCEL_DELIVERED, Instant.parse("2026-11-10T18:29:59Z"));
+        UUID afterEnd = delivery(subscription, WebhookEventType.PARCEL_DELIVERED, Instant.parse("2026-11-10T18:30:00Z"));
+
+        history(merchant, subscription, "from=2026-11-10&to=2026-11-10")
+                .andExpect(jsonPath("$.content[*].id", contains(atEnd.toString(), atStart.toString())));
+        history(merchant, subscription, "from=2026-11-10")
+                .andExpect(jsonPath("$.content[*].id", contains(afterEnd.toString(), atEnd.toString(),
+                        atStart.toString())));
+        history(merchant, subscription, "to=2026-11-10")
+                .andExpect(jsonPath("$.content[*].id", contains(atEnd.toString(), atStart.toString(),
+                        beforeStart.toString())));
+    }
+
+    @Test
+    void everyFilterTogetherFindsTheOneMatchingDelivery() throws Exception {
+        Cookie merchant = approvedMerchant();
+        String subscription = subscribe(merchant);
+        UUID parcel = UUID.randomUUID();
+        UUID match = parcelDelivery(subscription, WebhookEventType.PARCEL_FAILED, Instant.parse("2026-11-12T06:00:00Z"),
+                parcel, "SD2611000501", "ORD-501");
+        UUID otherDay = parcelDelivery(subscription, WebhookEventType.PARCEL_FAILED,
+                Instant.parse("2026-11-14T06:00:00Z"), parcel, "SD2611000501", "ORD-501");
+        parcelDelivery(subscription, WebhookEventType.PARCEL_DELIVERED, Instant.parse("2026-11-12T07:00:00Z"), parcel,
+                "SD2611000501", "ORD-501");
+        markFailed(match);
+        markFailed(otherDay);
+
+        history(merchant, subscription,
+                "search=sd2611000501&status=FAILED&eventType=parcel.failed&from=2026-11-12&to=2026-11-13&size=5")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[*].id", contains(match.toString())))
+                .andExpect(jsonPath("$.totalElements").value(1));
+    }
+
+    @Test
+    void badSearchOrDatesAnswer400WithTheField() throws Exception {
+        Cookie merchant = approvedMerchant();
+        String subscription = subscribe(merchant);
+
+        history(merchant, subscription, "from=2026-11-15&to=2026-11-01").andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.fieldErrors.to").value("The end date can't be before the start date."));
+        history(merchant, subscription, "from=2026-13-01").andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.fieldErrors.from").value("Enter a date like 2026-11-15."));
+        history(merchant, subscription, "to=15-11-2026").andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.fieldErrors.to").value("Enter a date like 2026-11-15."));
+        history(merchant, subscription, "search=" + "x".repeat(65)).andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.fieldErrors.search").value("Search with at most 64 characters."));
+    }
+
+    @Test
+    void anotherMerchantsParcelWithTheSameTrackingNumberIsNeverShown() throws Exception {
+        Cookie merchant = approvedMerchant();
+        String subscription = subscribe(merchant);
+        Cookie other = approvedMerchant();
+        String otherSubscription = subscribe(other);
+        UUID mine = parcelDelivery(subscription, WebhookEventType.PARCEL_DELIVERED, Instant.now(), UUID.randomUUID(),
+                "SD2611000601", "ORD-601");
+        UUID theirs = parcelDelivery(otherSubscription, WebhookEventType.PARCEL_DELIVERED, Instant.now(),
+                UUID.randomUUID(), "SD2611000601", "ORD-601");
+
+        history(merchant, subscription, "search=SD2611000601")
+                .andExpect(jsonPath("$.content[*].id", contains(mine.toString())));
+        history(merchant, subscription, "search=" + theirs)
+                .andExpect(jsonPath("$.totalElements").value(0));
+        // and the other merchant's history itself stays out of reach
+        history(merchant, otherSubscription, "search=SD2611000601").andExpect(status().isNotFound());
+    }
+
+    @Test
+    void adminsCanSearchAcrossMerchantsOrWithinOne() throws Exception {
+        Cookie admin = loginAsAdmin();
+        String first = subscribe(approvedMerchant());
+        String second = subscribe(approvedMerchant());
+        String tracking = "SD26" + (System.nanoTime() % 100_000_000L); // unique across test runs on the shared database
+        UUID a = parcelDelivery(first, WebhookEventType.PARCEL_DELIVERED, Instant.now().minusSeconds(60),
+                UUID.randomUUID(), tracking, null);
+        UUID b = parcelDelivery(second, WebhookEventType.PARCEL_DELIVERED, Instant.now(), UUID.randomUUID(),
+                tracking, null);
+
+        mvc.perform(get(ADMIN_PATH + "?search=" + tracking).cookie(admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[*].id", contains(b.toString(), a.toString())))
+                .andExpect(jsonPath("$.content[0].trackingNumber").value(tracking));
+        mvc.perform(get(ADMIN_PATH + "?search=" + tracking + "&merchantId=" + merchantOf(first)).cookie(admin))
+                .andExpect(jsonPath("$.content[*].id", contains(a.toString())));
+        mvc.perform(get(ADMIN_PATH + "?from=2026-11-15&to=2026-11-01").cookie(admin))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.fieldErrors.to").exists());
+    }
+
     // ---------- retry ----------
 
     @Test
@@ -419,6 +630,23 @@ class WebhookDeliveryApiTest extends IntegrationTest {
     /** A PENDING parcel delivery for this subscription, created at {@code createdAt}. */
     private UUID delivery(String subscription, Instant createdAt) {
         return delivery(subscription, WebhookEventType.PARCEL_DELIVERED, createdAt);
+    }
+
+    /** A PENDING parcel-event delivery with its searchable parcel fields (what the fan-out stores). */
+    private UUID parcelDelivery(String subscription, WebhookEventType type, Instant createdAt, UUID parcelId,
+                                String trackingNumber, String merchantOrderRef) {
+        return deliveries.saveAndFlush(WebhookDelivery.pending(UUID.randomUUID(), UUID.fromString(subscription),
+                        merchantOf(subscription), type, "{\"id\":\"x\"}", createdAt.truncatedTo(ChronoUnit.MICROS))
+                .forParcel(parcelId, trackingNumber, merchantOrderRef)).getId();
+    }
+
+    private ResultActions history(Cookie merchant, String subscription, String query) throws Exception {
+        return mvc.perform(get(PATH + "/" + subscription + "/deliveries?" + query).cookie(merchant));
+    }
+
+    /** The search term as a real request parameter (spaces and % sent as typed, not as a URL template). */
+    private ResultActions searchHistory(Cookie merchant, String subscription, String term) throws Exception {
+        return mvc.perform(get(PATH + "/" + subscription + "/deliveries").param("search", term).cookie(merchant));
     }
 
     /** A PENDING delivery of {@code type} for this subscription, created at {@code createdAt}. */

@@ -13,22 +13,18 @@ import com.swiftdrop.webhooks.internal.dto.AdminWebhookDeliveryResponse;
 import com.swiftdrop.webhooks.internal.dto.WebhookDeliveryResponse;
 import com.swiftdrop.webhooks.internal.persistence.WebhookDeliveryRepository;
 import com.swiftdrop.webhooks.internal.persistence.WebhookSubscriptionRepository;
-import jakarta.persistence.criteria.Predicate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
-import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -40,7 +36,6 @@ import java.util.UUID;
 public class WebhookDeliveryService {
 
     static final int MAX_PAGE_SIZE = 100;
-    static final String EVENT_TYPE_FIELD = "eventType";
     /** Newest first; rows of one event share createdAt, so the id keeps the order stable between pages. */
     static final Sort NEWEST_FIRST = Sort.by(Sort.Order.desc("createdAt"), Sort.Order.desc("id"));
 
@@ -90,16 +85,17 @@ public class WebhookDeliveryService {
     }
 
     /**
-     * One subscription's deliveries, newest first. {@code status} and {@code eventType} (a wire name, including
-     * {@code webhook.ping}) are optional: null or blank means all.
+     * One subscription's deliveries, newest first. Every filter is optional (see {@link DeliveryCriteria}: status,
+     * event type, search, from/to). Only this subscription's rows are ever looked at, so a search never reaches
+     * another merchant's deliveries.
      */
     @Transactional(readOnly = true)
-    public PageResponse<WebhookDeliveryResponse> history(UUID merchantId, UUID subscriptionId, DeliveryStatus status,
-                                                         String eventType, int page, int size) {
+    public PageResponse<WebhookDeliveryResponse> history(UUID merchantId, UUID subscriptionId, DeliveryFilters filters,
+                                                         int page, int size) {
         requireValidPage(page, size);
-        WebhookEventType type = parseEventType(eventType);
+        DeliveryCriteria criteria = DeliveryCriteria.parse(filters);
         WebhookSubscription subscription = ownedSubscription(merchantId, subscriptionId);
-        Page<WebhookDelivery> found = deliveries.findAll(filters(subscription.getId(), null, status, type),
+        Page<WebhookDelivery> found = deliveries.findAll(criteria.toSpecification(subscription.getId(), null),
                 PageRequest.of(page, size, NEWEST_FIRST));
         return PageResponse.from(found, WebhookDeliveryResponse::from);
     }
@@ -112,14 +108,14 @@ public class WebhookDeliveryService {
         return WebhookDeliveryResponse.from(reset(deliveryId));
     }
 
-    /** Every merchant's deliveries, newest first; all three filters are optional. */
+    /** Every merchant's deliveries, newest first; {@code merchantId} and every filter are optional. */
     @Transactional(readOnly = true)
-    public PageResponse<AdminWebhookDeliveryResponse> adminList(DeliveryStatus status, UUID merchantId,
-                                                                String eventType, int page, int size) {
+    public PageResponse<AdminWebhookDeliveryResponse> adminList(UUID merchantId, DeliveryFilters filters, int page,
+                                                                int size) {
         requireValidPage(page, size);
-        WebhookEventType type = parseEventType(eventType);
+        DeliveryCriteria criteria = DeliveryCriteria.parse(filters);
         return PageResponse.from(
-                deliveries.findAll(filters(null, merchantId, status, type), PageRequest.of(page, size, NEWEST_FIRST)),
+                deliveries.findAll(criteria.toSpecification(null, merchantId), PageRequest.of(page, size, NEWEST_FIRST)),
                 AdminWebhookDeliveryResponse::from);
     }
 
@@ -146,44 +142,6 @@ public class WebhookDeliveryService {
     private WebhookSubscription ownedSubscription(UUID merchantId, UUID subscriptionId) {
         return subscriptions.findByIdAndMerchantId(subscriptionId, merchantId)
                 .orElseThrow(() -> new NotFoundException(ErrorCode.NOT_FOUND));
-    }
-
-    /**
-     * The one filter behind both delivery lists. Every argument is optional (null = no condition); the merchant
-     * history passes its subscription, the admin list an optional merchant.
-     */
-    private static Specification<WebhookDelivery> filters(UUID subscriptionId, UUID merchantId, DeliveryStatus status,
-                                                          WebhookEventType eventType) {
-        return (root, query, cb) -> {
-            List<Predicate> conditions = new ArrayList<>();
-            if (subscriptionId != null) {
-                conditions.add(cb.equal(root.get("subscriptionId"), subscriptionId));
-            }
-            if (merchantId != null) {
-                conditions.add(cb.equal(root.get("merchantId"), merchantId));
-            }
-            if (status != null) {
-                conditions.add(cb.equal(root.get("status"), status));
-            }
-            if (eventType != null) {
-                conditions.add(cb.equal(root.get("eventType"), eventType.wireName())); // stored as the wire name
-            }
-            return cb.and(conditions.toArray(Predicate[]::new));
-        };
-    }
-
-    /**
-     * The {@code eventType} query parameter: a wire name such as {@code parcel.delivered} or {@code webhook.ping}.
-     * Null or blank means no filter; anything else unknown is 400 with {@code fieldErrors.eventType}, worded like the
-     * {@code eventTypes} check on create.
-     */
-    static WebhookEventType parseEventType(String eventType) {
-        if (eventType == null || eventType.isBlank()) {
-            return null;
-        }
-        String wireName = eventType.trim();
-        return WebhookEventType.fromWireName(wireName)
-                .orElseThrow(() -> new FieldValidationException(EVENT_TYPE_FIELD, "'" + wireName + "' isn't a webhook event"));
     }
 
     /** Same messages as the other paged lists (e.g. GET /dispatch/assignments). */

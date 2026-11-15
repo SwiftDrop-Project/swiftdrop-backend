@@ -4,6 +4,7 @@ import com.swiftdrop.shared.error.ErrorCode;
 import com.swiftdrop.shared.error.ForbiddenException;
 import com.swiftdrop.shared.web.CurrentUser;
 import com.swiftdrop.shared.web.PageResponse;
+import com.swiftdrop.webhooks.internal.application.DeliveryFilters;
 import com.swiftdrop.webhooks.internal.application.WebhookDeliveryService;
 import com.swiftdrop.webhooks.internal.application.WebhookSubscriptionService;
 import com.swiftdrop.webhooks.internal.domain.DeliveryStatus;
@@ -91,14 +92,19 @@ public class MerchantWebhookController {
     }
 
     @GetMapping("/{id}/deliveries")
-    @Operation(summary = "Delivery history of one subscription, newest first (optional status and eventType, "
-            + "e.g. eventType=parcel.delivered or webhook.ping)")
+    @Operation(summary = "Delivery history of one subscription, newest first. Optional filters: status, eventType "
+            + "(e.g. parcel.delivered or webhook.ping), search (tracking number, order number or an id), from/to "
+            + "(days like 2026-11-15, Sri Lankan time, included)")
     public PageResponse<WebhookDeliveryResponse> deliveries(Authentication authentication, @PathVariable UUID id,
                                                             @RequestParam(required = false) DeliveryStatus status,
                                                             @RequestParam(required = false) String eventType,
+                                                            @RequestParam(required = false) String search,
+                                                            @RequestParam(required = false) String from,
+                                                            @RequestParam(required = false) String to,
                                                             @RequestParam(defaultValue = "0") int page,
                                                             @RequestParam(defaultValue = "20") int size) {
-        return deliveries.history(merchantId(authentication), id, status, eventType, page, size);
+        return deliveries.history(merchantId(authentication), id,
+                new DeliveryFilters(status, eventType, search, from, to), page, size);
     }
 
     @PostMapping("/deliveries/{deliveryId}/retry")

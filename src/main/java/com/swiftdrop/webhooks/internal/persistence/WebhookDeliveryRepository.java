@@ -47,11 +47,11 @@ public interface WebhookDeliveryRepository extends JpaRepository<WebhookDelivery
      */
     @Modifying
     @Query(value = "INSERT INTO webhooks.deliveries"
-            + " (id, event_id, subscription_id, merchant_id, event_type, payload, status, attempts,"
-            + " next_attempt_at, created_at, updated_at)"
-            + " VALUES (:id, :eventId, :subscriptionId, :merchantId, :eventType, :payload, 'PENDING', 0,"
-            + " :now, :now, :now)"
+            + " (id, event_id, subscription_id, merchant_id, event_type, payload, parcel_id, tracking_number,"
+            + " merchant_order_ref, status, attempts, next_attempt_at, created_at, updated_at)"
+            + " VALUES (:id, :eventId, :subscriptionId, :merchantId, :eventType, :payload, :parcelId,"
+            + " :trackingNumber, :merchantOrderRef, 'PENDING', 0, :now, :now, :now)"
             + " ON CONFLICT (event_id, subscription_id) DO NOTHING", nativeQuery = true)
     int insertIfAbsent(UUID id, UUID eventId, UUID subscriptionId, UUID merchantId, String eventType, String payload,
-                       Instant now);
+                       UUID parcelId, String trackingNumber, String merchantOrderRef, Instant now);
 }

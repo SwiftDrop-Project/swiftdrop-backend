@@ -4,6 +4,7 @@ import com.swiftdrop.shared.error.ErrorCode;
 import com.swiftdrop.shared.error.ForbiddenException;
 import com.swiftdrop.shared.web.CurrentUser;
 import com.swiftdrop.shared.web.PageResponse;
+import com.swiftdrop.webhooks.internal.application.DeliveryFilters;
 import com.swiftdrop.webhooks.internal.application.WebhookDeliveryService;
 import com.swiftdrop.webhooks.internal.domain.DeliveryStatus;
 import com.swiftdrop.webhooks.internal.dto.AdminWebhookDeliveryResponse;
@@ -35,14 +36,17 @@ public class AdminWebhookController {
     }
 
     @GetMapping("/deliveries")
-    @Operation(summary = "Every merchant's webhook deliveries, newest first (e.g. status=FAILED, "
-            + "eventType=parcel.failed)")
+    @Operation(summary = "Every merchant's webhook deliveries, newest first. Optional filters: status, merchantId, "
+            + "eventType, search (tracking number, order number or an id), from/to (days, Sri Lankan time, included)")
     public PageResponse<AdminWebhookDeliveryResponse> list(@RequestParam(required = false) DeliveryStatus status,
                                                            @RequestParam(required = false) UUID merchantId,
                                                            @RequestParam(required = false) String eventType,
+                                                           @RequestParam(required = false) String search,
+                                                           @RequestParam(required = false) String from,
+                                                           @RequestParam(required = false) String to,
                                                            @RequestParam(defaultValue = "0") int page,
                                                            @RequestParam(defaultValue = "20") int size) {
-        return deliveries.adminList(status, merchantId, eventType, page, size);
+        return deliveries.adminList(merchantId, new DeliveryFilters(status, eventType, search, from, to), page, size);
     }
 
     @PostMapping("/deliveries/{id}/retry")
