@@ -1,7 +1,6 @@
 package com.swiftdrop.courier;
 
 import com.swiftdrop.IntegrationTest;
-import com.swiftdrop.delivery.ChangeStatusCommand;
 import com.swiftdrop.delivery.DeliveryApi;
 import com.swiftdrop.delivery.DeliveryContact;
 import com.swiftdrop.delivery.DeliverySnapshot;
@@ -14,7 +13,6 @@ import com.swiftdrop.dispatch.AssignmentType;
 import com.swiftdrop.dispatch.AssignmentView;
 import com.swiftdrop.dispatch.ItemOutcome;
 import com.swiftdrop.dispatch.RecordOutcomeCommand;
-import com.swiftdrop.dispatch.TaskProblem;
 import com.swiftdrop.identity.IdentityApi;
 import com.swiftdrop.identity.Role;
 import com.swiftdrop.identity.UserStatus;
@@ -22,7 +20,6 @@ import com.swiftdrop.identity.UserSummary;
 import com.swiftdrop.shared.reference.District;
 import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.BeforeEach;
-import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -30,9 +27,7 @@ import org.springframework.test.web.servlet.ResultActions;
 
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -43,25 +38,19 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyCollection;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.atLeast;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Base for the courier API tests. Delivery and dispatch are Mockito mocks (nothing implements them yet), answered
- * from two in-memory maps that each test fills with {@link #given(DeliverySnapshot)} and {@link #given(AssignmentView)}.
- * The writes apply the change to the maps like the real modules would, so responses show the new state. These tests
- * check only the courier module: roles, ownership, check order, request rules, the parcel moves and the mapping. All
- * subclasses share one Spring context.
+ * Base for the courier API tests: delivery and dispatch are Mockito mocks, so these tests check only the courier
+ * module: roles, ownership, request rules and mapping. Dispatch is a small in-memory stand-in: {@link #given} puts the
+ * parcel in a one-parcel task of its courier, at the step its status implies. The real modules together are tested in
+ * {@code CourierDispatchFlowTest}. All subclasses share one Spring context.
  */
 abstract class CourierApiTest extends IntegrationTest {
 
-    protected static final String BASE = "/api/v1/courier/assignments";
-    protected static final String PARCELS = "/api/v1/courier/parcels";
+    protected static final String BASE = "/api/v1/courier/deliveries";
 
     private static final AtomicInteger TRACKING_SEQUENCE = new AtomicInteger(1);
 
@@ -74,31 +63,31 @@ abstract class CourierApiTest extends IntegrationTest {
     @Autowired
     protected IdentityApi identity;
 
-    private final Map<UUID, DeliverySnapshot> parcels = new ConcurrentHashMap<>();
+    /** The stand-in's tasks by id, and the parcels {@link #given} registered. */
     private final Map<UUID, AssignmentView> tasks = new ConcurrentHashMap<>();
+    private final Map<UUID, DeliverySnapshot> parcels = new ConcurrentHashMap<>();
 
     protected record Courier(UUID id, Cookie cookie) {
     }
 
-    /** One parcel in a task built by {@link #task}, with its current outcome. */
-    protected record Item(DeliverySnapshot parcel, ItemOutcome outcome) {
-    }
-
     @BeforeEach
-    void answerFromTheMaps() {
-        when(delivery.findById(any())).thenAnswer(call -> Optional.ofNullable(parcels.get(call.<UUID>getArgument(0))));
-        when(delivery.findAllById(anyCollection())).thenAnswer(call -> call.<Collection<UUID>>getArgument(0).stream()
-                .map(parcels::get).filter(Objects::nonNull).toList());
-        when(delivery.findByTrackingNumber(anyString())).thenAnswer(call -> parcels.values().stream()
-                .filter(parcel -> parcel.trackingNumber().equals(call.getArgument(0))).findFirst());
-        when(delivery.history(any())).thenReturn(List.of());
-        when(delivery.changeStatus(any())).thenAnswer(call -> changeStatus(call.getArgument(0)));
-
+    void fakeDispatch() {
+        tasks.clear();
+        parcels.clear();
+        when(assignments.findOpenForCourier(any(), any())).thenAnswer(call ->
+                tasks.values().stream().filter(task -> task.courierId().equals(call.getArgument(0))).toList());
+        when(assignments.findItemsForCourierAndParcel(any(), any())).thenAnswer(call ->
+                tasks.values().stream().filter(task -> task.courierId().equals(call.getArgument(0)))
+                        .flatMap(task -> task.items().stream())
+                        .filter(item -> item.parcelId().equals(call.getArgument(1))).toList());
         when(assignments.findByIdForCourier(any(), any())).thenAnswer(call ->
-                Optional.ofNullable(tasks.get(call.<UUID>getArgument(0)))
+                Optional.ofNullable(tasks.get((UUID) call.getArgument(0)))
                         .filter(task -> task.courierId().equals(call.getArgument(1))));
-        when(assignments.recordOutcome(any())).thenAnswer(call -> recordOutcome(call.getArgument(0)));
-        when(assignments.complete(any(), any())).thenAnswer(call -> complete(call.getArgument(0)));
+        when(assignments.recordOutcome(any())).thenAnswer(call -> record(call.getArgument(0)));
+        when(assignments.complete(any(), any())).thenAnswer(call -> tasks.computeIfPresent(call.getArgument(0),
+                (id, task) -> withItems(task, AssignmentStatus.COMPLETED, task.items())));
+        when(delivery.findAllById(any())).thenAnswer(call -> ((Collection<?>) call.getArgument(0)).stream()
+                .map(parcels::get).filter(Objects::nonNull).toList());
     }
 
     /** An ACTIVE courier (created through IdentityApi, as an admin would) and its login cookie. */
@@ -110,165 +99,103 @@ abstract class CourierApiTest extends IntegrationTest {
         return new Courier(user.id(), cookie);
     }
 
-    // ---- Parcels ----
-
-    /** A parcel from Delgoda to Deniyaya. {@code branch} is used only for AT_BRANCH. The only DeliverySnapshot builder. */
-    protected static DeliverySnapshot parcel(ParcelStatus status, District branch) {
-        Instant now = Instant.now();
+    /** A parcel for {@code courierId}. The only place that builds a DeliverySnapshot. */
+    protected static DeliverySnapshot parcel(UUID courierId, ParcelStatus status, Instant assignedAt,
+                                             Instant updatedAt) {
         return new DeliverySnapshot(UUID.randomUUID(),
                 String.format("SD2611%06d", TRACKING_SEQUENCE.getAndIncrement()), status, null, UUID.randomUUID(),
-                new DeliveryContact("Delgoda Spice Traders", "+94760000101", "14 Kandy Road", "Delgoda",
-                        District.GAMPAHA),
-                new DeliveryContact("Nimal Perera", "+94760000201", "45 Rakwana Road", "Deniyaya", District.MATARA),
-                new BigDecimal("1.20"), new BigDecimal("2450.00"), "Call before you arrive.", null, null,
-                now.minus(5, ChronoUnit.HOURS), now.minus(1, ChronoUnit.HOURS),
+                new DeliveryContact("Lanka Crafts", "+94760000101", "12 High Level Road", "Nugegoda", District.COLOMBO),
+                new DeliveryContact("Nimal Perera", "+94760000201", "45 Peradeniya Road", "Kandy", District.KANDY),
+                new BigDecimal("1.20"), new BigDecimal("2450.00"), "Call before you arrive.", courierId, assignedAt,
+                assignedAt.minus(1, ChronoUnit.HOURS), updatedAt,
                 status == ParcelStatus.DELIVERED ? "Nimal Perera" : null, false,
                 status == ParcelStatus.FAILED ? FailureReason.RECIPIENT_UNAVAILABLE : null,
                 "ORDER-1", new BigDecimal("450.00"), "LKR", 3,
-                status == ParcelStatus.AT_BRANCH ? branch : null);
+                status == ParcelStatus.AT_BRANCH ? District.COLOMBO : null);
     }
 
-    protected static DeliverySnapshot parcel(ParcelStatus status) {
-        return parcel(status, null);
+    protected static DeliverySnapshot parcel(UUID courierId, ParcelStatus status) {
+        Instant now = Instant.now();
+        return parcel(courierId, status, now.minus(2, ChronoUnit.HOURS), now.minus(1, ChronoUnit.HOURS));
     }
 
-    /** Makes delivery know this parcel. */
+    /**
+     * Makes delivery return this parcel (with an empty history) and puts it in a task of the courier in
+     * {@code assignedCourierId}: CREATED / PICKED_UP in a pickup to COLOMBO, IN_TRANSIT in a transfer from COLOMBO to
+     * KANDY, AT_BRANCH and later in a delivery from COLOMBO, at the matching step. The task is assigned at the
+     * parcel's {@code assignedAt}.
+     */
     protected DeliverySnapshot given(DeliverySnapshot parcel) {
+        when(delivery.findById(parcel.id())).thenReturn(Optional.of(parcel));
+        when(delivery.history(parcel.id())).thenReturn(List.of());
         parcels.put(parcel.id(), parcel);
+        AssignmentType type = switch (parcel.status()) {
+            case CREATED, PICKED_UP -> AssignmentType.PICKUP;
+            case IN_TRANSIT -> AssignmentType.TRANSFER;
+            default -> AssignmentType.DELIVERY;
+        };
+        ItemOutcome outcome = switch (parcel.status()) {
+            case CREATED, AT_BRANCH -> ItemOutcome.PENDING;
+            case PICKED_UP -> ItemOutcome.COLLECTED;
+            case IN_TRANSIT, OUT_FOR_DELIVERY -> ItemOutcome.LOADED;
+            case DELIVERED -> ItemOutcome.DELIVERED;
+            case FAILED -> ItemOutcome.FAILED;
+        };
+        UUID taskId = UUID.randomUUID();
+        AssignmentItemView item = item(taskId, parcel.id(), type, outcome, parcel.updatedAt());
+        boolean closed = item.isClosed();
+        District origin = type == AssignmentType.PICKUP ? null : District.COLOMBO;
+        District destination = switch (type) {
+            case PICKUP -> District.COLOMBO;
+            case TRANSFER -> District.KANDY;
+            case DELIVERY -> null;
+        };
+        tasks.put(taskId, new AssignmentView(taskId, parcel.assignedCourierId(), type,
+                closed ? AssignmentStatus.COMPLETED : AssignmentStatus.IN_PROGRESS, origin, destination, null, null,
+                parcel.assignedAt(), parcel.assignedAt(), closed ? parcel.updatedAt() : null, null, List.of(item), 1));
         return parcel;
     }
 
-    protected DeliverySnapshot current(DeliverySnapshot parcel) {
-        return parcels.get(parcel.id());
+    /** The stand-in's current task that holds this parcel. */
+    protected AssignmentView taskOf(UUID parcelId) {
+        return tasks.values().stream()
+                .filter(task -> task.items().stream().anyMatch(item -> item.parcelId().equals(parcelId)))
+                .findFirst().orElseThrow();
     }
 
-    // ---- Tasks ----
-
-    /**
-     * A task of this type: PICKUP to Gampaha, TRANSFER Gampaha → Matara, DELIVERY from Matara. Items keep the given
-     * order as their sequence; a closing outcome is closed, NOT_* get a problem, FAILED and RETURNED a reason.
-     */
-    protected static AssignmentView task(UUID courierId, AssignmentType type, AssignmentStatus status,
-                                         Instant assignedAt, Item... items) {
-        UUID id = UUID.randomUUID();
-        List<AssignmentItemView> views = new ArrayList<>();
-        for (int i = 0; i < items.length; i++) {
-            ItemOutcome outcome = items[i].outcome();
-            boolean notTaken = outcome == ItemOutcome.NOT_COLLECTED || outcome == ItemOutcome.NOT_LOADED;
-            boolean failed = outcome == ItemOutcome.FAILED || outcome == ItemOutcome.RETURNED;
-            views.add(new AssignmentItemView(id, items[i].parcel().id(), i + 1, outcome,
-                    notTaken ? TaskProblem.SENDER_UNAVAILABLE : null,
-                    failed ? FailureReason.RECIPIENT_UNAVAILABLE : null,
-                    null, null, null, assignedAt, outcome.closes(type) ? assignedAt.plusSeconds(60) : null));
-        }
-        return new AssignmentView(id, courierId, type, status,
-                type == AssignmentType.PICKUP ? null : type == AssignmentType.TRANSFER ? District.GAMPAHA
-                        : District.MATARA,
-                type == AssignmentType.DELIVERY ? null : type == AssignmentType.PICKUP ? District.GAMPAHA
-                        : District.MATARA,
-                LocalDate.now(), "Morning round", assignedAt,
-                status == AssignmentStatus.ASSIGNED ? null : assignedAt.plusSeconds(30),
-                status == AssignmentStatus.COMPLETED ? assignedAt.plusSeconds(3600) : null,
-                status == AssignmentStatus.CANCELLED ? assignedAt.plusSeconds(3600) : null,
-                views, 0);
+    private static AssignmentItemView item(UUID taskId, UUID parcelId, AssignmentType type, ItemOutcome outcome,
+                                           Instant at) {
+        return new AssignmentItemView(taskId, parcelId, 1, outcome, null, null, null, null, null, at,
+                outcome.closes(type) ? at : null);
     }
 
-    protected static AssignmentView task(UUID courierId, AssignmentType type, AssignmentStatus status,
-                                         Item... items) {
-        return task(courierId, type, status, Instant.now().minus(2, ChronoUnit.HOURS), items);
+    private AssignmentView record(RecordOutcomeCommand command) {
+        return tasks.computeIfPresent(command.assignmentId(), (id, task) -> withItems(task,
+                AssignmentStatus.IN_PROGRESS, task.items().stream()
+                        .map(item -> item.parcelId().equals(command.parcelId())
+                                ? item(id, item.parcelId(), task.type(), command.outcome(), Instant.now())
+                                : item)
+                        .toList()));
     }
 
-    protected static Item item(DeliverySnapshot parcel, ItemOutcome outcome) {
-        return new Item(parcel, outcome);
+    private static AssignmentView withItems(AssignmentView task, AssignmentStatus status,
+                                            List<AssignmentItemView> items) {
+        return new AssignmentView(task.id(), task.courierId(), task.type(), status, task.originBranch(),
+                task.destinationBranch(), task.scheduledFor(), task.note(), task.assignedAt(), task.startedAt(),
+                status == AssignmentStatus.COMPLETED ? Instant.now() : null, null, items, task.version() + 1);
     }
 
-    /** Makes dispatch know this task, and delivery its parcels. */
-    protected AssignmentView given(AssignmentView task, DeliverySnapshot... parcelsOfTask) {
-        tasks.put(task.id(), task);
-        for (DeliverySnapshot parcel : parcelsOfTask) {
-            given(parcel);
-        }
-        return task;
+    protected ResultActions postStatus(UUID parcelId, Map<String, ?> body, Cookie cookie) throws Exception {
+        return mvc.perform(post(BASE + "/{id}/status", parcelId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(body))
+                .cookie(cookie));
     }
 
-    protected AssignmentView current(AssignmentView task) {
-        return tasks.get(task.id());
-    }
-
-    // ---- Requests ----
-
-    protected ResultActions postOutcome(AssignmentView task, DeliverySnapshot parcel, Map<String, ?> body,
-                                        Cookie cookie) throws Exception {
-        return postOutcome(task.id(), parcel.id(), json.writeValueAsString(body), cookie);
-    }
-
-    protected ResultActions postOutcome(UUID taskId, UUID parcelId, String body, Cookie cookie) throws Exception {
-        return mvc.perform(post(BASE + "/{id}/items/{parcelId}/outcome", taskId, parcelId)
-                .contentType(MediaType.APPLICATION_JSON).content(body).cookie(cookie));
-    }
-
-    protected ResultActions postHandover(AssignmentView task, Map<String, ?> body, Cookie cookie) throws Exception {
-        return mvc.perform(post(BASE + "/{id}/handover", task.id())
-                .contentType(MediaType.APPLICATION_JSON).content(json.writeValueAsString(body)).cookie(cookie));
-    }
-
-    protected ResultActions postComplete(AssignmentView task, Cookie cookie) throws Exception {
-        return mvc.perform(post(BASE + "/{id}/complete", task.id()).cookie(cookie));
-    }
-
-    // ---- What was sent ----
-
-    protected List<ChangeStatusCommand> sentStatusChanges() {
-        ArgumentCaptor<ChangeStatusCommand> captor = ArgumentCaptor.forClass(ChangeStatusCommand.class);
-        verify(delivery, atLeast(0)).changeStatus(captor.capture());
-        return captor.getAllValues();
-    }
-
-    protected List<RecordOutcomeCommand> sentOutcomes() {
-        ArgumentCaptor<RecordOutcomeCommand> captor = ArgumentCaptor.forClass(RecordOutcomeCommand.class);
-        verify(assignments, atLeast(0)).recordOutcome(captor.capture());
-        return captor.getAllValues();
-    }
-
-    // ---- The mocks' writes ----
-
-    private DeliverySnapshot changeStatus(ChangeStatusCommand command) {
-        DeliverySnapshot parcel = parcels.get(command.parcelId());
-        DeliverySnapshot updated = new DeliverySnapshot(parcel.id(), parcel.trackingNumber(), command.toStatus(),
-                parcel.customerId(), parcel.merchantId(), parcel.pickup(), parcel.recipient(), parcel.weightKg(),
-                parcel.codAmount(), parcel.instructions(), null, null, parcel.createdAt(), Instant.now(),
-                command.recipientName(), false, command.failureReason(), parcel.merchantOrderRef(),
-                parcel.feeAmount(), parcel.currency(), parcel.version() + 1, command.branch());
-        parcels.put(updated.id(), updated);
-        return updated;
-    }
-
-    private AssignmentView recordOutcome(RecordOutcomeCommand command) {
-        AssignmentView task = tasks.get(command.assignmentId());
-        Instant now = Instant.now();
-        List<AssignmentItemView> items = task.items().stream()
-                .map(item -> !item.parcelId().equals(command.parcelId()) ? item
-                        : new AssignmentItemView(item.assignmentId(), item.parcelId(), item.sequence(),
-                                command.outcome(), command.problem(),
-                                command.failureReason() != null ? command.failureReason() : item.failureReason(),
-                                command.note(), command.receivedBy(), command.recipientName(), now,
-                                command.outcome().closes(task.type()) ? now : null))
-                .toList();
-        AssignmentView updated = new AssignmentView(task.id(), task.courierId(), task.type(),
-                AssignmentStatus.IN_PROGRESS, task.originBranch(), task.destinationBranch(), task.scheduledFor(),
-                task.note(), task.assignedAt(), task.startedAt() != null ? task.startedAt() : now, null, null, items,
-                task.version() + 1);
-        tasks.put(updated.id(), updated);
-        return updated;
-    }
-
-    private AssignmentView complete(UUID taskId) {
-        AssignmentView task = tasks.get(taskId);
-        AssignmentView updated = new AssignmentView(task.id(), task.courierId(), task.type(),
-                AssignmentStatus.COMPLETED, task.originBranch(), task.destinationBranch(), task.scheduledFor(),
-                task.note(), task.assignedAt(), task.startedAt(), Instant.now(), null, task.items(),
-                task.version() + 1);
-        tasks.put(updated.id(), updated);
-        return updated;
+    protected ResultActions postStatusRaw(UUID parcelId, String body, Cookie cookie) throws Exception {
+        return mvc.perform(post(BASE + "/{id}/status", parcelId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(body)
+                .cookie(cookie));
     }
 }

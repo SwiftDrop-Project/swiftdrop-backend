@@ -74,7 +74,8 @@ public class WebhookFanOutService {
         int added = 0;
         for (WebhookSubscription subscription : targets) {
             added += deliveries.insertIfAbsent(UUID.randomUUID(), event.eventId(), subscription.getId(),
-                    event.merchantId(), type.wireName(), payload, now);
+                    event.merchantId(), type.wireName(), payload, event.parcelId(), event.trackingNumber(),
+                    event.merchantOrderRef(), now);
         }
         log.info("Webhook fan-out for event {} ({}): {} new deliveries", event.eventId(), type.wireName(), added);
         return added;

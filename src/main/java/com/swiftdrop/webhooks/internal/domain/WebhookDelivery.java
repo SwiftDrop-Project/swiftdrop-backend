@@ -49,6 +49,18 @@ public class WebhookDelivery implements Persistable<UUID> {
     @Column(nullable = false, columnDefinition = "text")
     private String payload;
 
+    /** The parcel this event is about, for search. Null for a test ping. */
+    @Column(name = "parcel_id")
+    private UUID parcelId;
+
+    /** Normalised (e.g. SD2611004817), for search. Null for a test ping. */
+    @Column(name = "tracking_number", length = 20)
+    private String trackingNumber;
+
+    /** The merchant's own order number, for search. Null for a test ping or a parcel without one. */
+    @Column(name = "merchant_order_ref", length = 64)
+    private String merchantOrderRef;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
     private DeliveryStatus status;
@@ -94,6 +106,20 @@ public class WebhookDelivery implements Persistable<UUID> {
         delivery.createdAt = now;
         delivery.updatedAt = now;
         return delivery;
+    }
+
+    /**
+     * Records which parcel a new parcel-event delivery is about (search uses these). Parcel deliveries are normally
+     * stored by the fan-out's insert, which sets them directly; this is for code that saves the entity itself.
+     */
+    public WebhookDelivery forParcel(UUID parcelId, String trackingNumber, String merchantOrderRef) {
+        if (!isNew) {
+            throw new IllegalStateException("The parcel of a stored delivery can't change");
+        }
+        this.parcelId = parcelId;
+        this.trackingNumber = trackingNumber;
+        this.merchantOrderRef = merchantOrderRef;
+        return this;
     }
 
     public WebhookEventType eventType() {
