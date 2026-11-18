@@ -7,11 +7,15 @@ import com.swiftdrop.courier.internal.dto.CourierDeliveryDetailResponse;
 import com.swiftdrop.courier.internal.dto.CourierDeliveryResponse;
 import com.swiftdrop.courier.internal.dto.CourierTodayResponse;
 import com.swiftdrop.courier.internal.dto.StatusChangeRequest;
+import com.swiftdrop.courier.internal.dto.UnableToCollectRequest;
+import com.swiftdrop.shared.error.ConflictException;
+import com.swiftdrop.shared.error.ErrorCode;
 import com.swiftdrop.shared.web.CurrentUser;
 import com.swiftdrop.shared.web.PageResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -24,12 +28,17 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.UUID;
+import java.util.function.Supplier;
 
-/** The logged-in courier's parcels. COURIER only; other couriers' parcels answer 404. */
+/**
+ * The logged-in courier's parcels, one at a time (a dispatcher may group several in one task). COURIER only; other
+ * couriers' parcels answer 404.
+ */
 @RestController
 @RequestMapping("/courier/deliveries")
 @PreAuthorize("hasRole('COURIER')")
-@Tag(name = "Courier - deliveries", description = "Today's parcels, status updates and history (COURIER only)")
+@Tag(name = "Courier - deliveries", description = "Today's parcels, status updates, Unable to Collect and the "
+        + "history of completed parcels (COURIER only)")
 public class CourierDeliveryController {
 
     private final CourierDeliveryService courierDeliveries;
@@ -39,7 +48,7 @@ public class CourierDeliveryController {
     }
 
     @GetMapping("/today")
-    @Operation(summary = "Open parcels assigned to me, plus the ones I finished today (Sri Lankan time)")
+    @Operation(summary = "My active parcels, plus the ones I completed today (Sri Lankan time)")
     public CourierTodayResponse today(@AuthenticationPrincipal Jwt jwt) {
         CourierToday today = courierDeliveries.today(CurrentUser.id(jwt));
         return new CourierTodayResponse(today.date(), today.toDo(), today.done(),
@@ -47,7 +56,7 @@ public class CourierDeliveryController {
     }
 
     @GetMapping("/history")
-    @Operation(summary = "Parcels I delivered or marked failed, newest first")
+    @Operation(summary = "Parcels I completed (pickups and deliveries), newest first")
     public PageResponse<CourierDeliveryResponse> history(@AuthenticationPrincipal Jwt jwt,
                                                          @RequestParam(defaultValue = "0") int page,
                                                          @RequestParam(defaultValue = "20") int size,
@@ -63,14 +72,37 @@ public class CourierDeliveryController {
     }
 
     @PostMapping("/{parcelId}/status")
-    @Operation(summary = "Move one of my parcels to its next status (with a recipient name or a failure reason)")
+    @Operation(summary = "Move one of my parcels to its next status (with a recipient name, a failure reason, or who "
+            + "received it at the branch)")
     public CourierDeliveryDetailResponse changeStatus(@PathVariable UUID parcelId,
                                                       @Valid @RequestBody StatusChangeRequest request,
                                                       @AuthenticationPrincipal Jwt jwt) {
-        return toResponse(courierDeliveries.changeStatus(CurrentUser.id(jwt), parcelId, request));
+        return toResponse(inOneStep(() -> courierDeliveries.changeStatus(CurrentUser.id(jwt), parcelId, request)));
+    }
+
+    @PostMapping("/{parcelId}/unable-to-collect")
+    @Operation(summary = "I couldn't take this parcel (pickup: not collected, delivery: not taken out), with the "
+            + "reason")
+    public CourierDeliveryDetailResponse unableToCollect(@PathVariable UUID parcelId,
+                                                         @Valid @RequestBody UnableToCollectRequest request,
+                                                         @AuthenticationPrincipal Jwt jwt) {
+        return toResponse(inOneStep(() -> courierDeliveries.unableToCollect(CurrentUser.id(jwt), parcelId, request)));
     }
 
     private static CourierDeliveryDetailResponse toResponse(ParcelDetail detail) {
         return CourierDeliveryDetailResponse.from(detail.parcel(), detail.history(), detail.task());
+    }
+
+    /**
+     * Runs one write. Someone else changed the task or the parcel at the same time (optimistic lock, possibly only at
+     * commit, after the service returned): 409 ASSIGNMENT_CHANGED, so the courier refreshes, instead of a 500.
+     * Nothing was saved.
+     */
+    private static <T> T inOneStep(Supplier<T> write) {
+        try {
+            return write.get();
+        } catch (OptimisticLockingFailureException ex) {
+            throw new ConflictException(ErrorCode.ASSIGNMENT_CHANGED);
+        }
     }
 }
