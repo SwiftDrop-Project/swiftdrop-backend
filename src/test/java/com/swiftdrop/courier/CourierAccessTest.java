@@ -26,7 +26,9 @@ class CourierAccessTest extends CourierApiTest {
                 get(BASE + "/history"),
                 get(BASE + "/{id}", id),
                 post(BASE + "/{id}/status", id).contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"status\":\"PICKED_UP\"}"));
+                        .content("{\"status\":\"PICKED_UP\"}"),
+                post(BASE + "/{id}/unable-to-collect", id).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"problem\":\"SENDER_UNAVAILABLE\"}"));
     }
 
     @Test
@@ -63,5 +65,6 @@ class CourierAccessTest extends CourierApiTest {
                     .andExpect(jsonPath("$.code").value("FORBIDDEN"));
         }
         verify(delivery, never()).changeStatus(any());
+        verify(assignments, never()).recordOutcome(any());
     }
 }

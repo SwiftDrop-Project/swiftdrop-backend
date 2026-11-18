@@ -44,7 +44,7 @@ class CourierTodayTest extends CourierApiTest {
     }
 
     @Test
-    void listsPickupsThenDeliveriesThenFinishedWithCounts() throws Exception {
+    void listsPickupsThenDeliveriesThenCompletedWithCounts() throws Exception {
         Courier courier = registerCourier();
         Instant now = Instant.now();
         // Tasks are assigned at the parcel's assignedAt (see CourierApiTest#given).
@@ -69,16 +69,34 @@ class CourierTodayTest extends CourierApiTest {
                 .andExpect(jsonPath("$.items[0].nextStatuses[0]").value("PICKED_UP"))
                 .andExpect(jsonPath("$.items[0].task.type").value("PICKUP"))
                 .andExpect(jsonPath("$.items[0].task.outcome").value("PENDING"))
-                .andExpect(jsonPath("$.items[0].task.branch").value("COLOMBO"))                .andExpect(jsonPath("$.items[1].parcelId").value(laterPickup.id().toString()))
+                .andExpect(jsonPath("$.items[0].task.branch").value("COLOMBO"))
+                .andExpect(jsonPath("$.items[0].completed").value(false))
+                .andExpect(jsonPath("$.items[0].canMarkUnableToCollect").value(true))
+                // a pickup shows the sender, never the recipient
+                .andExpect(jsonPath("$.items[0].pickup.name").value("Lanka Crafts"))
+                .andExpect(jsonPath("$.items[0].recipient").isEmpty())
+                .andExpect(jsonPath("$.items[0].to.city").value("Kandy"))
+                .andExpect(jsonPath("$.items[1].parcelId").value(laterPickup.id().toString()))
                 .andExpect(jsonPath("$.items[2].parcelId").value(failedLater.id().toString()))
                 .andExpect(jsonPath("$.items[2].stop").value("DELIVERY"))
                 .andExpect(jsonPath("$.items[2].nextStatuses[0]").value("AT_BRANCH"))
+                // failed is still active: it must be returned to the branch first
+                .andExpect(jsonPath("$.items[2].completed").value(false))
                 .andExpect(jsonPath("$.items[3].parcelId").value(onTheWay.id().toString()))
                 .andExpect(jsonPath("$.items[3].stop").value("DELIVERY"))
                 .andExpect(jsonPath("$.items[3].nextStatuses[0]").value("DELIVERED"))
                 .andExpect(jsonPath("$.items[3].nextStatuses[1]").value("FAILED"))
+                .andExpect(jsonPath("$.items[3].canMarkUnableToCollect").value(false))
+                // a delivery shows the recipient, never the sender
+                .andExpect(jsonPath("$.items[3].recipient.name").value("Nimal Perera"))
+                .andExpect(jsonPath("$.items[3].pickup").isEmpty())
                 .andExpect(jsonPath("$.items[4].parcelId").value(deliveredEarlier.id().toString()))
                 .andExpect(jsonPath("$.items[4].nextStatuses").isEmpty())
+                .andExpect(jsonPath("$.items[4].completed").value(true))
+                .andExpect(jsonPath("$.items[4].completedAt").isNotEmpty())
+                // completed: no contact any more
+                .andExpect(jsonPath("$.items[4].recipient").isEmpty())
+                .andExpect(jsonPath("$.items[4].pickup").isEmpty())
                 .andExpect(jsonPath("$.items[0].customerId").doesNotExist())
                 .andExpect(jsonPath("$.items[0].merchantId").doesNotExist())
                 .andExpect(jsonPath("$.items[0].merchantOrderRef").doesNotExist())

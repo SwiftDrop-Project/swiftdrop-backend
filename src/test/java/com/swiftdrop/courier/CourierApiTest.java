@@ -1,6 +1,7 @@
 package com.swiftdrop.courier;
 
 import com.swiftdrop.IntegrationTest;
+import com.swiftdrop.delivery.ChangeStatusCommand;
 import com.swiftdrop.delivery.DeliveryApi;
 import com.swiftdrop.delivery.DeliveryContact;
 import com.swiftdrop.delivery.DeliverySnapshot;
@@ -17,6 +18,9 @@ import com.swiftdrop.identity.IdentityApi;
 import com.swiftdrop.identity.Role;
 import com.swiftdrop.identity.UserStatus;
 import com.swiftdrop.identity.UserSummary;
+import com.swiftdrop.shared.error.BusinessRuleException;
+import com.swiftdrop.shared.error.ErrorCode;
+import com.swiftdrop.shared.error.NotFoundException;
 import com.swiftdrop.shared.reference.District;
 import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,6 +32,7 @@ import org.springframework.test.web.servlet.ResultActions;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -44,9 +49,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * Base for the courier API tests: delivery and dispatch are Mockito mocks, so these tests check only the courier
- * module: roles, ownership, request rules and mapping. Dispatch is a small in-memory stand-in: {@link #given} puts the
- * parcel in a one-parcel task of its courier, at the step its status implies. The real modules together are tested in
- * {@code CourierDispatchFlowTest}. All subclasses share one Spring context.
+ * module: roles, ownership, request rules and mapping. Dispatch is a small in-memory stand-in that keeps the
+ * {@code AssignmentApi} contract (404 for another courier's task, ASSIGNMENT_CLOSED, TASK_STEP_NOT_ALLOWED from
+ * {@code ItemOutcome.canMoveTo}, ASSIGNMENT_NOT_FINISHED, closedAt from {@code ItemOutcome.closes}): {@link #given} puts
+ * the parcel in a one-parcel task of its courier, at the step its status implies; {@link #givenTask} groups several
+ * parcels in one task, as a dispatcher may. The real modules together are tested in {@code CourierDispatchFlowTest} and
+ * the {@code RealWorkflowTest} subclasses. All subclasses share one Spring context.
  */
 abstract class CourierApiTest extends IntegrationTest {
 
@@ -84,10 +92,45 @@ abstract class CourierApiTest extends IntegrationTest {
                 Optional.ofNullable(tasks.get((UUID) call.getArgument(0)))
                         .filter(task -> task.courierId().equals(call.getArgument(1))));
         when(assignments.recordOutcome(any())).thenAnswer(call -> record(call.getArgument(0)));
-        when(assignments.complete(any(), any())).thenAnswer(call -> tasks.computeIfPresent(call.getArgument(0),
-                (id, task) -> withItems(task, AssignmentStatus.COMPLETED, task.items())));
+        when(assignments.complete(any(), any())).thenAnswer(call -> complete(call.getArgument(0),
+                call.getArgument(1)));
         when(delivery.findAllById(any())).thenAnswer(call -> ((Collection<?>) call.getArgument(0)).stream()
                 .map(parcels::get).filter(Objects::nonNull).toList());
+        // Delivery answers with the parcels as the test registered (or changed) them; history is empty unless a test
+        // stubs it for one parcel.
+        when(delivery.findById(any())).thenAnswer(call -> Optional.ofNullable(parcels.get((UUID) call.getArgument(0))));
+        when(delivery.history(any())).thenReturn(List.of());
+    }
+
+    /**
+     * Makes delivery apply every status change as the real one would: the parcel gets the new status, the branch for
+     * AT_BRANCH, the proof name for DELIVERED and the reason for FAILED, and later reads see it.
+     */
+    protected void deliveryAppliesChanges() {
+        when(delivery.changeStatus(any())).thenAnswer(call -> {
+            ChangeStatusCommand command = call.getArgument(0);
+            DeliverySnapshot moved = moved(parcels.get(command.parcelId()), command);
+            parcels.put(moved.id(), moved);
+            return moved;
+        });
+    }
+
+    /** The parcel as delivery has it now. */
+    protected DeliverySnapshot current(UUID parcelId) {
+        return parcels.get(parcelId);
+    }
+
+    @SuppressWarnings("deprecation")
+    private static DeliverySnapshot moved(DeliverySnapshot p, ChangeStatusCommand command) {
+        ParcelStatus status = command.toStatus();
+        return new DeliverySnapshot(p.id(), p.trackingNumber(), status, p.customerId(), p.merchantId(), p.pickup(),
+                p.recipient(), p.weightKg(), p.codAmount(), p.instructions(), p.assignedCourierId(), p.assignedAt(),
+                p.createdAt(), Instant.now(),
+                status == ParcelStatus.DELIVERED ? command.recipientName() : null, false,
+                status == ParcelStatus.FAILED ? command.failureReason() : null,
+                p.merchantOrderRef(), p.feeAmount(), p.currency(), p.version() + 1,
+                status == ParcelStatus.AT_BRANCH ? command.branch() : null,
+                p.size(), p.vehicle(), p.billableWeightKg(), p.rateCardVersion());
     }
 
     /** An ACTIVE courier (created through IdentityApi, as an admin would) and its login cookie. */
@@ -99,9 +142,16 @@ abstract class CourierApiTest extends IntegrationTest {
         return new Courier(user.id(), cookie);
     }
 
-    /** A parcel for {@code courierId}. The only place that builds a DeliverySnapshot. */
+    /** A parcel for {@code courierId}; an AT_BRANCH parcel is at the COLOMBO branch. */
     protected static DeliverySnapshot parcel(UUID courierId, ParcelStatus status, Instant assignedAt,
                                              Instant updatedAt) {
+        return parcel(courierId, status, assignedAt, updatedAt,
+                status == ParcelStatus.AT_BRANCH ? District.COLOMBO : null);
+    }
+
+    /** A parcel for {@code courierId} at {@code branch}. The only place that builds a DeliverySnapshot. */
+    protected static DeliverySnapshot parcel(UUID courierId, ParcelStatus status, Instant assignedAt,
+                                             Instant updatedAt, District branch) {
         return new DeliverySnapshot(UUID.randomUUID(),
                 String.format("SD2611%06d", TRACKING_SEQUENCE.getAndIncrement()), status, null, UUID.randomUUID(),
                 new DeliveryContact("Lanka Crafts", "+94760000101", "12 High Level Road", "Nugegoda", District.COLOMBO),
@@ -110,8 +160,7 @@ abstract class CourierApiTest extends IntegrationTest {
                 assignedAt.minus(1, ChronoUnit.HOURS), updatedAt,
                 status == ParcelStatus.DELIVERED ? "Nimal Perera" : null, false,
                 status == ParcelStatus.FAILED ? FailureReason.RECIPIENT_UNAVAILABLE : null,
-                "ORDER-1", new BigDecimal("450.00"), "LKR", 3,
-                status == ParcelStatus.AT_BRANCH ? District.COLOMBO : null);
+                "ORDER-1", new BigDecimal("450.00"), "LKR", 3, branch);
     }
 
     protected static DeliverySnapshot parcel(UUID courierId, ParcelStatus status) {
@@ -126,8 +175,6 @@ abstract class CourierApiTest extends IntegrationTest {
      * parcel's {@code assignedAt}.
      */
     protected DeliverySnapshot given(DeliverySnapshot parcel) {
-        when(delivery.findById(parcel.id())).thenReturn(Optional.of(parcel));
-        when(delivery.history(parcel.id())).thenReturn(List.of());
         parcels.put(parcel.id(), parcel);
         AssignmentType type = switch (parcel.status()) {
             case CREATED, PICKED_UP -> AssignmentType.PICKUP;
@@ -156,11 +203,61 @@ abstract class CourierApiTest extends IntegrationTest {
         return parcel;
     }
 
+    /** One parcel of a {@link #givenTask} and the outcome it has reached in that task. */
+    protected record Step(DeliverySnapshot parcel, ItemOutcome outcome) {
+    }
+
+    protected static Step step(DeliverySnapshot parcel, ItemOutcome outcome) {
+        return new Step(parcel, outcome);
+    }
+
+    /**
+     * A task of {@code courierId} grouping several parcels, as a dispatcher creates it: a pickup to COLOMBO, a
+     * delivery or transfer from COLOMBO (a transfer goes to KANDY). ASSIGNED while every parcel is PENDING, else
+     * IN_PROGRESS. Delivery returns each parcel with an empty history.
+     */
+    protected AssignmentView givenTask(UUID courierId, AssignmentType type, Step... steps) {
+        UUID taskId = UUID.randomUUID();
+        Instant now = Instant.now();
+        List<AssignmentItemView> items = new ArrayList<>();
+        for (int i = 0; i < steps.length; i++) {
+            DeliverySnapshot parcel = steps[i].parcel();
+            parcels.put(parcel.id(), parcel);
+            ItemOutcome outcome = steps[i].outcome();
+            Instant at = now.minus(steps.length - i, ChronoUnit.MINUTES);
+            items.add(new AssignmentItemView(taskId, parcel.id(), i + 1, outcome, null, null, null, null, null, at,
+                    outcome.closes(type) ? at : null));
+        }
+        boolean started = items.stream().anyMatch(item -> item.outcome() != ItemOutcome.PENDING);
+        AssignmentView task = new AssignmentView(taskId, courierId, type,
+                started ? AssignmentStatus.IN_PROGRESS : AssignmentStatus.ASSIGNED,
+                type == AssignmentType.PICKUP ? null : District.COLOMBO,
+                switch (type) {
+                    case PICKUP -> District.COLOMBO;
+                    case TRANSFER -> District.KANDY;
+                    case DELIVERY -> null;
+                },
+                null, null, now.minus(1, ChronoUnit.HOURS), started ? now.minus(1, ChronoUnit.HOURS) : null,
+                null, null, items, 1);
+        tasks.put(taskId, task);
+        return task;
+    }
+
+    /** Puts this task in the stand-in as it is (e.g. CANCELLED). */
+    protected void replaceTask(AssignmentView task) {
+        tasks.put(task.id(), task);
+    }
+
     /** The stand-in's current task that holds this parcel. */
     protected AssignmentView taskOf(UUID parcelId) {
         return tasks.values().stream()
                 .filter(task -> task.items().stream().anyMatch(item -> item.parcelId().equals(parcelId)))
                 .findFirst().orElseThrow();
+    }
+
+    /** The stand-in's current task. */
+    protected AssignmentView task(UUID taskId) {
+        return tasks.get(taskId);
     }
 
     private static AssignmentItemView item(UUID taskId, UUID parcelId, AssignmentType type, ItemOutcome outcome,
@@ -169,13 +266,48 @@ abstract class CourierApiTest extends IntegrationTest {
                 outcome.closes(type) ? at : null);
     }
 
+    /** As {@code AssignmentApi.recordOutcome} promises: 404, ASSIGNMENT_CLOSED, TASK_STEP_NOT_ALLOWED, closedAt. */
     private AssignmentView record(RecordOutcomeCommand command) {
-        return tasks.computeIfPresent(command.assignmentId(), (id, task) -> withItems(task,
-                AssignmentStatus.IN_PROGRESS, task.items().stream()
-                        .map(item -> item.parcelId().equals(command.parcelId())
-                                ? item(id, item.parcelId(), task.type(), command.outcome(), Instant.now())
-                                : item)
-                        .toList()));
+        AssignmentView task = tasks.get(command.assignmentId());
+        if (task == null || !task.courierId().equals(command.courierId())) {
+            throw new NotFoundException(ErrorCode.NOT_FOUND);
+        }
+        if (task.status().isClosed()) {
+            throw new BusinessRuleException(ErrorCode.ASSIGNMENT_CLOSED);
+        }
+        AssignmentItemView current = task.items().stream()
+                .filter(item -> item.parcelId().equals(command.parcelId()))
+                .findFirst()
+                .orElseThrow(() -> new NotFoundException(ErrorCode.NOT_FOUND));
+        if (!current.outcome().canMoveTo(task.type(), command.outcome())) {
+            throw new BusinessRuleException(ErrorCode.TASK_STEP_NOT_ALLOWED);
+        }
+        Instant now = Instant.now();
+        AssignmentItemView changed = new AssignmentItemView(task.id(), current.parcelId(), current.sequence(),
+                command.outcome(), command.problem(), command.failureReason(), command.note(), command.receivedBy(),
+                command.recipientName(), now, command.outcome().closes(task.type()) ? now : null);
+        AssignmentView updated = withItems(task, AssignmentStatus.IN_PROGRESS, task.items().stream()
+                .map(item -> item.parcelId().equals(command.parcelId()) ? changed : item)
+                .toList());
+        tasks.put(task.id(), updated);
+        return updated;
+    }
+
+    /** As {@code AssignmentApi.complete} promises: ASSIGNMENT_CLOSED, ASSIGNMENT_NOT_FINISHED. */
+    private AssignmentView complete(UUID taskId, UUID courierId) {
+        AssignmentView task = tasks.get(taskId);
+        if (task == null || !task.courierId().equals(courierId)) {
+            throw new NotFoundException(ErrorCode.NOT_FOUND);
+        }
+        if (task.status().isClosed()) {
+            throw new BusinessRuleException(ErrorCode.ASSIGNMENT_CLOSED);
+        }
+        if (task.items().stream().anyMatch(item -> !item.isClosed())) {
+            throw new BusinessRuleException(ErrorCode.ASSIGNMENT_NOT_FINISHED);
+        }
+        AssignmentView completed = withItems(task, AssignmentStatus.COMPLETED, task.items());
+        tasks.put(taskId, completed);
+        return completed;
     }
 
     private static AssignmentView withItems(AssignmentView task, AssignmentStatus status,
@@ -187,6 +319,13 @@ abstract class CourierApiTest extends IntegrationTest {
 
     protected ResultActions postStatus(UUID parcelId, Map<String, ?> body, Cookie cookie) throws Exception {
         return mvc.perform(post(BASE + "/{id}/status", parcelId)
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(json.writeValueAsString(body))
+                .cookie(cookie));
+    }
+
+    protected ResultActions postUnableToCollect(UUID parcelId, Map<String, ?> body, Cookie cookie) throws Exception {
+        return mvc.perform(post(BASE + "/{id}/unable-to-collect", parcelId)
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(json.writeValueAsString(body))
                 .cookie(cookie));
