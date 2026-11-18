@@ -6,6 +6,7 @@ import com.swiftdrop.dispatch.AssignmentStatus;
 import com.swiftdrop.dispatch.AssignmentType;
 import com.swiftdrop.dispatch.AssignmentView;
 import com.swiftdrop.dispatch.ItemOutcome;
+import com.swiftdrop.dispatch.TaskProblem;
 import com.swiftdrop.shared.reference.District;
 import java.time.Instant;
 import java.util.List;
@@ -23,35 +24,63 @@ import java.util.UUID;
  *   <li>DELIVERY: AT_BRANCH → OUT_FOR_DELIVERY (loaded) → DELIVERED, or FAILED → AT_BRANCH back at the origin
  *   branch (returned).</li>
  * </ul>
+ * A parcel that was never taken ("Unable to Collect") records NOT_COLLECTED (PICKUP) or NOT_LOADED (TRANSFER,
+ * DELIVERY) and keeps its parcel status.
  *
- * @param closed     the courier has nothing more to do with this parcel in this task (the item is closed, or the
- *                   task was completed or cancelled)
- * @param assignedAt when the dispatcher created the task
- * @param updatedAt  when the item last changed
+ * <p>The parcel is <em>completed</em> for the courier when its dispatch item is closed ({@link ItemOutcome#closes}):
+ * handed over or not collected (PICKUP); delivered, returned or not taken out (DELIVERY). COLLECTED and FAILED stay
+ * open until the handover or the return. This is decided by dispatch, never here.
+ *
+ * @param taskStatus  the status of the whole task (assignment)
+ * @param completed   the courier is done with this parcel in this task (the item is closed)
+ * @param assignedAt  when the dispatcher created the task
+ * @param updatedAt   when the item last changed
+ * @param completedAt when courier work completed the item; null for an open item or one closed only by cancellation
+ * @param problem     why the parcel couldn't be collected (NOT_COLLECTED, NOT_LOADED)
+ * @param receivedBy  who took the parcel at the branch (handover or return)
  */
 public record CourierTask(
         UUID assignmentId,
+        UUID parcelId,
         AssignmentType type,
+        AssignmentStatus taskStatus,
         ItemOutcome outcome,
-        boolean closed,
+        boolean completed,
         District originBranch,
         District destinationBranch,
         Instant assignedAt,
         int sequence,
-        Instant updatedAt) {
+        Instant updatedAt,
+        Instant completedAt,
+        TaskProblem problem,
+        String receivedBy) {
 
     static CourierTask of(AssignmentView task, AssignmentItemView item) {
-        boolean taskClosed = task.status() == AssignmentStatus.COMPLETED || task.status() == AssignmentStatus.CANCELLED;
-        return new CourierTask(task.id(), task.type(), item.outcome(), item.isClosed() || taskClosed,
-                task.originBranch(), task.destinationBranch(), task.assignedAt(), item.sequence(), item.updatedAt());
+        boolean completed = item.outcome().closes(task.type());
+        return new CourierTask(task.id(), item.parcelId(), task.type(), task.status(), item.outcome(), completed,
+                task.originBranch(), task.destinationBranch(), task.assignedAt(), item.sequence(), item.updatedAt(),
+                completed ? item.closedAt() : null, item.problem(), item.receivedBy());
     }
 
-    /** The statuses the courier may move the parcel to now, in life-cycle order; none once the step is closed. */
-    public List<ParcelStatus> nextStatuses(ParcelStatus current) {
-        if (closed || current == null) {
+    /** The task was completed or cancelled. */
+    public boolean taskClosed() {
+        return taskStatus.isClosed();
+    }
+
+    /** Nothing more to do with this parcel in this task: it is completed, or the task was completed or cancelled. */
+    public boolean closed() {
+        return completed || taskClosed();
+    }
+
+    /**
+     * The statuses the task's next step moves the parcel to, whatever the parcel's own status; none once the step is
+     * closed.
+     */
+    List<ParcelStatus> stepStatuses() {
+        if (closed()) {
             return List.of();
         }
-        List<ParcelStatus> steps = switch (type) {
+        return switch (type) {
             case PICKUP -> switch (outcome) {
                 case PENDING -> List.of(ParcelStatus.PICKED_UP);
                 case COLLECTED -> List.of(ParcelStatus.AT_BRANCH);
@@ -69,8 +98,39 @@ public record CourierTask(
                 default -> List.<ParcelStatus>of();
             };
         };
-        // The parcel's own status must allow it too (it may have been moved by someone else).
-        return steps.stream().filter(current.next()::contains).toList();
+    }
+
+    /**
+     * The statuses the courier may move the parcel to now, in life-cycle order: the task's next step, if the parcel's
+     * own status allows it (it may have been moved by someone else) and, for loading, the parcel is at the task's
+     * origin branch.
+     */
+    public List<ParcelStatus> nextStatuses(ParcelStatus current, District currentBranch) {
+        if (current == null) {
+            return List.of();
+        }
+        return stepStatuses().stream()
+                .filter(current.next()::contains)
+                .filter(target -> atTheRightBranch(target, currentBranch))
+                .toList();
+    }
+
+    /** Loading (IN_TRANSIT, OUT_FOR_DELIVERY) needs the parcel at the task's origin branch; nothing else does. */
+    boolean atTheRightBranch(ParcelStatus target, District currentBranch) {
+        if (target != ParcelStatus.IN_TRANSIT && target != ParcelStatus.OUT_FOR_DELIVERY) {
+            return true;
+        }
+        return originBranch != null && originBranch == currentBranch;
+    }
+
+    /** The outcome "Unable to Collect" records: NOT_COLLECTED for a pickup, NOT_LOADED for a transfer or delivery. */
+    ItemOutcome unableToCollectOutcome() {
+        return type == AssignmentType.PICKUP ? ItemOutcome.NOT_COLLECTED : ItemOutcome.NOT_LOADED;
+    }
+
+    /** "Unable to Collect" is possible now: the step is open and dispatch allows that outcome next. */
+    public boolean canMarkUnableToCollect() {
+        return !closed() && outcome.canMoveTo(type, unableToCollectOutcome());
     }
 
     /** The task outcome a change to {@code target} records. */

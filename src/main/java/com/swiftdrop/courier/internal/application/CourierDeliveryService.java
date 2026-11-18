@@ -4,6 +4,7 @@ import com.swiftdrop.courier.internal.application.CourierViews.CourierParcel;
 import com.swiftdrop.courier.internal.application.CourierViews.CourierToday;
 import com.swiftdrop.courier.internal.application.CourierViews.ParcelDetail;
 import com.swiftdrop.courier.internal.dto.StatusChangeRequest;
+import com.swiftdrop.courier.internal.dto.UnableToCollectRequest;
 import com.swiftdrop.delivery.ChangeStatusCommand;
 import com.swiftdrop.delivery.DeliveryApi;
 import com.swiftdrop.delivery.DeliverySnapshot;
@@ -15,6 +16,7 @@ import com.swiftdrop.dispatch.AssignmentStatus;
 import com.swiftdrop.dispatch.AssignmentType;
 import com.swiftdrop.dispatch.AssignmentView;
 import com.swiftdrop.dispatch.RecordOutcomeCommand;
+import com.swiftdrop.dispatch.TaskProblem;
 import com.swiftdrop.shared.error.ApiException;
 import com.swiftdrop.shared.error.BusinessRuleException;
 import com.swiftdrop.shared.error.ErrorCode;
@@ -47,12 +49,16 @@ import java.util.stream.Collectors;
 
 /**
  * The courier's parcels: the ones in the dispatch tasks (assignments) a dispatcher gave them, read through
- * {@link AssignmentApi}, with each parcel's details and status from {@link DeliveryApi}.
+ * {@link AssignmentApi}, with each parcel's details and status from {@link DeliveryApi}. The dispatcher may group
+ * several parcels in one task; the courier works each parcel on its own.
  *
  * <p>Ownership: a courier only sees a parcel that is (or was) in one of their own tasks; anything else is
- * {@code 404 NOT_FOUND}. A status change must be the next step of the task (pickup, transfer or delivery, see
- * {@link CourierTask}); it changes the parcel through delivery and records the task outcome in dispatch in one
- * transaction, and completes the task once every parcel in it is done.
+ * {@code 404 NOT_FOUND}, so ids can't be probed.
+ *
+ * <p>Writes check, in order: the request (400), ownership (404), the task is open (409 ASSIGNMENT_CLOSED), the task
+ * allows the step (409 TASK_STEP_NOT_ALLOWED), the parcel can make the move (409 INVALID_STATUS_TRANSITION). Then the
+ * parcel status (delivery) and the task outcome (dispatch) are written in one transaction, so both or neither are
+ * kept, and the task is completed once its last parcel is closed ({@link #completeIfFinished}).
  *
  * <p>{@code DeliveryApi} comes through an {@link ObjectProvider}, so the endpoints answer
  * {@code 503 SERVICE_UNAVAILABLE} when nothing implements it.
@@ -77,6 +83,12 @@ public class CourierDeliveryService {
                     : compareNullsLast(a.task().assignedAt(), b.task().assignedAt()))
             .thenComparingInt(parcel -> parcel.task().sequence());
 
+    /** Completed parcels, newest completion first; ties in a stable order. */
+    private static final Comparator<CourierTask> HISTORY_ORDER = Comparator
+            .comparing(CourierTask::completedAt, Comparator.nullsLast(Comparator.<Instant>reverseOrder()))
+            .thenComparing(CourierTask::assignmentId)
+            .thenComparingInt(CourierTask::sequence);
+
     private final ObjectProvider<DeliveryApi> deliveries;
     private final AssignmentApi assignments;
     private final Clock clock;
@@ -100,13 +112,15 @@ public class CourierDeliveryService {
         }
     }
 
-    /** The parcels in the courier's open tasks, plus the steps they finished today (Sri Lankan time). */
+    // ---- Reads ----
+
+    /** The parcels in the courier's open tasks, plus the parcels they completed today (Sri Lankan time). */
     public CourierToday today(UUID courierId) {
         DeliveryApi delivery = delivery();
         Instant startOfToday = CourierDay.startOfToday(clock);
         Map<UUID, CourierTask> steps = new LinkedHashMap<>();
         for (AssignmentView task : assignments.findOpenForCourier(courierId, startOfToday)) {
-            if (task.status() == AssignmentStatus.CANCELLED) {
+            if (!courierId.equals(task.courierId()) || task.status() == AssignmentStatus.CANCELLED) {
                 continue;
             }
             for (AssignmentItemView item : task.items()) {
@@ -128,8 +142,14 @@ public class CourierDeliveryService {
     }
 
     /**
-     * Parcels the courier delivered or failed to deliver, most recent first. {@code trackingNumber} is optional;
-     * spaces and case are ignored.
+     * The parcels the courier completed (pickups and deliveries: handed over, not collected, delivered, returned, not
+     * taken out), newest completion first. A parcel counts as soon as its own item is closed, even while the rest of
+     * its task is still in progress. {@code trackingNumber} is optional; spaces and case are ignored, and an unknown
+     * number gives an empty page.
+     *
+     * <p>Dispatch has no query for a courier's closed items across tasks, so this reads all the courier's tasks
+     * ({@code findOpenForCourier} with the earliest possible close time: every open task and every closed one) and
+     * pages the closed items here. With a tracking number it reads only that parcel's items.
      */
     public Page<CourierParcel> history(UUID courierId, int page, int size, String trackingNumber) {
         if (page < 0) {
@@ -140,23 +160,28 @@ public class CourierDeliveryService {
         }
         DeliveryApi delivery = delivery();
         PageRequest request = PageRequest.of(page, size);
-        UUID parcelId = null;
         String number = normalizeTrackingNumber(trackingNumber);
+        List<CourierTask> completed;
         if (number != null) {
             Optional<DeliverySnapshot> found = delivery.findByTrackingNumber(number);
             if (found.isEmpty()) {
                 return Page.empty(request);
             }
-            parcelId = found.get().id();
+            completed = completedSteps(courierId, found.get().id());
+        } else {
+            completed = completedSteps(courierId, assignments.findOpenForCourier(courierId, Instant.EPOCH));
         }
-        Page<AssignmentItemView> items = assignments.findFinishedDeliveriesForCourier(courierId, parcelId, request);
+
+        int from = (int) Math.min(request.getOffset(), completed.size());
+        int to = Math.min(from + size, completed.size());
+        List<CourierTask> pageSteps = completed.subList(from, to);
         Map<UUID, DeliverySnapshot> parcels = byId(delivery.findAllById(
-                items.getContent().stream().map(AssignmentItemView::parcelId).collect(Collectors.toSet())));
-        List<CourierParcel> list = items.getContent().stream()
-                .filter(item -> parcels.containsKey(item.parcelId()))
-                .map(item -> new CourierParcel(parcels.get(item.parcelId()), finishedStep(item)))
+                pageSteps.stream().map(CourierTask::parcelId).collect(Collectors.toSet())));
+        List<CourierParcel> list = pageSteps.stream()
+                .filter(step -> parcels.containsKey(step.parcelId()))
+                .map(step -> new CourierParcel(parcels.get(step.parcelId()), step))
                 .toList();
-        return new PageImpl<>(list, request, items.getTotalElements());
+        return new PageImpl<>(list, request, completed.size());
     }
 
     public ParcelDetail detail(UUID courierId, UUID parcelId) {
@@ -167,10 +192,12 @@ public class CourierDeliveryService {
         return new ParcelDetail(parcel, delivery.history(parcelId), task);
     }
 
+    // ---- Writes ----
+
     /**
-     * Moves the courier's parcel to the requested status. Order of checks: request rules (400), ownership (404), the
-     * task's next step and the parcel's current status (409); then delivery applies it and dispatch records the
-     * task outcome, in one transaction.
+     * Moves the courier's parcel to the requested status: collected, out for delivery, delivered, failed, or handed
+     * over / returned at the branch (AT_BRANCH, with who received it). Delivery applies it and dispatch records the
+     * task outcome, in one transaction; the task completes when this was its last open parcel.
      */
     @Transactional
     public ParcelDetail changeStatus(UUID courierId, UUID parcelId, StatusChangeRequest request) {
@@ -180,7 +207,11 @@ public class CourierDeliveryService {
         DeliverySnapshot parcel = delivery.findById(parcelId)
                 .orElseThrow(() -> new NotFoundException(ErrorCode.NOT_FOUND));
         ParcelStatus target = request.status();
-        if (!task.nextStatuses(parcel.status()).contains(target)) {
+        requireOpen(task);
+        if (!task.stepStatuses().contains(target)) {
+            throw new BusinessRuleException(ErrorCode.TASK_STEP_NOT_ALLOWED);
+        }
+        if (!parcel.status().canMoveTo(target) || !task.atTheRightBranch(target, parcel.currentBranch())) {
             throw new BusinessRuleException(ErrorCode.INVALID_STATUS_TRANSITION);
         }
         DeliverySnapshot updated;
@@ -192,13 +223,57 @@ public class CourierDeliveryService {
         }
         AssignmentView after = assignments.recordOutcome(new RecordOutcomeCommand(task.assignmentId(), parcelId,
                 courierId, task.outcomeFor(target), null,
-                target == ParcelStatus.FAILED ? change.failureReason() : null, change.note(), null,
+                target == ParcelStatus.FAILED ? change.failureReason() : null, change.note(),
+                target == ParcelStatus.AT_BRANCH ? change.receivedBy() : null,
                 target == ParcelStatus.DELIVERED ? change.recipientName() : null));
-        if (after != null && after.items().stream().allMatch(AssignmentItemView::isClosed)) {
-            after = assignments.complete(after.id(), courierId);
-        }
+        after = completeIfFinished(after, courierId);
         return new ParcelDetail(updated, delivery.history(parcelId), stepAfter(after, parcelId, task));
     }
+
+    /**
+     * "Unable to Collect": the courier couldn't take the parcel (sender away, parcel not ready, ...). Records
+     * NOT_COLLECTED for a pickup or NOT_LOADED for a transfer or delivery, with the reason. The parcel status doesn't
+     * change (the parcel never moved), the parcel is completed for the courier, and the task completes when this was
+     * its last open parcel.
+     */
+    @Transactional
+    public ParcelDetail unableToCollect(UUID courierId, UUID parcelId, UnableToCollectRequest request) {
+        DeliveryApi delivery = delivery();
+        TaskProblem problem = request.problem();
+        String note = trimToNull(request.note());
+        if (problem == TaskProblem.OTHER && (note == null || note.length() < 3)) {
+            throw new FieldValidationException("note", "Describe what went wrong.");
+        }
+        CourierTask task = step(courierId, parcelId);
+        DeliverySnapshot parcel = delivery.findById(parcelId)
+                .orElseThrow(() -> new NotFoundException(ErrorCode.NOT_FOUND));
+        requireOpen(task);
+        if (!task.canMarkUnableToCollect()) {
+            throw new BusinessRuleException(ErrorCode.TASK_STEP_NOT_ALLOWED);
+        }
+        AssignmentView after = assignments.recordOutcome(new RecordOutcomeCommand(task.assignmentId(), parcelId,
+                courierId, task.unableToCollectOutcome(), problem, null, note, null, null));
+        after = completeIfFinished(after, courierId);
+        return new ParcelDetail(parcel, delivery.history(parcelId), stepAfter(after, parcelId, task));
+    }
+
+    /**
+     * Completes the task once every parcel in it is closed (handed over, delivered, returned, or never taken). Whether
+     * an item is closed, and whether a task may be completed, are dispatch's rules ({@code ItemOutcome.closes},
+     * {@code AssignmentApi.complete}); this only asks dispatch to complete it at that moment, in the same
+     * transaction as the courier's step.
+     */
+    private AssignmentView completeIfFinished(AssignmentView task, UUID courierId) {
+        if (task == null || task.status().isClosed()) {
+            return task;
+        }
+        if (task.items().stream().allMatch(AssignmentItemView::isClosed)) {
+            return assignments.complete(task.id(), courierId);
+        }
+        return task;
+    }
+
+    // ---- Steps ----
 
     /**
      * The courier's step for this parcel: the open one if the parcel is in one of their open tasks, else the most
@@ -207,11 +282,11 @@ public class CourierDeliveryService {
     private CourierTask step(UUID courierId, UUID parcelId) {
         CourierTask latest = null;
         for (AssignmentItemView item : assignments.findItemsForCourierAndParcel(courierId, parcelId)) {
-            Optional<AssignmentView> task = assignments.findByIdForCourier(item.assignmentId(), courierId);
+            Optional<AssignmentView> task = own(courierId, item.assignmentId());
             if (task.isEmpty()) {
                 continue;
             }
-            CourierTask step = CourierTask.of(task.get(), item);
+            CourierTask step = CourierTask.of(task.get(), item(task.get(), item));
             if (!step.closed()) {
                 return step;
             }
@@ -225,6 +300,40 @@ public class CourierDeliveryService {
         return latest;
     }
 
+    /** The courier's completed steps for one parcel (any task, open or closed). */
+    private List<CourierTask> completedSteps(UUID courierId, UUID parcelId) {
+        return assignments.findItemsForCourierAndParcel(courierId, parcelId).stream()
+                .flatMap(item -> own(courierId, item.assignmentId()).stream()
+                        .map(task -> CourierTask.of(task, item(task, item))))
+                .filter(CourierTask::completed)
+                .sorted(HISTORY_ORDER)
+                .toList();
+    }
+
+    /** The courier's completed steps in these tasks: every closed item, whether its task is open or closed. */
+    private static List<CourierTask> completedSteps(UUID courierId, List<AssignmentView> tasks) {
+        return tasks.stream()
+                .filter(task -> courierId.equals(task.courierId()))
+                .flatMap(task -> task.items().stream()
+                        .filter(item -> item.outcome().closes(task.type()))
+                        .map(item -> CourierTask.of(task, item)))
+                .sorted(HISTORY_ORDER)
+                .toList();
+    }
+
+    private Optional<AssignmentView> own(UUID courierId, UUID assignmentId) {
+        return assignments.findByIdForCourier(assignmentId, courierId)
+                .filter(task -> courierId.equals(task.courierId()));
+    }
+
+    /** The item as the task has it now (the task is read after the item list, so it is the newer of the two). */
+    private static AssignmentItemView item(AssignmentView task, AssignmentItemView item) {
+        return task.items().stream()
+                .filter(candidate -> candidate.parcelId().equals(item.parcelId()))
+                .findFirst()
+                .orElse(item);
+    }
+
     private static CourierTask stepAfter(AssignmentView task, UUID parcelId, CourierTask before) {
         if (task == null) {
             return before;
@@ -236,11 +345,13 @@ public class CourierDeliveryService {
                 .orElse(before);
     }
 
-    /** A history row is read-only, so its step is shown as closed. */
-    private static CourierTask finishedStep(AssignmentItemView item) {
-        return new CourierTask(item.assignmentId(), AssignmentType.DELIVERY, item.outcome(), true, null, null, null,
-                item.sequence(), item.updatedAt());
+    private static void requireOpen(CourierTask task) {
+        if (task.taskClosed()) {
+            throw new BusinessRuleException(ErrorCode.ASSIGNMENT_CLOSED);
+        }
     }
+
+    // ---- Helpers ----
 
     private static Map<UUID, DeliverySnapshot> byId(List<DeliverySnapshot> parcels) {
         return parcels.stream().collect(Collectors.toMap(DeliverySnapshot::id, Function.identity(), (a, b) -> a));
@@ -259,6 +370,7 @@ public class CourierDeliveryService {
         ParcelStatus target = request.status();
         String note = trimToNull(request.note());
         String recipientName = trimToNull(request.recipientName());
+        String receivedBy = trimToNull(request.receivedBy());
         FailureReason reason = request.failureReason();
 
         if (recipientName != null && target != ParcelStatus.DELIVERED) {
@@ -267,19 +379,26 @@ public class CourierDeliveryService {
         if (reason != null && target != ParcelStatus.FAILED) {
             throw new FieldValidationException("failureReason", "Only for failed deliveries.");
         }
+        if (receivedBy != null && target != ParcelStatus.AT_BRANCH) {
+            throw new FieldValidationException("receivedBy", "Only when you hand the parcel over at a branch.");
+        }
         if (target == ParcelStatus.DELIVERED && (recipientName == null || recipientName.length() < 2)) {
             throw new FieldValidationException("recipientName", "Enter the name of the person who received the parcel.");
         }
         if (target == ParcelStatus.FAILED && reason == null) {
             throw new FieldValidationException("failureReason", "Select why the delivery failed.");
         }
+        if (target == ParcelStatus.AT_BRANCH && (receivedBy == null || receivedBy.length() < 2)) {
+            throw new FieldValidationException("receivedBy",
+                    "Enter the name of the person at the branch who received the parcel.");
+        }
         if (reason == FailureReason.OTHER && (note == null || note.length() < 3)) {
             throw new FieldValidationException("note", "Describe what went wrong.");
         }
-        return new ValidChange(note, reason, recipientName);
+        return new ValidChange(note, reason, recipientName, receivedBy);
     }
 
-    private record ValidChange(String note, FailureReason failureReason, String recipientName) {
+    private record ValidChange(String note, FailureReason failureReason, String recipientName, String receivedBy) {
     }
 
     static String normalizeTrackingNumber(String trackingNumber) {

@@ -1037,11 +1037,22 @@ Authenticated with either the `SD_TOKEN` cookie **or** an `X-Api-Key: <rawKey>` 
 
 ## Courier (role `COURIER` only)
 
-The logged-in courier's parcels (WP9): the parcels in the dispatch tasks a dispatcher gave them (see "Dispatch").
-No login → `401 UNAUTHENTICATED`; any other role (including `ADMIN`) → `403 FORBIDDEN`. A courier only sees parcels
-that were in one of their tasks: another courier's parcel or an unknown id → `404 NOT_FOUND`. "Today" is the current
-day in Sri Lankan time (Asia/Colombo). Each status change also records the task step (outcome) in dispatch, and the
-task completes when its last parcel is done.
+The logged-in courier's parcels (WP9): the parcels in the dispatch tasks a dispatcher gave them (see "Dispatch"). A
+dispatcher may group several parcels in one task; the courier sees and works **each parcel on its own**. No login →
+`401 UNAUTHENTICATED`; any other role (including `ADMIN`) → `403 FORBIDDEN`. A courier only sees parcels that were in
+one of their tasks: another courier's parcel or an unknown id → `404 NOT_FOUND`. "Today" is the current day in Sri
+Lankan time (Asia/Colombo).
+
+Each step changes the parcel (delivery) and records the task outcome (dispatch) in one transaction: both or neither
+are kept. A parcel is **completed** for the courier as soon as its own outcome closes it (dispatch's rule):
+
+| Task | Completed after | Still active |
+|---|---|---|
+| `PICKUP` | `HANDED_OVER` (handed over at the branch), `NOT_COLLECTED` (Unable to Collect) | `PENDING`, `COLLECTED` (must be handed over) |
+| `DELIVERY` | `DELIVERED`, `RETURNED` (failed and returned to the branch), `NOT_LOADED` (Unable to Collect) | `PENDING`, `LOADED` (out for delivery), `FAILED` (must be returned) |
+
+The **task** becomes `COMPLETED` by itself, in the same transaction, when its last parcel is completed. There is no
+"complete task" call.
 
 ### Courier delivery (response)
 ```json
@@ -1050,75 +1061,100 @@ task completes when its last parcel is done.
   "trackingNumber": "SD2611004817",
   "status": "OUT_FOR_DELIVERY",
   "stop": "DELIVERY",
-  "pickup": { "name": "Lanka Crafts", "phone": "+94712345678", "address": "12 High Level Road",
-              "city": "Nugegoda", "district": "COLOMBO" },
+  "pickup": null,
   "recipient": { "name": "Nimal Perera", "phone": "+94771234567", "address": "45 Peradeniya Road",
                  "city": "Kandy", "district": "KANDY" },
+  "from": { "city": "Nugegoda", "district": "COLOMBO" },
+  "to": { "city": "Kandy", "district": "KANDY" },
   "weightKg": 1.2,
   "codAmount": 2450.00,
   "instructions": "Call before you arrive.",
   "assignedAt": "2026-11-05T02:30:00Z",
   "updatedAt": "2026-11-05T05:10:00Z",
   "nextStatuses": ["DELIVERED", "FAILED"],
-  "task": { "assignmentId": "uuid", "type": "DELIVERY", "outcome": "LOADED", "branch": "COLOMBO" }
+  "canMarkUnableToCollect": false,
+  "completed": false,
+  "completedAt": null,
+  "task": { "assignmentId": "uuid", "type": "DELIVERY", "status": "IN_PROGRESS", "outcome": "LOADED",
+            "branch": "COLOMBO", "problem": null, "receivedBy": null }
 }
 ```
+- `status`: the parcel's own status (delivery). "Unable to Collect" doesn't change it.
 - `stop`: `PICKUP` for a pickup task, otherwise `DELIVERY` (`task.type` tells a transfer from a delivery).
+- `pickup` / `recipient` (privacy): only the contact the courier's step needs, and only while the parcel is still
+  theirs to work: the sender (`pickup`) in a pickup, the `recipient` in a delivery, nobody in a transfer. Both are
+  `null` once the parcel is completed or the task is closed. `from` / `to` (city and district) are always there.
 - `assignedAt`: when the dispatcher created the task.
 - `codAmount`: cash to collect in rupees; `null` when already paid. `instructions` may be `null`.
-- `task`: the courier's task step for this parcel. `outcome` is the dispatch item outcome; `branch` is where the
-  parcel is handed over (a pickup's or transfer's destination branch; a delivery's origin branch, for a return).
-- `nextStatuses`: what this courier may set now, from the task step and the parcel's status (empty once the step is
-  done):
+- `completed`: the courier is done with this parcel (table above), whatever the other parcels of its task are doing.
+  `completedAt`: when; `null` while it is active.
+- `canMarkUnableToCollect`: "Unable to Collect" is possible now (the parcel's step is `PENDING` in an open task).
+- `task`: the courier's task for this parcel. `status` is the whole task's status. `outcome` is the dispatch item
+  outcome. `branch` is where the parcel is handed over (a pickup's or transfer's destination branch; a delivery's
+  origin branch, for a return). `problem`: why it couldn't be collected (`NOT_COLLECTED`, `NOT_LOADED`).
+  `receivedBy`: who took it at the branch.
+- `nextStatuses`: the statuses this courier may set now, from the task step and the parcel's status (empty once the
+  parcel is completed or the task closed). Loading (`IN_TRANSIT`, `OUT_FOR_DELIVERY`) also needs the parcel at the
+  task's origin branch:
 
 | Task | Step (`outcome`) | Allowed next | Records |
 |---|---|---|---|
-| `PICKUP` | `PENDING` | `PICKED_UP` | `COLLECTED` |
+| `PICKUP` | `PENDING` | `PICKED_UP`, or Unable to Collect | `COLLECTED`, `NOT_COLLECTED` |
 | `PICKUP` | `COLLECTED` | `AT_BRANCH` (at `task.branch`) | `HANDED_OVER` |
-| `TRANSFER` | `PENDING` | `IN_TRANSIT` | `LOADED` |
+| `TRANSFER` | `PENDING` | `IN_TRANSIT`, or Unable to Collect | `LOADED`, `NOT_LOADED` |
 | `TRANSFER` | `LOADED` | `AT_BRANCH` (at `task.branch`) | `HANDED_OVER` |
-| `DELIVERY` | `PENDING` | `OUT_FOR_DELIVERY` | `LOADED` |
+| `DELIVERY` | `PENDING` | `OUT_FOR_DELIVERY`, or Unable to Collect | `LOADED`, `NOT_LOADED` |
 | `DELIVERY` | `LOADED` | `DELIVERED`, `FAILED` | `DELIVERED`, `FAILED` |
 | `DELIVERY` | `FAILED` | `AT_BRANCH` (back at `task.branch`) | `RETURNED` |
 
-Problems (`NOT_COLLECTED`, `NOT_LOADED`) have no parcel status, so they are not reported through this API.
+Couriers are given `PICKUP` and `DELIVERY` tasks; `TRANSFER` stays supported because dispatch still has it.
 
 `failureReason`: `RECIPIENT_UNAVAILABLE` | `WRONG_ADDRESS` | `RECIPIENT_REFUSED` | `ADDRESS_UNREACHABLE` |
 `PARCEL_DAMAGED` | `OTHER`
+
+`problem` (Unable to Collect): `SENDER_UNAVAILABLE` | `PARCEL_NOT_READY` | `PARCEL_MISSING` | `PARCEL_DAMAGED` |
+`ADDRESS_UNREACHABLE` | `OTHER`
 
 ### `GET /courier/deliveries/today`
 ```json
 { "date": "2026-11-05", "toDo": 5, "done": 2, "items": [ /* Courier delivery */ ] }
 ```
-The parcels in the courier's open tasks (whatever day they were assigned), plus the steps they finished today. A
-parcel in two of their tasks today shows once, with the open step. Order: open pickups (oldest `assignedAt` first),
-then the other open steps (oldest `assignedAt` first), then finished ones (newest first). `toDo` = not finished,
-`done` = finished today. Cancelled tasks are left out.
+The parcels in the courier's open tasks (whatever day they were assigned or planned for), plus the parcels they
+completed today. A parcel in two of their tasks today shows once, with the open step. Order: open pickups (oldest
+`assignedAt` first), then the other active parcels (oldest `assignedAt` first), then completed ones (newest first).
+`toDo` = active parcels, `done` = parcels completed today. Cancelled tasks are left out.
 - `200` · `401` · `403`
 
 ### `GET /courier/deliveries/history?page=0&size=20&trackingNumber=SD2611004817`
-Delivery steps this courier finished (`DELIVERED`, `FAILED`, `RETURNED`), newest first, as a page of Courier
-delivery (`nextStatuses` empty):
+The parcels this courier completed, pickups and deliveries (`HANDED_OVER`, `NOT_COLLECTED`, `DELIVERED`, `RETURNED`,
+`NOT_LOADED`), newest completion first, as a page of Courier delivery (`completed: true`, `nextStatuses` empty, no
+contacts). A parcel is listed as soon as it is completed, even while the rest of its task is still in progress;
+`COLLECTED` and `FAILED` parcels are not listed until they are handed over or returned. A parcel the courier worked in
+two tasks (e.g. a failed delivery, then a new delivery) has one entry per completed task.
 ```json
 { "content": [ /* Courier delivery */ ], "page": 0, "size": 20, "totalElements": 42, "totalPages": 3 }
 ```
-`page` from 0 (default 0); `size` 1-100 (default 20); `trackingNumber` optional, spaces and case ignored.
+`page` from 0 (default 0); `size` 1-100 (default 20); `trackingNumber` optional, spaces and case ignored; an unknown
+number gives an empty page.
 - `200` · `400` `VALIDATION_FAILED` (`fieldErrors.page` / `fieldErrors.size`) · `401` · `403`
 
 ### `GET /courier/deliveries/{parcelId}`
-All Courier delivery fields, plus:
+All Courier delivery fields (for the open step if the parcel is in one of the courier's open tasks, else the most
+recent one), plus:
 ```json
 {
   "history": [
-    { "status": "OUT_FOR_DELIVERY", "note": null, "failureReason": null, "occurredAt": "2026-11-05T05:10:00Z" },
-    { "status": "PICKED_UP", "note": "Collected from front desk", "failureReason": null, "occurredAt": "2026-11-05T03:00:00Z" }
+    { "status": "OUT_FOR_DELIVERY", "branch": null, "failureReason": null, "occurredAt": "2026-11-05T05:10:00Z" },
+    { "status": "AT_BRANCH", "branch": "COLOMBO", "failureReason": null, "occurredAt": "2026-11-05T03:00:00Z" }
   ],
   "proof": null,
   "failureReason": null
 }
 ```
-- `history`: newest first. `proof`: `{ "recipientName": "Nimal Perera", "hasPhoto": false }` once `DELIVERED`,
-  otherwise `null`. `failureReason`: only once `FAILED`.
+- `history`: newest first, without notes (they are written by other people for their own work). `branch` only for
+  `AT_BRANCH`, `failureReason` only for `FAILED`.
+- `proof`: `{ "recipientName": "Nimal Perera", "hasPhoto": false }` once `DELIVERED`, otherwise `null`.
+  `failureReason`: only once `FAILED`.
 - `200` · `400` (non-UUID id) · `401` · `403` · `404` `NOT_FOUND`
 
 ### `POST /courier/deliveries/{parcelId}/status`
@@ -1126,24 +1162,46 @@ All Courier delivery fields, plus:
 { "status": "PICKED_UP", "note": "Collected from front desk" }
 ```
 ```json
+{ "status": "AT_BRANCH", "receivedBy": "S. Silva", "note": "Counter 2" }
+```
+```json
+{ "status": "OUT_FOR_DELIVERY" }
+```
+```json
 { "status": "DELIVERED", "recipientName": "Nimal Perera", "note": "Left with the guard" }
 ```
 ```json
 { "status": "FAILED", "failureReason": "RECIPIENT_UNAVAILABLE", "note": "No answer, called twice" }
 ```
-```json
-{ "status": "AT_BRANCH", "note": "Handed to the Colombo hub" }
-```
-- `AT_BRANCH` goes to `task.branch`; the request has no branch field.
+- `AT_BRANCH` hands the parcel over at `task.branch` (pickup, transfer) or returns a failed delivery there; the request
+  has no branch field. It needs `receivedBy`: the person at the branch who took the parcel.
 - `DELIVERED` needs `recipientName`. `FAILED` needs `failureReason`; `OTHER` also needs a `note`.
-- `recipientName` only with `DELIVERED`; `failureReason` only with `FAILED`. `note` is optional otherwise.
-- `200`: the updated parcel (same shape as `GET /courier/deliveries/{parcelId}`). Customers, merchants and the
+- `recipientName` only with `DELIVERED`; `failureReason` only with `FAILED`; `receivedBy` only with `AT_BRANCH`.
+  `note` is optional otherwise.
+- `200`: the updated parcel (same shape as `GET /courier/deliveries/{parcelId}`), with `completed` and `task.status`
+  as they are after the step (`COMPLETED` when this was the task's last open parcel). Customers, merchants and the
   tracking page are told through the delivery module's `ParcelStatusChanged` event (`actorRole: COURIER`).
 - `400` `VALIDATION_FAILED` · `401` · `403` · `404` `NOT_FOUND`
-- `409` `INVALID_STATUS_TRANSITION`: not the task's next step, or not allowed from the parcel's current status (e.g.
-  a skipped step, the button pressed twice, or the dispatcher changed it). The frontend reloads the parcel. `409`
-  `ASSIGNMENT_CLOSED` when the dispatcher cancelled the task meanwhile.
-- Checked in this order: the request (400), the parcel is yours (404), the step is allowed (409).
+- `409` `ASSIGNMENT_CLOSED`: the task was completed or cancelled. `409` `TASK_STEP_NOT_ALLOWED`: not the task's next
+  step (a skipped step, the button pressed twice, a completed parcel). `409` `INVALID_STATUS_TRANSITION`: the parcel
+  can't make the move now (its status changed, or it isn't at the task's origin branch for loading). `409`
+  `ASSIGNMENT_CHANGED`: the dispatcher changed the task at the same moment. Nothing was saved; the frontend reloads the
+  parcel.
+- Checked in this order: the request (400), the parcel is yours (404), the task is open, the step is allowed, the
+  parcel can move (409).
+
+### `POST /courier/deliveries/{parcelId}/unable-to-collect`
+"Unable to Collect": the courier couldn't take the parcel (one action for both task types).
+```json
+{ "problem": "SENDER_UNAVAILABLE", "note": "Shop closed until 2 pm" }
+```
+- Records `NOT_COLLECTED` for a pickup, `NOT_LOADED` for a delivery (or transfer), with the `problem`. The parcel's
+  `status` doesn't change (it never moved); the parcel is completed for the courier and goes back to the dispatcher's
+  queue. Allowed only while `canMarkUnableToCollect` is true.
+- `200`: the parcel (same shape as `GET /courier/deliveries/{parcelId}`), `completed: true`.
+- `400` `VALIDATION_FAILED` · `401` · `403` · `404` `NOT_FOUND`
+- `409` `ASSIGNMENT_CLOSED` · `409` `TASK_STEP_NOT_ALLOWED` (already collected or out for delivery) · `409`
+  `ASSIGNMENT_CHANGED`
 
 Proof-of-delivery photos (upload and download) come in a later version.
 
@@ -1153,15 +1211,18 @@ Proof-of-delivery photos (upload and download) come in a later version.
 |---|---|---|
 | `status` | Required, one of the parcel statuses | Select the new status. |
 | `note` | Optional, max 500 chars | Keep the note under 500 characters. |
-| `note` (`failureReason: OTHER`) | Required, 3-500 chars | Describe what went wrong. |
+| `note` (`failureReason` or `problem` `OTHER`) | Required, 3-500 chars | Describe what went wrong. |
 | `recipientName` (`DELIVERED`) | Required, 2-100 chars | Enter the name of the person who received the parcel. |
 | `recipientName` with another status | Not allowed | Only for delivered parcels. |
 | `failureReason` (`FAILED`) | Required, one of the values above | Select why the delivery failed. |
 | `failureReason` with another status | Not allowed | Only for failed deliveries. |
+| `receivedBy` (`AT_BRANCH`) | Required, 2-100 chars | Enter the name of the person at the branch who received the parcel. |
+| `receivedBy` with another status | Not allowed | Only when you hand the parcel over at a branch. |
+| `problem` (Unable to Collect) | Required, one of the values above | Select why you couldn't take the parcel. |
 | `page` (history) | 0 or more | Use a page number of 0 or more. |
 | `size` (history) | 1-100 | Use a page size from 1 to 100. |
 
-An unknown `status` or `failureReason` value gives `400` with that field in `fieldErrors`.
+An unknown `status`, `failureReason` or `problem` value gives `400` with that field in `fieldErrors`.
 
 ## Dispatch (WP8, roles `DISPATCHER` and `ADMIN`)
 

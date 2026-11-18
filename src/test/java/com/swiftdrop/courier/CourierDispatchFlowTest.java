@@ -64,10 +64,14 @@ class CourierDispatchFlowTest extends IntegrationTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content[0].status").value("IN_PROGRESS"));
 
-        postJson(COURIER_BASE + "/" + parcelId + "/status", Map.of("status", "AT_BRANCH"), courier)
+        postJson(COURIER_BASE + "/" + parcelId + "/status", Map.of("status", "AT_BRANCH", "receivedBy", "S. Silva"),
+                courier)
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("AT_BRANCH"))
                 .andExpect(jsonPath("$.task.outcome").value("HANDED_OVER"))
+                .andExpect(jsonPath("$.task.receivedBy").value("S. Silva"))
+                .andExpect(jsonPath("$.task.status").value("COMPLETED"))
+                .andExpect(jsonPath("$.completed").value(true))
                 .andExpect(jsonPath("$.nextStatuses").isEmpty());
 
         mvc.perform(get("/api/v1/dispatch/assignments").param("courierId", courierId).cookie(dispatcher))
