@@ -17,7 +17,10 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/** A courier only reaches parcels assigned to them; everything else looks like it doesn't exist (404). */
+/**
+ * A courier only reaches parcels in their own dispatch tasks; everything else looks like it doesn't exist (404). They
+ * get only the contact their step needs (sender for a pickup, recipient for a delivery), while it is open.
+ */
 class CourierOwnershipTest extends CourierApiTest {
 
     @Test
@@ -32,8 +35,14 @@ class CourierOwnershipTest extends CourierApiTest {
                 .andExpect(jsonPath("$.status").value("CREATED"))
                 .andExpect(jsonPath("$.stop").value("PICKUP"))
                 .andExpect(jsonPath("$.pickup.name").value("Lanka Crafts"))
-                .andExpect(jsonPath("$.recipient.address").value("45 Peradeniya Road"))
-                .andExpect(jsonPath("$.recipient.district").value("KANDY"))
+                .andExpect(jsonPath("$.pickup.phone").value("+94760000101"))
+                // a pickup courier gets the sender only; the recipient's place without personal data
+                .andExpect(jsonPath("$.recipient").isEmpty())
+                .andExpect(jsonPath("$.to.city").value("Kandy"))
+                .andExpect(jsonPath("$.to.district").value("KANDY"))
+                .andExpect(jsonPath("$.from.city").value("Nugegoda"))
+                .andExpect(jsonPath("$.completed").value(false))
+                .andExpect(jsonPath("$.canMarkUnableToCollect").value(true))
                 .andExpect(jsonPath("$.codAmount").value(2450.00))
                 .andExpect(jsonPath("$.nextStatuses[0]").value("PICKED_UP"))
                 .andExpect(jsonPath("$.history").isArray())
@@ -56,9 +65,27 @@ class CourierOwnershipTest extends CourierApiTest {
         postStatus(parcel.id(), Map.of("status", "PICKED_UP"), other.cookie())
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("NOT_FOUND"));
+        postUnableToCollect(parcel.id(), Map.of("problem", "SENDER_UNAVAILABLE"), other.cookie())
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("NOT_FOUND"));
 
         verify(delivery, never()).history(any());
         verify(delivery, never()).changeStatus(any());
+        verify(assignments, never()).recordOutcome(any());
+    }
+
+    @Test
+    void anotherCouriersParcelIsNeitherOnTheirListNorInTheirHistory() throws Exception {
+        Courier owner = registerCourier();
+        Courier other = registerCourier();
+        given(parcel(owner.id(), ParcelStatus.CREATED));
+        given(parcel(owner.id(), ParcelStatus.DELIVERED));
+
+        mvc.perform(get(BASE + "/today").cookie(other.cookie()))
+                .andExpect(jsonPath("$.items").isEmpty());
+        mvc.perform(get(BASE + "/history").cookie(other.cookie()))
+                .andExpect(jsonPath("$.content").isEmpty())
+                .andExpect(jsonPath("$.totalElements").value(0));
     }
 
     @Test
@@ -69,6 +96,8 @@ class CourierOwnershipTest extends CourierApiTest {
         mvc.perform(get(BASE + "/{id}", unknown).cookie(courier.cookie()))
                 .andExpect(status().isNotFound());
         postStatus(unknown, Map.of("status", "PICKED_UP"), courier.cookie())
+                .andExpect(status().isNotFound());
+        postUnableToCollect(unknown, Map.of("problem", "SENDER_UNAVAILABLE"), courier.cookie())
                 .andExpect(status().isNotFound());
         verify(delivery, never()).changeStatus(any());
     }

@@ -84,6 +84,7 @@ Change it in the same PR as the code, and tell the frontend team.
 | 409 | `ASSIGNMENT_CHANGED` | Dispatch: someone else changed the task at the same moment |
 | 409 | `WEBHOOK_LIMIT_REACHED` | Webhooks: creating or turning on a 6th active subscription |
 | 409 | `WEBHOOK_DELIVERY_NOT_RETRYABLE` | Webhooks: retrying a delivery that is not `FAILED` |
+| 409 | `WEBHOOK_URL_IN_USE` | Webhooks: another of your active subscriptions already uses this callback URL |
 | 409 | `ACCOUNT_REMOVED` | An admin action or password action on a removed account |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | Request body is not `application/json` |
 | 429 | `TOO_MANY_REQUESTS` | Too many requests from this IP address; the `Retry-After` header says how many seconds to wait |
@@ -112,6 +113,7 @@ Messages of the new codes (show them as-is):
 | `ASSIGNMENT_CHANGED` | This task was just changed by someone else. Refresh and try again. |
 | `WEBHOOK_LIMIT_REACHED` | You can have up to 5 active webhooks. Turn one off before adding another. |
 | `WEBHOOK_DELIVERY_NOT_RETRYABLE` | Only failed deliveries can be sent again. |
+| `WEBHOOK_URL_IN_USE` | You already have a webhook for this address. Add the events to it instead. |
 | `CANNOT_CHANGE_OWN_ACCOUNT` (409) | You can't block your own account. |
 | `ACCOUNT_NOT_ACTIVE` (409) | Only active accounts can be blocked. Refresh to see the account's latest status. |
 | `ACCOUNT_NOT_BLOCKED` (409) | Only blocked accounts can be unblocked. Refresh to see the account's latest status. |
@@ -703,6 +705,29 @@ require a logged-in `MERCHANT` cookie (`SD_TOKEN`) of an approved merchant; API 
 a request authenticated with an `X-Api-Key` header gets `403 FORBIDDEN`.
 The admin endpoints require `ADMIN`.
 
+### One subscription per destination
+
+A subscription is one destination: a callback URL, its signing secret and the events that destination needs.
+Use one subscription per server or system and select all the events it handles; your endpoint tells them apart by
+`type` (or the `X-SwiftDrop-Event-Type` header). You don't need a separate subscription for each status: change the
+events of an existing one with `PATCH`. Use several subscriptions only for different destinations, for example:
+
+| Callback URL | Events |
+|---|---|
+| `https://shop.example.com/webhooks` | All parcel events |
+| `https://shop.example.com/billing-webhook` | `parcel.delivered` |
+| `https://shop.example.com/support-webhook` | `parcel.failed` |
+
+Each event is sent once to every active subscription that selected it, so two subscriptions that both select an
+event both receive it.
+
+A callback URL can be used by only one of your active subscriptions (`409 WEBHOOK_URL_IN_USE` when creating one,
+changing the URL of an active one, or turning one on); turned-off subscriptions don't count, and other merchants may
+use the same URL.
+Two URLs are the same when they differ only in the letter case of the scheme or host, a default port written out
+(`:443`), an empty path vs `/`, or a `#fragment`. A different path (including a trailing slash), query, port or scheme
+is a different URL: `https://shop.example.com/hook` and `https://shop.example.com/hook/` can both be active.
+
 ### Event types
 
 | Type | Sent when the parcel becomes |
@@ -732,10 +757,13 @@ The secret is never in this shape. The create and rotate responses add it once:
 ```json
 {
   "id": "uuid", "subscriptionId": "uuid", "eventId": "uuid", "eventType": "parcel.delivered",
+  "trackingNumber": "SD2611004817", "merchantOrderRef": "TECH-ORD-1001",
   "status": "PENDING", "attempts": 1, "lastStatusCode": 500, "lastError": "HTTP_500",
   "nextAttemptAt": "2026-11-13T09:16:00Z", "createdAt": "2026-11-13T09:15:00Z", "deliveredAt": null
 }
 ```
+- `trackingNumber` and `merchantOrderRef`: the parcel the event is about; both `null` for a `webhook.ping`, and
+  `merchantOrderRef` is `null` when the parcel has none.
 - `status`: `PENDING` (waiting for the next attempt), `SUCCEEDED`, `FAILED` (no more automatic attempts).
 - `lastError`: `null`, `HTTP_<code>`, `TIMEOUT`, `CONNECTION_FAILED`, `URL_NOT_ALLOWED` (the URL resolved to a
   private address or couldn't be resolved; nothing was sent) or `SUBSCRIPTION_INACTIVE` (the subscription was turned
@@ -746,19 +774,26 @@ The secret is never in this shape. The create and rotate responses add it once:
 
 | Method and path | What it does | Main errors |
 |---|---|---|
-| `POST /merchant/webhooks` `{"url", "eventTypes": [...]}` | Create an active subscription (201, subscription + `secret`) | 400 `url`, `eventTypes`; 403 `MERCHANT_NOT_APPROVED`; 409 `WEBHOOK_LIMIT_REACHED` |
+| `POST /merchant/webhooks` `{"url", "eventTypes": [...]}` | Create an active subscription (201, subscription + `secret`) | 400 `url`, `eventTypes`; 403 `MERCHANT_NOT_APPROVED`; 409 `WEBHOOK_LIMIT_REACHED`, `WEBHOOK_URL_IN_USE` |
 | `GET /merchant/webhooks` | Your subscriptions, active and turned off, newest first (array of subscriptions) | — |
-| `PATCH /merchant/webhooks/{id}` `{"url"?, "eventTypes"?, "active"?}` | Change only the fields sent (subscription) | 400; 404; 409 `WEBHOOK_LIMIT_REACHED` (turning one on) |
+| `PATCH /merchant/webhooks/{id}` `{"url"?, "eventTypes"?, "active"?}` | Change only the fields sent (subscription) | 400; 404; 409 `WEBHOOK_LIMIT_REACHED` (turning one on), `WEBHOOK_URL_IN_USE` (new URL or turning one on) |
 | `DELETE /merchant/webhooks/{id}` | Turn off (`active: false`; history is kept). 204. Idempotent | 404 |
 | `POST /merchant/webhooks/{id}/rotate-secret` | New secret; the old one stops working at once, also for retries (200, subscription + `secret`) | 404 |
 | `POST /merchant/webhooks/{id}/test` | Queue a `webhook.ping` for this subscription, sent within seconds (202, delivery). Also works while it is turned off, so a URL can be checked before turning it on. If a ping for it is still waiting to be sent, that one is returned (202) instead of queuing another | 404 |
-| `GET /merchant/webhooks/{id}/deliveries?status=&page=0&size=20` | Delivery history of one subscription, newest first (page of deliveries) | 400 `status`, `page`, `size` (1-100); 404 |
+| `GET /merchant/webhooks/{id}/deliveries?status=&eventType=&search=&from=&to=&page=0&size=20` | Delivery history of one subscription, newest first (page of deliveries). Optional filters: `status`, `eventType`, `search`, `from`, `to` (see "Searching deliveries") | 400 `status`, `eventType`, `search`, `from`, `to`, `page`, `size` (1-100); 404 |
 | `POST /merchant/webhooks/deliveries/{id}/retry` | Send a `FAILED` delivery again, with a new set of attempts: `PENDING`, `attempts: 0`, due now; `lastStatusCode`/`lastError` keep the old values until the next attempt (delivery). A parcel delivery of a turned-off subscription fails again with `SUBSCRIPTION_INACTIVE`: turn the subscription on first | 404; 409 `WEBHOOK_DELIVERY_NOT_RETRYABLE` |
-| `GET /admin/webhooks/deliveries?status=FAILED&merchantId=&page=0&size=20` | ADMIN: every merchant's deliveries, newest first (page of deliveries, each with `merchantId`) | 400 |
+| `GET /admin/webhooks/deliveries?status=FAILED&merchantId=&eventType=&search=&from=&to=&page=0&size=20` | ADMIN: every merchant's deliveries, newest first (page of deliveries, each with `merchantId`). Optional filters: `status`, `merchantId`, `eventType`, `search`, `from`, `to` | 400 `status`, `eventType`, `search`, `from`, `to`, `page`, `size` |
 | `POST /admin/webhooks/deliveries/{id}/retry` | ADMIN: same as the merchant retry | 404; 409 `WEBHOOK_DELIVERY_NOT_RETRYABLE` |
 
 Another merchant's subscription or delivery answers 404, never 403. A merchant has at most 5 active subscriptions.
 Delivery lists are newest first (`createdAt`, then `id`, both descending) and never include the payload.
+
+**Searching deliveries.** All filters are optional and combine (AND).
+- `search`: a delivery id, event id or parcel id (exact; a test ping is found only by its own id), or else a tracking
+  number (exact, ignoring spaces and letter case: `sd 2611 0048 17` finds `SD2611004817`) or part of your order
+  number (ignoring case: `ord-1001` finds `TECH-ORD-1001`). A merchant only ever searches their own deliveries.
+- `from` / `to`: days written like `2026-11-15`, in Sri Lankan time, both included (`to=2026-11-15` includes
+  everything created on 15 Nov). Either may be left out.
 
 ### Validation rules (webhooks)
 
@@ -768,6 +803,9 @@ Delivery lists are newest first (`createdAt`, then `id`, both descending) and ne
 | `url` | No user name or password in it, and the host must not be (or resolve to) a private, loopback or link-local address | This address can't receive webhooks. Use a public https:// address. |
 | `eventTypes` | Required, 1-7 distinct parcel event types from the table above (`webhook.ping` isn't one) | Choose at least one event (empty); Choose at most 7 events; `'parcel.lost' isn't a webhook event` (unknown name) |
 | `status` (query) | `PENDING`, `SUCCEEDED` or `FAILED` | — |
+| `eventType` (query) | Optional: one event type from the table above, or `webhook.ping` (test pings). Empty means all | `'parcel.lost' isn't a webhook event` (unknown name) |
+| `search` (query) | Optional, at most 64 characters | Search with at most 64 characters. |
+| `from`, `to` (query) | Optional days like `2026-11-15`; `to` not before `from` | Enter a date like 2026-11-15. (`from` or `to`); The end date can't be before the start date. (`to`) |
 
 ### What the merchant receives
 
@@ -1091,29 +1129,109 @@ history). Unknown version → `404 NOT_FOUND`; not a whole number → `400 VALID
 
 ---
 
-## Merchant Orders (WP5 — coming in PR 3, after WP3 merges)
+## Merchant Orders (WP5)
 
-Authenticated with either the `SD_TOKEN` cookie **or** an `X-Api-Key: <rawKey>` header.
+Authenticated with either the `SD_TOKEN` cookie **or** an `X-Api-Key: <rawKey>` header (role `MERCHANT`).
+The merchant id always comes from the login — it is never in the request body.
+Only `APPROVED` merchants may create or list orders; a `PENDING` or `REJECTED` account gets `403 MERCHANT_NOT_APPROVED`.
 
 ### Create order
 `POST /merchant/orders`
 
-### List orders
-`GET /merchant/orders`
+Request:
+```json
+{
+  "merchantOrderRef": "TECH-ORD-1001",
+  "pickup":    { "name": "Lanka Crafts", "phone": "077 123 4567", "addressLine": "12 High Level Road",
+                 "city": "Nugegoda", "district": "COLOMBO" },
+  "recipient": { "name": "Nimal Perera", "phone": "0719876543", "addressLine": "45 Peradeniya Road",
+                 "city": "Kandy", "district": "KANDY" },
+  "weightKg": 1.5,
+  "codAmount": 2500.00,
+  "instructions": "Call before coming",
+  "lengthCm": 30,
+  "widthCm": 20,
+  "heightCm": 10,
+  "keepUpright": false
+}
+```
 
-> Full request/response shapes will be documented here when WP3's `DeliveryApi` contract is finalised.
+| Field | Rule | Message |
+|---|---|---|
+| `merchantOrderRef` | Optional, up to 100 characters. Idempotency key: resending the same value returns the original parcel. | "Use 100 characters or fewer." |
+| `pickup`, `recipient` | Required | "Enter the pickup details." / "Enter the recipient's details." |
+| `*.name` | 1–100 characters | "Enter a name." / "Use 100 characters or fewer." |
+| `*.phone` | Sri Lankan mobile in any accepted form; stored as `+947XXXXXXXX` | "Enter a Sri Lankan mobile number, like 077 123 4567." |
+| `*.addressLine` | 1–200 characters | "Enter the address." / "Use 200 characters or fewer." |
+| `*.city` | 1–80 characters | "Enter the city." / "Use 80 characters or fewer." |
+| `*.district` | One of `GET /meta/districts` | "Select a district." |
+| `weightKg` | 0.01–50, up to 2 decimals | "Enter the weight." / "Enter a weight above 0 kg." / "A parcel can weigh up to 50 kg." / "Use up to 2 decimal places." |
+| `codAmount` | Optional; 0.01–500000, up to 2 decimals | "Enter an amount above 0, or leave it out." / "Cash on delivery can be up to Rs. 500,000." |
+| `instructions` | Optional, up to 500 characters | "Use 500 characters or fewer." |
+| `lengthCm`, `widthCm`, `heightCm` | Required; whole cm 1–300 | "Enter the length." / "Enter the width." / "Enter the height." / "Use whole centimetres from 1 to 300." |
+| `keepUpright` | Optional, default `false` | |
+
+Response `201`: a Merchant Order.
+```json
+{
+  "id": "6f1c2b8e-3a4d-4c8e-9b1a-2f3e4d5c6b7a",
+  "trackingNumber": "SD2611004817",
+  "status": "CREATED",
+  "merchantOrderRef": "TECH-ORD-1001",
+  "pickup":    { "name": "Lanka Crafts", "phone": "+94771234567", "addressLine": "12 High Level Road",
+                 "city": "Nugegoda", "district": "COLOMBO" },
+  "recipient": { "name": "Nimal Perera", "phone": "+94719876543", "addressLine": "45 Peradeniya Road",
+                 "city": "Kandy", "district": "KANDY" },
+  "weightKg": 1.5,
+  "codAmount": 2500.00,
+  "instructions": "Call before coming",
+  "feeAmount": 450.00,
+  "currency": "LKR",
+  "createdAt": "2026-11-07T04:30:00Z",
+  "updatedAt": "2026-11-07T04:30:00Z",
+  "currentBranch": null,
+  "failureReason": null,
+  "proof": null,
+  "size": { "lengthCm": 30, "widthCm": 20, "heightCm": 10, "keepUpright": false },
+  "vehicle": "BIKE",
+  "billableWeightKg": 1
+}
+```
+- `merchantOrderRef`: the value you supplied; `null` when omitted. Resending the same ref returns the original parcel unchanged (idempotent retry).
+- `feeAmount` / `currency`: set by pricing at creation time (same quote as `POST /pricing/estimate`).
+- `currentBranch`: set only while `AT_BRANCH`. `failureReason`: only while `FAILED`. `proof`: `{ "recipientName": "Nimal Perera", "hasPhoto": false }` once `DELIVERED`.
+- `400` `VALIDATION_FAILED` · `401` `UNAUTHENTICATED` · `403` `MERCHANT_NOT_APPROVED` (account not yet approved) · `403` `FORBIDDEN` (not a `MERCHANT`) · `409` `PARCEL_NEEDS_MANUAL_QUOTE` (no vehicle carries or fits it)
+
+### List orders
+`GET /merchant/orders?page=0&size=20&status=CREATED`
+
+The merchant's own orders, newest first, as a page of Merchant Order (the shape above):
+```json
+{ "content": [ /* Merchant Order */ ], "page": 0, "size": 20, "totalElements": 5, "totalPages": 1 }
+```
+- `page` from 0 (default 0); `size` 1–100 (default 20); `status` optional, one of the parcel statuses.
+- `200` · `400` `VALIDATION_FAILED` (`fieldErrors.page`: "Use a page number of 0 or more.", `fieldErrors.size`: "Use a page size from 1 to 100.") · `401` · `403` `MERCHANT_NOT_APPROVED` · `403` `FORBIDDEN`
 
 ---
 
 ## Courier (role `COURIER` only)
 
-The logged-in courier's parcels (WP9). No login → `401 UNAUTHENTICATED`; any other role (including `ADMIN`) →
-`403 FORBIDDEN`. A courier only sees parcels assigned to them: another courier's parcel, an unknown id, or a parcel
-that was reassigned to someone else → `404 NOT_FOUND`. "Today" is the current day in Sri Lankan time (Asia/Colombo).
+The logged-in courier's parcels (WP9): the parcels in the dispatch tasks a dispatcher gave them (see "Dispatch"). A
+dispatcher may group several parcels in one task; the courier sees and works **each parcel on its own**. No login →
+`401 UNAUTHENTICATED`; any other role (including `ADMIN`) → `403 FORBIDDEN`. A courier only sees parcels that were in
+one of their tasks: another courier's parcel or an unknown id → `404 NOT_FOUND`. "Today" is the current day in Sri
+Lankan time (Asia/Colombo).
 
-Until parcels exist on the server (the delivery module is not implemented yet), every courier endpoint answers
-`503 SERVICE_UNAVAILABLE`. For local demos, `SWIFTDROP_FAKE_DELIVERY=true` (with `SEED_DEMO_USERS=true`) gives
-`courier@swiftdrop.lk` a few in-memory demo parcels; they are not saved and a restart resets them (temporary).
+Each step changes the parcel (delivery) and records the task outcome (dispatch) in one transaction: both or neither
+are kept. A parcel is **completed** for the courier as soon as its own outcome closes it (dispatch's rule):
+
+| Task | Completed after | Still active |
+|---|---|---|
+| `PICKUP` | `HANDED_OVER` (handed over at the branch), `NOT_COLLECTED` (Unable to Collect) | `PENDING`, `COLLECTED` (must be handed over) |
+| `DELIVERY` | `DELIVERED`, `RETURNED` (failed and returned to the branch), `NOT_LOADED` (Unable to Collect) | `PENDING`, `LOADED` (out for delivery), `FAILED` (must be returned) |
+
+The **task** becomes `COMPLETED` by itself, in the same transaction, when its last parcel is completed. There is no
+"complete task" call.
 
 ### Courier delivery (response)
 ```json
@@ -1122,69 +1240,111 @@ Until parcels exist on the server (the delivery module is not implemented yet), 
   "trackingNumber": "SD2611004817",
   "status": "OUT_FOR_DELIVERY",
   "stop": "DELIVERY",
-  "pickup": { "name": "Lanka Crafts", "phone": "+94712345678", "address": "12 High Level Road",
-              "city": "Nugegoda", "district": "COLOMBO" },
+  "pickup": null,
   "recipient": { "name": "Nimal Perera", "phone": "+94771234567", "address": "45 Peradeniya Road",
                  "city": "Kandy", "district": "KANDY" },
+  "from": { "city": "Nugegoda", "district": "COLOMBO" },
+  "to": { "city": "Kandy", "district": "KANDY" },
   "weightKg": 1.2,
   "codAmount": 2450.00,
   "instructions": "Call before you arrive.",
   "assignedAt": "2026-11-05T02:30:00Z",
   "updatedAt": "2026-11-05T05:10:00Z",
-  "nextStatuses": ["DELIVERED", "FAILED"]
+  "nextStatuses": ["DELIVERED", "FAILED"],
+  "canMarkUnableToCollect": false,
+  "completed": false,
+  "completedAt": null,
+  "task": { "assignmentId": "uuid", "type": "DELIVERY", "status": "IN_PROGRESS", "outcome": "LOADED",
+            "branch": "COLOMBO", "problem": null, "receivedBy": null }
 }
 ```
-- `stop`: `PICKUP` while `status` is `CREATED`, otherwise `DELIVERY`.
+- `status`: the parcel's own status (delivery). "Unable to Collect" doesn't change it.
+- `stop`: `PICKUP` for a pickup task, otherwise `DELIVERY` (`task.type` tells a transfer from a delivery).
+- `pickup` / `recipient` (privacy): only the contact the courier's step needs, and only while the parcel is still
+  theirs to work: the sender (`pickup`) in a pickup, the `recipient` in a delivery, nobody in a transfer. Both are
+  `null` once the parcel is completed or the task is closed. `from` / `to` (city and district) are always there.
+- `assignedAt`: when the dispatcher created the task.
 - `codAmount`: cash to collect in rupees; `null` when already paid. `instructions` may be `null`.
-- `nextStatuses`: what this courier may set now, in life-cycle order (empty once `DELIVERED` or `FAILED`).
+- `completed`: the courier is done with this parcel (table above), whatever the other parcels of its task are doing.
+  `completedAt`: when; `null` while it is active.
+- `canMarkUnableToCollect`: "Unable to Collect" is possible now (the parcel's step is `PENDING` in an open task).
+- `task`: the courier's task for this parcel. `status` is the whole task's status. `outcome` is the dispatch item
+  outcome. `branch` is where the parcel is handed over (a pickup's or transfer's destination branch; a delivery's
+  origin branch, for a return). `problem`: why it couldn't be collected (`NOT_COLLECTED`, `NOT_LOADED`).
+  `receivedBy`: who took it at the branch.
+- `nextStatuses`: the statuses this courier may set now, from the task step and the parcel's status (empty once the
+  parcel is completed or the task closed). Loading (`IN_TRANSIT`, `OUT_FOR_DELIVERY`) also needs the parcel at the
+  task's origin branch:
 
-| From | Allowed next |
-|---|---|
-| `CREATED` | `PICKED_UP` |
-| `PICKED_UP` | `IN_TRANSIT` |
-| `IN_TRANSIT` | `OUT_FOR_DELIVERY` |
-| `OUT_FOR_DELIVERY` | `DELIVERED`, `FAILED` |
-| `DELIVERED`, `FAILED` | none |
+| Task | Step (`outcome`) | Allowed next | Records |
+|---|---|---|---|
+| `PICKUP` | `PENDING` | `PICKED_UP`, or Unable to Collect | `COLLECTED`, `NOT_COLLECTED` |
+| `PICKUP` | `COLLECTED` | `AT_BRANCH` (at `task.branch`) | `HANDED_OVER` |
+| `TRANSFER` | `PENDING` | `IN_TRANSIT`, or Unable to Collect | `LOADED`, `NOT_LOADED` |
+| `TRANSFER` | `LOADED` | `AT_BRANCH` (at `task.branch`) | `HANDED_OVER` |
+| `DELIVERY` | `PENDING` | `OUT_FOR_DELIVERY`, or Unable to Collect | `LOADED`, `NOT_LOADED` |
+| `DELIVERY` | `LOADED` | `DELIVERED`, `FAILED` | `DELIVERED`, `FAILED` |
+| `DELIVERY` | `FAILED` | `AT_BRANCH` (back at `task.branch`) | `RETURNED` |
+
+Couriers are given `PICKUP` and `DELIVERY` tasks; `TRANSFER` stays supported because dispatch still has it.
 
 `failureReason`: `RECIPIENT_UNAVAILABLE` | `WRONG_ADDRESS` | `RECIPIENT_REFUSED` | `ADDRESS_UNREACHABLE` |
 `PARCEL_DAMAGED` | `OTHER`
+
+`problem` (Unable to Collect): `SENDER_UNAVAILABLE` | `PARCEL_NOT_READY` | `PARCEL_MISSING` | `PARCEL_DAMAGED` |
+`ADDRESS_UNREACHABLE` | `OTHER`
 
 ### `GET /courier/deliveries/today`
 ```json
 { "date": "2026-11-05", "toDo": 5, "done": 2, "items": [ /* Courier delivery */ ] }
 ```
-Every open parcel assigned to the courier (whatever day it was assigned), plus the ones they finished today.
-Order: pickups (`CREATED`, oldest `assignedAt` first), then the other open parcels (oldest `assignedAt` first), then
-finished ones (newest first). `toDo` = not finished, `done` = finished today.
-- `200` · `401` · `403` · `503`
+The parcels in the courier's open tasks (whatever day they were assigned or planned for), plus the parcels they
+completed today. A parcel in two of their tasks today shows once, with the open step. Order: open pickups (oldest
+`assignedAt` first), then the other active parcels (oldest `assignedAt` first), then completed ones (newest first).
+`toDo` = active parcels, `done` = parcels completed today. Cancelled tasks are left out.
+- `200` · `401` · `403`
 
 ### `GET /courier/deliveries/history?page=0&size=20&trackingNumber=SD2611004817`
-Parcels this courier delivered or marked failed, newest first, as a page of Courier delivery:
+The parcels this courier completed, pickups and deliveries (`HANDED_OVER`, `NOT_COLLECTED`, `DELIVERED`, `RETURNED`,
+`NOT_LOADED`), newest completion first, as a page of Courier delivery (`completed: true`, `nextStatuses` empty, no
+contacts). A parcel is listed as soon as it is completed, even while the rest of its task is still in progress;
+`COLLECTED` and `FAILED` parcels are not listed until they are handed over or returned. A parcel the courier worked in
+two tasks (e.g. a failed delivery, then a new delivery) has one entry per completed task.
 ```json
 { "content": [ /* Courier delivery */ ], "page": 0, "size": 20, "totalElements": 42, "totalPages": 3 }
 ```
-`page` from 0 (default 0); `size` 1-100 (default 20); `trackingNumber` optional, spaces and case ignored.
-- `200` · `400` `VALIDATION_FAILED` (`fieldErrors.page` / `fieldErrors.size`) · `401` · `403` · `503`
+`page` from 0 (default 0); `size` 1-100 (default 20); `trackingNumber` optional, spaces and case ignored; an unknown
+number gives an empty page.
+- `200` · `400` `VALIDATION_FAILED` (`fieldErrors.page` / `fieldErrors.size`) · `401` · `403`
 
 ### `GET /courier/deliveries/{parcelId}`
-All Courier delivery fields, plus:
+All Courier delivery fields (for the open step if the parcel is in one of the courier's open tasks, else the most
+recent one), plus:
 ```json
 {
   "history": [
-    { "status": "OUT_FOR_DELIVERY", "note": null, "failureReason": null, "occurredAt": "2026-11-05T05:10:00Z" },
-    { "status": "PICKED_UP", "note": "Collected from front desk", "failureReason": null, "occurredAt": "2026-11-05T03:00:00Z" }
+    { "status": "OUT_FOR_DELIVERY", "branch": null, "failureReason": null, "occurredAt": "2026-11-05T05:10:00Z" },
+    { "status": "AT_BRANCH", "branch": "COLOMBO", "failureReason": null, "occurredAt": "2026-11-05T03:00:00Z" }
   ],
   "proof": null,
   "failureReason": null
 }
 ```
-- `history`: newest first. `proof`: `{ "recipientName": "Nimal Perera", "hasPhoto": false }` once `DELIVERED`,
-  otherwise `null`. `failureReason`: only once `FAILED`.
-- `200` · `400` (non-UUID id) · `401` · `403` · `404` `NOT_FOUND` · `503`
+- `history`: newest first, without notes (they are written by other people for their own work). `branch` only for
+  `AT_BRANCH`, `failureReason` only for `FAILED`.
+- `proof`: `{ "recipientName": "Nimal Perera", "hasPhoto": false }` once `DELIVERED`, otherwise `null`.
+  `failureReason`: only once `FAILED`.
+- `200` · `400` (non-UUID id) · `401` · `403` · `404` `NOT_FOUND`
 
 ### `POST /courier/deliveries/{parcelId}/status`
 ```json
 { "status": "PICKED_UP", "note": "Collected from front desk" }
+```
+```json
+{ "status": "AT_BRANCH", "receivedBy": "S. Silva", "note": "Counter 2" }
+```
+```json
+{ "status": "OUT_FOR_DELIVERY" }
 ```
 ```json
 { "status": "DELIVERED", "recipientName": "Nimal Perera", "note": "Left with the guard" }
@@ -1192,14 +1352,35 @@ All Courier delivery fields, plus:
 ```json
 { "status": "FAILED", "failureReason": "RECIPIENT_UNAVAILABLE", "note": "No answer, called twice" }
 ```
+- `AT_BRANCH` hands the parcel over at `task.branch` (pickup, transfer) or returns a failed delivery there; the request
+  has no branch field. It needs `receivedBy`: the person at the branch who took the parcel.
 - `DELIVERED` needs `recipientName`. `FAILED` needs `failureReason`; `OTHER` also needs a `note`.
-- `recipientName` only with `DELIVERED`; `failureReason` only with `FAILED`. `note` is optional otherwise.
-- `200`: the updated parcel (same shape as `GET /courier/deliveries/{parcelId}`). Customers, merchants and the
+- `recipientName` only with `DELIVERED`; `failureReason` only with `FAILED`; `receivedBy` only with `AT_BRANCH`.
+  `note` is optional otherwise.
+- `200`: the updated parcel (same shape as `GET /courier/deliveries/{parcelId}`), with `completed` and `task.status`
+  as they are after the step (`COMPLETED` when this was the task's last open parcel). Customers, merchants and the
   tracking page are told through the delivery module's `ParcelStatusChanged` event (`actorRole: COURIER`).
-- `400` `VALIDATION_FAILED` · `401` · `403` · `404` `NOT_FOUND` · `503`
-- `409` `INVALID_STATUS_TRANSITION`: not allowed from the parcel's current status (e.g. a skipped step, the button
-  pressed twice, or the dispatcher changed it). The frontend reloads the parcel.
-- Checked in this order: the request (400), the parcel is yours (404), the step is allowed (409).
+- `400` `VALIDATION_FAILED` · `401` · `403` · `404` `NOT_FOUND`
+- `409` `ASSIGNMENT_CLOSED`: the task was completed or cancelled. `409` `TASK_STEP_NOT_ALLOWED`: not the task's next
+  step (a skipped step, the button pressed twice, a completed parcel). `409` `INVALID_STATUS_TRANSITION`: the parcel
+  can't make the move now (its status changed, or it isn't at the task's origin branch for loading). `409`
+  `ASSIGNMENT_CHANGED`: the dispatcher changed the task at the same moment. Nothing was saved; the frontend reloads the
+  parcel.
+- Checked in this order: the request (400), the parcel is yours (404), the task is open, the step is allowed, the
+  parcel can move (409).
+
+### `POST /courier/deliveries/{parcelId}/unable-to-collect`
+"Unable to Collect": the courier couldn't take the parcel (one action for both task types).
+```json
+{ "problem": "SENDER_UNAVAILABLE", "note": "Shop closed until 2 pm" }
+```
+- Records `NOT_COLLECTED` for a pickup, `NOT_LOADED` for a delivery (or transfer), with the `problem`. The parcel's
+  `status` doesn't change (it never moved); the parcel is completed for the courier and goes back to the dispatcher's
+  queue. Allowed only while `canMarkUnableToCollect` is true.
+- `200`: the parcel (same shape as `GET /courier/deliveries/{parcelId}`), `completed: true`.
+- `400` `VALIDATION_FAILED` · `401` · `403` · `404` `NOT_FOUND`
+- `409` `ASSIGNMENT_CLOSED` · `409` `TASK_STEP_NOT_ALLOWED` (already collected or out for delivery) · `409`
+  `ASSIGNMENT_CHANGED`
 
 Proof-of-delivery photos (upload and download) come in a later version.
 
@@ -1209,15 +1390,18 @@ Proof-of-delivery photos (upload and download) come in a later version.
 |---|---|---|
 | `status` | Required, one of the parcel statuses | Select the new status. |
 | `note` | Optional, max 500 chars | Keep the note under 500 characters. |
-| `note` (`failureReason: OTHER`) | Required, 3-500 chars | Describe what went wrong. |
+| `note` (`failureReason` or `problem` `OTHER`) | Required, 3-500 chars | Describe what went wrong. |
 | `recipientName` (`DELIVERED`) | Required, 2-100 chars | Enter the name of the person who received the parcel. |
 | `recipientName` with another status | Not allowed | Only for delivered parcels. |
 | `failureReason` (`FAILED`) | Required, one of the values above | Select why the delivery failed. |
 | `failureReason` with another status | Not allowed | Only for failed deliveries. |
+| `receivedBy` (`AT_BRANCH`) | Required, 2-100 chars | Enter the name of the person at the branch who received the parcel. |
+| `receivedBy` with another status | Not allowed | Only when you hand the parcel over at a branch. |
+| `problem` (Unable to Collect) | Required, one of the values above | Select why you couldn't take the parcel. |
 | `page` (history) | 0 or more | Use a page number of 0 or more. |
 | `size` (history) | 1-100 | Use a page size from 1 to 100. |
 
-An unknown `status` or `failureReason` value gives `400` with that field in `fieldErrors`.
+An unknown `status`, `failureReason` or `problem` value gives `400` with that field in `fieldErrors`.
 
 ## Dispatch (WP8, roles `DISPATCHER` and `ADMIN`)
 
@@ -1354,7 +1538,7 @@ to anything not listed, gets a STOMP `ERROR` frame and the connection closes.
 | Handshake URL | Who | May subscribe to |
 |---|---|---|
 | `ws://<host>/api/v1/ws/public` | anyone (cookie ignored) | `/topic/parcels/{trackingNumber}` |
-| `ws://<host>/api/v1/ws` | logged in: the handshake checks the `SD_TOKEN` cookie like any request (401 without it) | the above, and `/topic/live` (DISPATCHER, ADMIN) |
+| `ws://<host>/api/v1/ws` | logged in: the handshake checks the `SD_TOKEN` cookie like any request (401 without it) | the above, `/topic/live` (DISPATCHER, ADMIN) and `/user/queue/parcels` (CUSTOMER, MERCHANT) |
 
 The tracking number in the topic must be the normalised form (`SD2611004817`). The browser origin must be
 `FRONTEND_URL`.
@@ -1380,10 +1564,27 @@ not replayed. If the WebSocket keeps failing, poll that endpoint (the frontend p
 
 `origin` and `destination` are the sender's and recipient's districts.
 
+**`/user/queue/parcels`** (CUSTOMER, MERCHANT, logged-in endpoint only): private updates for the parcels the user
+booked (customer) or created (merchant), and nobody else's. The server picks the parcels by the logged-in user's
+id, so there is nothing to choose. Same shape as `/topic/parcels/{trackingNumber}` plus `parcelId`:
+
+```json
+{ "parcelId": "…", "trackingNumber": "SD2611004817", "status": "AT_BRANCH", "branch": "KANDY",
+  "failureReason": null, "occurredAt": "2026-11-13T06:45:00Z", "version": 3 }
+```
+
+Same rules: apply only a higher `version`; after a reconnect load `GET /tracking/mine` again.
+
 ### `GET /tracking/live/recent?branch=COLOMBO` (DISPATCHER, ADMIN)
 
 The last 100 changes this server has seen (it keeps 200 in memory, cleared on restart), newest first, in the
 `/topic/live` shape. With `branch`, only changes whose origin, destination or arrival branch is that branch.
+
+### `GET /tracking/mine?status=&page=0&size=20` (CUSTOMER, MERCHANT)
+
+The logged-in customer's bookings or merchant's orders, newest first (page of rows in the
+`GET /admin/tracking/parcels` row shape), as the starting point for `/user/queue/parcels`. `status` optional.
+`400` `page` < 0, `size` outside 1-100 · `401` · `403` (any other role).
 
 ### `GET /admin/tracking/parcels?q=&status=&district=&from=&to=&page=0&size=20` (ADMIN)
 

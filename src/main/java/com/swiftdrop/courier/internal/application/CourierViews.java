@@ -12,11 +12,19 @@ public final class CourierViews {
     private CourierViews() {
     }
 
-    /** Today's parcels, already in display order. */
-    public record CourierToday(LocalDate date, List<DeliverySnapshot> parcels) {
+    /** A parcel and the dispatch task step the courier has for it. */
+    public record CourierParcel(DeliverySnapshot parcel, CourierTask task) {
+    }
 
+    /** Today's parcels, already in display order. */
+    public record CourierToday(LocalDate date, List<CourierParcel> parcels) {
+
+        /**
+         * Parcels the courier completed (handed over, not collected, delivered, returned, not taken out), each on its
+         * own, whatever the other parcels of its task are doing.
+         */
         public long done() {
-            return parcels.stream().filter(parcel -> parcel.status().isFinished()).count();
+            return parcels.stream().filter(parcel -> parcel.task().completed()).count();
         }
 
         public long toDo() {
@@ -24,7 +32,7 @@ public final class CourierViews {
         }
     }
 
-    /** One parcel and its history, newest first. */
-    public record ParcelDetail(DeliverySnapshot parcel, List<ParcelStatusEntry> history) {
+    /** One parcel, its history (newest first) and the courier's task step for it. */
+    public record ParcelDetail(DeliverySnapshot parcel, List<ParcelStatusEntry> history, CourierTask task) {
     }
 }

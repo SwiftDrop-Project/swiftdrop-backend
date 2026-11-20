@@ -32,7 +32,7 @@ spring:
   # other branches are ignored instead of failing validation.
   flyway:
     enabled: true
-    locations: classpath:db/migration
+    locations: classpath:db/migration,classpath:db/migration/**
     default-schema: public
     out-of-order: true
     ignore-migration-patterns: "*:missing,*:future"
@@ -120,11 +120,6 @@ swiftdrop:
     admin-password: ${ADMIN_PASSWORD:}
     demo-users: ${SEED_DEMO_USERS:false}
     demo-password: ${DEMO_PASSWORD:}
-  # TEMPORARY - delete when WP3 implements DeliveryApi.
-  # true: courier endpoints use an in-memory FakeDeliveryApi with demo parcels for courier@swiftdrop.lk
-  # (needs SEED_DEMO_USERS=true). Nothing is written to the database. Local demos only, never on shared servers.
-  dev:
-    fake-delivery: ${SWIFTDROP_FAKE_DELIVERY:false}
   # Webhooks (WP6). Merchants' signing secrets are stored AES-GCM encrypted with a key derived from encryption-key.
   # Empty WEBHOOK_ENCRYPTION_KEY: the JWT secret is used instead. Changing the value later makes the stored secrets
   # unreadable (merchants must rotate them). The fallback is the property, not the JWT_SECRET variable, so tests

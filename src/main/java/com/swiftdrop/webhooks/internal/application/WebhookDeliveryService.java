@@ -13,22 +13,18 @@ import com.swiftdrop.webhooks.internal.dto.AdminWebhookDeliveryResponse;
 import com.swiftdrop.webhooks.internal.dto.WebhookDeliveryResponse;
 import com.swiftdrop.webhooks.internal.persistence.WebhookDeliveryRepository;
 import com.swiftdrop.webhooks.internal.persistence.WebhookSubscriptionRepository;
-import jakarta.persistence.criteria.Predicate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
-import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -88,16 +84,19 @@ public class WebhookDeliveryService {
         return WebhookDeliveryResponse.from(delivery);
     }
 
-    /** One subscription's deliveries, newest first; {@code status} null means all. */
+    /**
+     * One subscription's deliveries, newest first. Every filter is optional (see {@link DeliveryCriteria}: status,
+     * event type, search, from/to). Only this subscription's rows are ever looked at, so a search never reaches
+     * another merchant's deliveries.
+     */
     @Transactional(readOnly = true)
-    public PageResponse<WebhookDeliveryResponse> history(UUID merchantId, UUID subscriptionId, DeliveryStatus status,
+    public PageResponse<WebhookDeliveryResponse> history(UUID merchantId, UUID subscriptionId, DeliveryFilters filters,
                                                          int page, int size) {
         requireValidPage(page, size);
+        DeliveryCriteria criteria = DeliveryCriteria.parse(filters);
         WebhookSubscription subscription = ownedSubscription(merchantId, subscriptionId);
-        PageRequest request = PageRequest.of(page, size, NEWEST_FIRST);
-        Page<WebhookDelivery> found = status == null
-                ? deliveries.findBySubscriptionId(subscription.getId(), request)
-                : deliveries.findBySubscriptionIdAndStatus(subscription.getId(), status, request);
+        Page<WebhookDelivery> found = deliveries.findAll(criteria.toSpecification(subscription.getId(), null),
+                PageRequest.of(page, size, NEWEST_FIRST));
         return PageResponse.from(found, WebhookDeliveryResponse::from);
     }
 
@@ -109,22 +108,14 @@ public class WebhookDeliveryService {
         return WebhookDeliveryResponse.from(reset(deliveryId));
     }
 
-    /** Every merchant's deliveries, newest first; both filters are optional. */
+    /** Every merchant's deliveries, newest first; {@code merchantId} and every filter are optional. */
     @Transactional(readOnly = true)
-    public PageResponse<AdminWebhookDeliveryResponse> adminList(DeliveryStatus status, UUID merchantId, int page,
+    public PageResponse<AdminWebhookDeliveryResponse> adminList(UUID merchantId, DeliveryFilters filters, int page,
                                                                 int size) {
         requireValidPage(page, size);
-        Specification<WebhookDelivery> filters = (root, query, cb) -> {
-            List<Predicate> conditions = new ArrayList<>();
-            if (status != null) {
-                conditions.add(cb.equal(root.get("status"), status));
-            }
-            if (merchantId != null) {
-                conditions.add(cb.equal(root.get("merchantId"), merchantId));
-            }
-            return cb.and(conditions.toArray(Predicate[]::new));
-        };
-        return PageResponse.from(deliveries.findAll(filters, PageRequest.of(page, size, NEWEST_FIRST)),
+        DeliveryCriteria criteria = DeliveryCriteria.parse(filters);
+        return PageResponse.from(
+                deliveries.findAll(criteria.toSpecification(null, merchantId), PageRequest.of(page, size, NEWEST_FIRST)),
                 AdminWebhookDeliveryResponse::from);
     }
 

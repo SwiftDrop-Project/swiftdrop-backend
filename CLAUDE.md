@@ -23,7 +23,7 @@ Every direct sub-package of `com.swiftdrop` is a module. `SwiftdropBackendApplic
 | `notifications` | NotificationsApi, AccountEmail | `notifications` | TBD |
 | `webhooks` | - | `webhooks` (`subscriptions`, `deliveries`) | chanuka (WP6) |
 | `outbox` | - (reads the outbox only through `DeliveryOutboxApi`) | none | TBD |
-| `courier` | - (endpoints only; uses `DeliveryApi`) | none | Kalpani |
+| `courier` | - (endpoints only; uses `DeliveryApi` and dispatch's `AssignmentApi`) | none | Kalpani |
 
 ```
 com.swiftdrop.<module>/
@@ -48,16 +48,20 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
 - A module's public URLs: implement `shared.web.PublicEndpoints` as a bean in the module. Never edit identity's SecurityConfig for that.
 - Unbuilt modules have placeholder contracts ("Contract owned by <module> - extend in Phase 0"); the owner extends them.
 - Current dependencies: identity -> notifications, shared; merchants -> identity, shared; delivery -> pricing, shared;
-  dispatch -> delivery, identity, shared; tracking -> delivery, shared; courier -> delivery, identity, shared;
+  dispatch -> delivery, identity, shared; tracking -> delivery, shared; courier -> delivery, dispatch, shared;
   pricing -> shared; infrastructure -> shared; webhooks -> delivery, merchants, shared. Nothing depends on courier or
-  webhooks. Planned: courier -> dispatch (courier tasks).
+  webhooks.
 - webhooks (contract in API.md "Webhooks", being built): reads `ParcelStatusChanged` from `webhooks.q` (declared by
   infrastructure; never declare it again with other arguments), stores one delivery row per event and subscription,
   and a scheduled worker sends them. Retries live in the database (`webhooks.deliveries`), not in RabbitMQ queues.
   Signing secrets are stored encrypted (AES-GCM), never hashed and never logged. Merchants get a public payload,
   never the raw event (no customer ids, actor ids or notes). The worker (`WebhookDispatcher`, on unless
   `SWIFTDROP_WEBHOOKS_DISPATCHER_ENABLED=false`; off in tests, which call `dispatchDue()`) leases rows and never holds
-  a transaction during the HTTP call; result updates are guarded by the lease.
+  a transaction during the HTTP call; result updates are guarded by the lease. One subscription is one destination
+  (callback URL + signing secret + one or more event types), never one per event: merchants select several events on
+  one subscription and use more subscriptions only for different systems (at most 5 active per merchant). A callback
+  URL may be used by only one active subscription per merchant (`WEBHOOK_URL_IN_USE`, compared with
+  `CallbackDestination`; other merchants may use the same URL).
 - dispatch: `AssignmentApi` is implemented; dispatcher endpoints are under `/dispatch` (DISPATCHER and ADMIN, API.md
   "Dispatch"). Delivery has no "waiting for pickup" query, so dispatch keeps `dispatch.pickup_queue` from
   `ParcelStatusChanged` (RabbitMQ queue `dispatch.q`); it fills only while the outbox relay runs
@@ -66,12 +70,18 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
   its parcels are still on their way.
 - tracking: public lookup `GET /track/{trackingNumber}` and live updates over WebSocket/STOMP (API.md "Tracking"):
   `/api/v1/ws/public` (public, `/topic/parcels/{trackingNumber}`) and `/api/v1/ws` (cookie checked; DISPATCHER/ADMIN
-  may follow `/topic/live`). In-memory simple broker; each instance has its own auto-delete RabbitMQ queue.
+  may follow `/topic/live`; CUSTOMER/MERCHANT get their own parcels on `/user/queue/parcels`, loaded first with
+  `GET /tracking/mine`). In-memory simple broker; each instance has its own auto-delete RabbitMQ queue.
   The admin's all-parcels list (`/admin/tracking/parcels`) reads tracking's own `tracking.parcel_index`, filled from
   `ParcelStatusChanged` and from lookups (delivery has no admin search).
-- courier gets `DeliveryApi` through an `ObjectProvider` and answers 503 SERVICE_UNAVAILABLE while nothing implements
-  it. TEMPORARY: `courier/internal/fake` (`SWIFTDROP_FAKE_DELIVERY=true`) is an in-memory `DeliveryApi` for demos;
-  delete it (and its property and tests) when delivery is implemented.
+- courier (one API, `/courier/deliveries`) shows the parcels of the courier's dispatch tasks (`AssignmentApi`) one
+  by one, even when a dispatcher grouped several in one task. On each status change it calls
+  `DeliveryApi.changeStatus` and then `AssignmentApi.recordOutcome` in one transaction; "Unable to Collect" records
+  NOT_COLLECTED / NOT_LOADED without a parcel status change. A parcel is `completed` when its item closes
+  (`ItemOutcome.closes`), and the task is completed through `AssignmentApi.complete` in the same transaction when its
+  last item closes: dispatch's rules decide both, courier never copies them. There is no manual "complete task". It
+  never reads delivery's deprecated `assignedCourierId`. History of completed parcels reads all the courier's tasks
+  (`findOpenForCourier` from `Instant.EPOCH`) because dispatch has no item-level query yet.
 - delivery must never depend on identity: identity -> notifications, and notifications will consume
   `ParcelStatusChanged` (notifications -> delivery), so that would be a cycle. User ids are plain UUIDs and roles are
   plain names (e.g. `COURIER`). Multi-branch: several couriers handle one parcel, so callers authorize

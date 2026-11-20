@@ -5,10 +5,17 @@ import com.swiftdrop.delivery.DeliverySnapshot;
 import com.swiftdrop.delivery.FailureReason;
 import com.swiftdrop.delivery.ParcelStatus;
 import com.swiftdrop.delivery.ParcelStatusEntry;
+import com.swiftdrop.dispatch.AssignmentStatus;
+import com.swiftdrop.dispatch.AssignmentType;
+import com.swiftdrop.dispatch.AssignmentView;
+import com.swiftdrop.dispatch.ItemOutcome;
+import com.swiftdrop.dispatch.RecordOutcomeCommand;
 import com.swiftdrop.shared.error.BusinessRuleException;
+import com.swiftdrop.shared.reference.District;
 import com.swiftdrop.shared.error.ErrorCode;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 
 import java.time.Instant;
 import java.util.List;
@@ -19,6 +26,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -39,10 +47,18 @@ class CourierStatusUpdateTest extends CourierApiTest {
         postStatus(parcel.id(), Map.of("status", "PICKED_UP", "note", "  Collected from front desk  "), courier.cookie())
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("PICKED_UP"))
-                .andExpect(jsonPath("$.stop").value("DELIVERY"))
+                .andExpect(jsonPath("$.stop").value("PICKUP"))
+                .andExpect(jsonPath("$.task.outcome").value("COLLECTED"))
                 .andExpect(jsonPath("$.nextStatuses[0]").value("AT_BRANCH"))
+                // collected is not completed: the handover is still to come
+                .andExpect(jsonPath("$.completed").value(false))
+                .andExpect(jsonPath("$.completedAt").isEmpty())
+                .andExpect(jsonPath("$.canMarkUnableToCollect").value(false))
+                .andExpect(jsonPath("$.pickup.name").value("Lanka Crafts"))
+                .andExpect(jsonPath("$.recipient").isEmpty())
                 .andExpect(jsonPath("$.history[0].status").value("PICKED_UP"))
-                .andExpect(jsonPath("$.history[0].note").value("Collected from front desk"))
+                // notes are other people's: never in the courier's history
+                .andExpect(jsonPath("$.history[0].note").doesNotExist())
                 .andExpect(jsonPath("$.history[0].actorRole").doesNotExist());
 
         ChangeStatusCommand command = sentCommand();
@@ -102,7 +118,8 @@ class CourierStatusUpdateTest extends CourierApiTest {
                 .andExpect(status().isOk());
     }
 
-    // ---- Transitions (409) ----
+    // ---- Transitions (409): task closed → ASSIGNMENT_CLOSED, step not in the task → TASK_STEP_NOT_ALLOWED,
+    // parcel can't move → INVALID_STATUS_TRANSITION ----
 
     @Test
     void skippingAStepIs409AndNothingChanges() throws Exception {
@@ -111,19 +128,84 @@ class CourierStatusUpdateTest extends CourierApiTest {
 
         postStatus(parcel.id(), Map.of("status", "DELIVERED", "recipientName", "Nimal Perera"), courier.cookie())
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.code").value("INVALID_STATUS_TRANSITION"));
+                .andExpect(jsonPath("$.code").value("TASK_STEP_NOT_ALLOWED"));
         verify(delivery, never()).changeStatus(any());
     }
 
     @Test
     void aFinishedParcelCannotChangeAgain() throws Exception {
         Courier courier = registerCourier();
+        // Its only parcel delivered, so the task completed by itself.
         DeliverySnapshot parcel = given(parcel(courier.id(), ParcelStatus.DELIVERED));
 
         postStatus(parcel.id(), Map.of("status", "FAILED", "failureReason", "RECIPIENT_REFUSED"), courier.cookie())
                 .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("ASSIGNMENT_CLOSED"));
+        verify(delivery, never()).changeStatus(any());
+    }
+
+    @Test
+    void aCompletedParcelInATaskThatIsStillOpenCannotChangeAgain() throws Exception {
+        Courier courier = registerCourier();
+        DeliverySnapshot delivered = parcel(courier.id(), ParcelStatus.DELIVERED);
+        givenTask(courier.id(), AssignmentType.DELIVERY, step(delivered, ItemOutcome.DELIVERED),
+                step(parcel(courier.id(), ParcelStatus.AT_BRANCH), ItemOutcome.PENDING));
+
+        postStatus(delivered.id(), Map.of("status", "FAILED", "failureReason", "RECIPIENT_REFUSED"), courier.cookie())
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("TASK_STEP_NOT_ALLOWED"));
+        verify(delivery, never()).changeStatus(any());
+    }
+
+    @Test
+    void aCancelledTaskIs409ClosedBeforeTheStepIsChecked() throws Exception {
+        Courier courier = registerCourier();
+        DeliverySnapshot parcel = parcel(courier.id(), ParcelStatus.CREATED);
+        AssignmentView task = givenTask(courier.id(), AssignmentType.PICKUP, step(parcel, ItemOutcome.PENDING));
+        replaceTask(new AssignmentView(task.id(), task.courierId(), task.type(), AssignmentStatus.CANCELLED,
+                task.originBranch(), task.destinationBranch(), task.scheduledFor(), task.note(), task.assignedAt(),
+                null, null, Instant.now(), task.items(), 2));
+
+        postStatus(parcel.id(), Map.of("status", "PICKED_UP"), courier.cookie())
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("ASSIGNMENT_CLOSED"));
+        mvc.perform(get(BASE + "/{id}", parcel.id()).cookie(courier.cookie()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.task.status").value("CANCELLED"))
+                .andExpect(jsonPath("$.completed").value(false))
+                .andExpect(jsonPath("$.nextStatuses").isEmpty())
+                .andExpect(jsonPath("$.canMarkUnableToCollect").value(false))
+                .andExpect(jsonPath("$.pickup").isEmpty());
+        verify(delivery, never()).changeStatus(any());
+    }
+
+    @Test
+    void loadingAParcelThatIsAtAnotherBranchIs409() throws Exception {
+        Courier courier = registerCourier();
+        // The delivery task leaves from COLOMBO, but the parcel is at the KANDY branch.
+        Instant now = Instant.now();
+        DeliverySnapshot elsewhere = parcel(courier.id(), ParcelStatus.AT_BRANCH, now, now, District.KANDY);
+        givenTask(courier.id(), AssignmentType.DELIVERY, step(elsewhere, ItemOutcome.PENDING));
+
+        mvc.perform(get(BASE + "/{id}", elsewhere.id()).cookie(courier.cookie()))
+                .andExpect(jsonPath("$.nextStatuses").isEmpty());
+        postStatus(elsewhere.id(), Map.of("status", "OUT_FOR_DELIVERY"), courier.cookie())
+                .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("INVALID_STATUS_TRANSITION"));
         verify(delivery, never()).changeStatus(any());
+        verify(assignments, never()).recordOutcome(any());
+    }
+
+    @Test
+    void aConcurrentChangeIs409InsteadOf500() throws Exception {
+        Courier courier = registerCourier();
+        DeliverySnapshot parcel = given(parcel(courier.id(), ParcelStatus.CREATED));
+        when(delivery.changeStatus(any()))
+                .thenThrow(new ObjectOptimisticLockingFailureException(DeliverySnapshot.class, parcel.id()));
+
+        postStatus(parcel.id(), Map.of("status", "PICKED_UP"), courier.cookie())
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("ASSIGNMENT_CHANGED"));
     }
 
     @Test
@@ -138,23 +220,76 @@ class CourierStatusUpdateTest extends CourierApiTest {
                 .andExpect(jsonPath("$.code").value("INVALID_STATUS_TRANSITION"));
     }
 
-    // ---- Known until PR (c) ----
+    // ---- Dispatch task steps ----
 
-    /**
-     * Documents current behaviour, not the wanted one. nextStatuses offers AT_BRANCH after PICKED_UP, but this
-     * endpoint has no branch field, so ChangeStatusCommand rejects the change (branch is required for AT_BRANCH) and
-     * the courier gets a 500. Nothing changes. PR (c) replaces this endpoint with assignment handovers, which send the
-     * branch; delete this test then.
-     */
     @Test
-    void atBranchWithoutABranchIs500AndNothingChanges() throws Exception {
+    void atBranchHandsOverAtTheTasksBranchAndCompletesTheTask() throws Exception {
         Courier courier = registerCourier();
         DeliverySnapshot parcel = given(parcel(courier.id(), ParcelStatus.PICKED_UP));
+        when(delivery.changeStatus(any())).thenReturn(withStatus(parcel, ParcelStatus.AT_BRANCH));
 
-        postStatus(parcel.id(), Map.of("status", "AT_BRANCH"), courier.cookie())
-                .andExpect(status().isInternalServerError())
-                .andExpect(jsonPath("$.code").value("INTERNAL_ERROR"));
+        postStatus(parcel.id(), Map.of("status", "AT_BRANCH", "receivedBy", "  S. Silva "), courier.cookie())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("AT_BRANCH"))
+                .andExpect(jsonPath("$.task.outcome").value("HANDED_OVER"))
+                .andExpect(jsonPath("$.task.receivedBy").value("S. Silva"))
+                .andExpect(jsonPath("$.task.status").value("COMPLETED"))
+                .andExpect(jsonPath("$.completed").value(true))
+                .andExpect(jsonPath("$.completedAt").isNotEmpty())
+                .andExpect(jsonPath("$.pickup").isEmpty())
+                .andExpect(jsonPath("$.to.city").value("Kandy"))
+                .andExpect(jsonPath("$.nextStatuses").isEmpty());
+
+        assertThat(sentCommand().branch()).isEqualTo(District.COLOMBO);
+        ArgumentCaptor<RecordOutcomeCommand> outcome = ArgumentCaptor.forClass(RecordOutcomeCommand.class);
+        verify(assignments).recordOutcome(outcome.capture());
+        assertThat(outcome.getValue().outcome()).isEqualTo(ItemOutcome.HANDED_OVER);
+        assertThat(outcome.getValue().courierId()).isEqualTo(courier.id());
+        assertThat(outcome.getValue().receivedBy()).isEqualTo("S. Silva");
+        verify(assignments).complete(taskOf(parcel.id()).id(), courier.id());
+        assertThat(taskOf(parcel.id()).status()).isEqualTo(AssignmentStatus.COMPLETED);
+    }
+
+    @Test
+    void aFailedDeliveryGoesBackToTheTasksOriginBranch() throws Exception {
+        Courier courier = registerCourier();
+        DeliverySnapshot parcel = given(parcel(courier.id(), ParcelStatus.FAILED));
+        when(delivery.changeStatus(any())).thenReturn(withStatus(parcel, ParcelStatus.AT_BRANCH));
+
+        postStatus(parcel.id(), Map.of("status", "AT_BRANCH", "note", "Back at the hub", "receivedBy", "N. Fernando"),
+                courier.cookie())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.task.outcome").value("RETURNED"))
+                .andExpect(jsonPath("$.task.receivedBy").value("N. Fernando"))
+                .andExpect(jsonPath("$.completed").value(true));
+
+        assertThat(sentCommand().branch()).isEqualTo(District.COLOMBO);
+    }
+
+    @Test
+    void aStepTheTaskDoesNotHaveIs409() throws Exception {
+        Courier courier = registerCourier();
+        // A delivery task waiting at the branch: the parcel status allows IN_TRANSIT, the task does not.
+        DeliverySnapshot parcel = given(parcel(courier.id(), ParcelStatus.AT_BRANCH));
+
+        postStatus(parcel.id(), Map.of("status", "IN_TRANSIT"), courier.cookie())
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("TASK_STEP_NOT_ALLOWED"));
         verify(delivery, never()).changeStatus(any());
+        verify(assignments, never()).recordOutcome(any());
+    }
+
+    @Test
+    void theSameStepTwiceIsRefusedTheSecondTime() throws Exception {
+        Courier courier = registerCourier();
+        DeliverySnapshot parcel = given(parcel(courier.id(), ParcelStatus.CREATED));
+        when(delivery.changeStatus(any())).thenReturn(withStatus(parcel, ParcelStatus.PICKED_UP));
+
+        postStatus(parcel.id(), Map.of("status", "PICKED_UP"), courier.cookie()).andExpect(status().isOk());
+        postStatus(parcel.id(), Map.of("status", "PICKED_UP"), courier.cookie())
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("TASK_STEP_NOT_ALLOWED"));
+        verify(delivery).changeStatus(any());
     }
 
     // ---- Request rules (400) ----
@@ -193,11 +328,27 @@ class CourierStatusUpdateTest extends CourierApiTest {
     }
 
     @Test
+    void handOverAndReturnNeedWhoReceivedIt() throws Exception {
+        expectFieldError(ParcelStatus.PICKED_UP, Map.of("status", "AT_BRANCH"),
+                "receivedBy", "Enter the name of the person at the branch who received the parcel.");
+        expectFieldError(ParcelStatus.FAILED, Map.of("status", "AT_BRANCH", "receivedBy", " S "),
+                "receivedBy", "Enter the name of the person at the branch who received the parcel.");
+    }
+
+    @Test
+    void receivedByIsOnlyForTheBranch() throws Exception {
+        expectFieldError(ParcelStatus.CREATED, Map.of("status", "PICKED_UP", "receivedBy", "S. Silva"),
+                "receivedBy", "Only when you hand the parcel over at a branch.");
+    }
+
+    @Test
     void tooLongNoteOrNameIs400() throws Exception {
         expectFieldError(ParcelStatus.CREATED, Map.of("status", "PICKED_UP", "note", "x".repeat(501)),
                 "note", "Keep the note under 500 characters.");
         expectFieldError(ParcelStatus.OUT_FOR_DELIVERY, Map.of("status", "DELIVERED", "recipientName", "x".repeat(101)),
                 "recipientName", "Enter the name of the person who received the parcel.");
+        expectFieldError(ParcelStatus.PICKED_UP, Map.of("status", "AT_BRANCH", "receivedBy", "x".repeat(101)),
+                "receivedBy", "Enter the name of the person at the branch who received the parcel.");
     }
 
     @Test
