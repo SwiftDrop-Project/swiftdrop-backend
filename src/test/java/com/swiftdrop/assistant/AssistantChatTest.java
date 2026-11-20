@@ -183,6 +183,57 @@ class AssistantChatTest extends IntegrationTest {
                         org.hamcrest.Matchers.containsString("only help with SwiftDrop deliveries")));
     }
 
+    // ---- Admin reports ----
+
+    @Test
+    void anAdminGetsAWeeklyReportFromTheApis() throws Exception {
+        Cookie admin = loginAsAdmin();
+        book(customer, "AMPARA", "BATTICALOA");
+        String today = java.time.LocalDate.now(java.time.ZoneId.of("Asia/Colombo")).toString();
+
+        JsonNode answer = read(ask(CHAT_AS_USER, admin, "Give me this week's report"));
+
+        JsonNode report = answer.path("cards").path(0);
+        assertThat(report.path("type").asString("")).isEqualTo("REPORT");
+        JsonNode data = report.path("data");
+        assertThat(data.path("period").asString("")).isEqualTo("WEEKLY");
+        assertThat(data.path("countedTo").asString("")).isEqualTo(today);
+        assertThat(data.path("booked").asLong()).isPositive();
+        assertThat(data.path("perDay").size()).isBetween(1, 7);
+        assertThat(data.path("statusNow").size()).isEqualTo(7);
+        assertThat(data.path("accountsNow").path("customers").asLong()).isPositive();
+        assertThat(answer.path("reply").asString(""))
+                .startsWith("Weekly report for ")
+                .contains(data.path("booked").asLong() + " parcels booked", "Compared with");
+    }
+
+    @Test
+    void anAdminIsAskedWhichReportAndTheAnswerGivesIt() throws Exception {
+        Cookie admin = loginAsAdmin();
+
+        String question = read(ask(CHAT_AS_USER, admin, "Can I get a report?")).path("reply").asString("");
+        assertThat(question).isEqualTo("Which report would you like: daily, weekly or monthly?");
+
+        JsonNode answer = read(ask(CHAT_AS_USER, admin, "Can I get a report?", question, "monthly"));
+        assertThat(answer.path("cards").path(0).path("data").path("period").asString("")).isEqualTo("MONTHLY");
+
+        JsonNode yesterday = read(ask(CHAT_AS_USER, admin, "Summary for yesterday"));
+        assertThat(yesterday.path("cards").path(0).path("data").path("from").asString("")).isEqualTo(
+                java.time.LocalDate.now(java.time.ZoneId.of("Asia/Colombo")).minusDays(1).toString());
+    }
+
+    @Test
+    void onlyAdminsGetReports() throws Exception {
+        ask(CHAT_AS_USER, customer, "Give me this week's report")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cards.length()").value(0))
+                .andExpect(jsonPath("$.reply").value(org.hamcrest.Matchers.not(
+                        org.hamcrest.Matchers.containsString("Weekly report"))));
+        // The public chat ignores the admin's cookie.
+        ask(CHAT, loginAsAdmin(), "Give me this week's report")
+                .andExpect(jsonPath("$.cards.length()").value(0));
+    }
+
     // ---- Input rules and limits ----
 
     @Test

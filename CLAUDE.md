@@ -19,7 +19,7 @@ Every direct sub-package of `com.swiftdrop` is a module. `SwiftdropBackendApplic
 | `delivery` | DeliveryApi, DeliveryOutboxApi, OutboxMessage, DeliverySnapshot, DeliveryContact, CreateDeliveryCommand, ChangeStatusCommand, ParcelStatus (incl. `AT_BRANCH`; branch = `District`), ParcelStatusEntry, ParcelStatusChanged, FailureReason, ProofPhoto, ProofPhotoRef, DeliveryStats | `delivery` (incl. `outbox_events`) | Pasindu |
 | `dispatch` | AssignmentApi (courier-facing), AssignmentView, AssignmentItemView, RecordOutcomeCommand, AssignmentType, AssignmentStatus, ItemOutcome, TaskProblem | `dispatch` (`courier_assignments`, `assignment_items`, `pickup_queue`) | D.M.A.I. Disanayaka (WP8) |
 | `reporting` | - | none | TBD |
-| `tracking` | TrackingApi, ParcelTracking (read-only lookups for the assistant; plus endpoints, WebSocket/STOMP and a RabbitMQ listener) | `tracking` (`parcel_index`) | D.M.A.I. Disanayaka (WP8) |
+| `tracking` | TrackingApi, ParcelTracking, ParcelBreakdown (read-only lookups for the assistant; plus endpoints, WebSocket/STOMP and a RabbitMQ listener) | `tracking` (`parcel_index`) | D.M.A.I. Disanayaka (WP8) |
 | `assistant` | - (endpoints only: the AI chat and the MCP server) | none | D.M.A.I. Disanayaka |
 | `notifications` | NotificationsApi, AccountEmail | `notifications` | TBD |
 | `webhooks` | - | `webhooks` (`subscriptions`, `deliveries`) | chanuka (WP6) |
@@ -51,7 +51,7 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
 - Current dependencies: identity -> notifications, shared; merchants -> identity, shared; delivery -> pricing, shared;
   dispatch -> delivery, identity, shared; tracking -> delivery, shared; courier -> delivery, dispatch, shared;
   pricing -> shared; infrastructure -> shared; webhooks -> delivery, merchants, shared;
-  assistant -> tracking, pricing, shared. Nothing depends on courier, assistant or
+  assistant -> tracking, pricing, delivery, identity, shared. Nothing depends on courier, assistant or
   webhooks.
 - webhooks (contract in API.md "Webhooks", being built): reads `ParcelStatusChanged` from `webhooks.q` (declared by
   infrastructure; never declare it again with other arguments), stores one delivery row per event and subscription,
@@ -79,8 +79,9 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
 - assistant (API.md "Assistant"): `POST /assistant/chat` (public), `/assistant/chat/me` (logged in) and an MCP
   server at `POST /mcp` (public, JSON-RPC; the public data tools, no Gemini).
   `RulesChatProvider` understands the question and gets the data through tools (`internal/tools`) that call
-  `TrackingApi` and `PricingApi`. Gemini (`GeminiAnswerWriter`; `ASSISTANT_PROVIDER=gemini`, `GEMINI_API_KEY` only in
-  `.env`, never logged) only rewrites answers that have data, with no tools; an answer with an amount or tracking
+  `TrackingApi` and `PricingApi`; admins also get daily/weekly/monthly service reports (`ServiceReportTool`, from
+  `DeliveryApi.stats`/`countByStatus`, `TrackingApi.breakdown` and `IdentityApi.getUserRoleCounts`; never on MCP).
+  Gemini (`GeminiAnswerWriter`; `ASSISTANT_PROVIDER=gemini`, `GEMINI_API_KEY` only in `.env`, never logged) only rewrites answers that have data, with no tools; an answer with a number or tracking
   number not in the data falls back to the plain one. Tests always use the rules provider.
 - courier (one API, `/courier/deliveries`) shows the parcels of the courier's dispatch tasks (`AssignmentApi`) one
   by one, even when a dispatcher grouped several in one task. On each status change it calls

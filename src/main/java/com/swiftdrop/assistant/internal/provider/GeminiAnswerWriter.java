@@ -20,15 +20,17 @@ import tools.jackson.databind.node.ObjectNode;
  * its APIs (tracking, pricing); Gemini gets the question, that data and a draft answer made from it, and rewrites the
  * answer in clear, friendly sentences. It has no tools and nothing else to go on.
  *
- * <p>The answer is checked before it is used: every amount (Rs.) and tracking number in it must appear in the data,
- * otherwise the draft is used instead ({@link ProviderUnavailableException}).
+ * <p>The answer is checked before it is used: every number in it (amounts, counts, percentages, dates) and every
+ * tracking number must appear in the data or the draft, otherwise the draft is used instead
+ * ({@link ProviderUnavailableException}).
  */
 @Component
 public class GeminiAnswerWriter {
 
     static final String NAME = "gemini";
 
-    private static final Pattern AMOUNT = Pattern.compile("Rs\\.?\\s*([\\d,]+(?:\\.\\d+)?)", Pattern.CASE_INSENSITIVE);
+    /** A number: 3, 1,250, 472.60 (a comma that ends it, as in "3, 4", is left out). */
+    private static final Pattern NUMBER = Pattern.compile("(?<![\\d.])\\d+(?:,\\d{3})*(?:\\.\\d+)?");
     private static final Pattern TRACKING_NUMBER =
             Pattern.compile("\\bSD\\s*\\d{4}\\s*\\d{4}\\s*\\d{2}\\b", Pattern.CASE_INSENSITIVE);
 
@@ -81,7 +83,7 @@ public class GeminiAnswerWriter {
                     + candidate.path("finishReason").asString("no candidate") + ")");
         }
         String facts = normalise(data + " " + draft);
-        if (!onlyKnown(AMOUNT, answer, facts) || !onlyKnown(TRACKING_NUMBER, answer, facts)) {
+        if (!onlyKnownNumbers(answer, data + " " + draft) || !onlyKnown(TRACKING_NUMBER, answer, facts)) {
             throw new ProviderUnavailableException("Gemini's answer used a number that isn't in the data");
         }
         return answer;
@@ -91,15 +93,23 @@ public class GeminiAnswerWriter {
     private static boolean onlyKnown(Pattern pattern, String answer, String facts) {
         Matcher matcher = pattern.matcher(answer);
         while (matcher.find()) {
-            String value = matcher.groupCount() > 0 ? matcher.group(1) : matcher.group();
-            String plain = normalise(value);
-            // 472.60 in the answer is 472.6 in the JSON data.
-            String trimmed = plain.contains(".") ? plain.replaceAll("0+$", "").replaceAll("\\.$", "") : plain;
-            if (!facts.contains(plain) && !facts.contains(trimmed)) {
+            if (!facts.contains(normalise(matcher.group()))) {
                 return false;
             }
         }
         return true;
+    }
+
+    /** True when every number in the answer is also a number in the facts (472.60 matches 472.6, 1,250 matches 1250). */
+    private static boolean onlyKnownNumbers(String answer, String facts) {
+        java.util.Set<String> known = new java.util.HashSet<>();
+        NUMBER.matcher(facts).results().forEach(m -> known.add(number(m.group())));
+        return NUMBER.matcher(answer).results().allMatch(m -> known.contains(number(m.group())));
+    }
+
+    private static String number(String text) {
+        String plain = text.replace(",", "");
+        return plain.contains(".") ? plain.replaceAll("0+$", "").replaceAll("\\.$", "") : plain;
     }
 
     private static String normalise(String text) {

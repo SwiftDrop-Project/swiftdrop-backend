@@ -41,7 +41,7 @@ architecture diagram). `SwiftdropBackendApplication` stays at the root.
 | `notifications` | Emails (and later SMS) to users | `notifications` | TBD | Placeholder |
 | `webhooks` | Merchant webhook subscriptions and signed, retried delivery of parcel events (API.md "Webhooks") | `webhooks` | chanuka (WP6) | Contract ready (implementation next) |
 | `outbox` | Relays delivery's outbox events to RabbitMQ | - | TBD | Placeholder |
-| `assistant` | AI delivery assistant: a chatbot answering "Where is my parcel?" and "How much to send 2 kg to Kandy?" only from the data of the tracking and pricing APIs; Google Gemini only rewrites those answers clearly. The same data tools are an MCP server at `/api/v1/mcp` (API.md "Assistant") | - | D.M.A.I. Disanayaka | Built |
+| `assistant` | AI delivery assistant: a chatbot answering "Where is my parcel?" and "How much to send 2 kg to Kandy?" only from the data of the tracking and pricing APIs, and daily, weekly and monthly service reports for admins (delivery, tracking and identity data); Google Gemini only rewrites those answers clearly. The same data tools are an MCP server at `/api/v1/mcp` (API.md "Assistant") | - | D.M.A.I. Disanayaka | Built |
 | `courier` | The courier's parcels, one card each (a dispatcher may group several in one task): today's pickups and deliveries, status updates with branch handover and return, Unable to Collect, completed-parcel history; tasks complete by themselves (through `AssignmentApi` and `DeliveryApi`) | - | Kalpani | Built (on the real `AssignmentApi` and `DeliveryApi`) |
 
 Each module's `package-info.java` describes its purpose, owner, schema and the events it publishes and consumes.

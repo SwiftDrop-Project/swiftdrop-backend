@@ -7,6 +7,7 @@ import java.math.BigDecimal;
 import java.text.DecimalFormat;
 import java.text.DecimalFormatSymbols;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -25,6 +26,9 @@ public final class Words {
 
     private static final DateTimeFormatter WHEN =
             DateTimeFormatter.ofPattern("d MMM yyyy, h:mm a", Locale.ENGLISH).withZone(SRI_LANKA);
+
+    private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH);
+    private static final DateTimeFormatter SHORT_DAY = DateTimeFormatter.ofPattern("EEE d MMM", Locale.ENGLISH);
 
     /** District names, longest first so "Nuwara Eliya" wins over shorter matches. */
     private static final List<District> BY_NAME_LENGTH = Arrays.stream(District.values())
@@ -52,6 +56,16 @@ public final class Words {
     /** Sri Lankan time, e.g. "14 Nov 2026, 10:56 PM". */
     public static String when(Instant instant) {
         return instant == null ? null : WHEN.format(instant);
+    }
+
+    /** "16 Nov 2026" */
+    public static String day(LocalDate date) {
+        return DAY.format(date);
+    }
+
+    /** "Mon 16 Nov" */
+    public static String shortDay(LocalDate date) {
+        return SHORT_DAY.format(date);
     }
 
     /** A parcel status as a person would say it. */

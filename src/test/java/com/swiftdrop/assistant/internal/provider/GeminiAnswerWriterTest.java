@@ -70,6 +70,22 @@ class GeminiAnswerWriterTest {
     }
 
     @Test
+    void anyNumberThatIsNotInTheDataIsRejected() {
+        List<AssistantCard> report = List.of(new AssistantCard("REPORT", Map.of(
+                "booked", 1250, "delivered", 40, "failed", 2, "successRate", new BigDecimal("95.2"),
+                "from", "2026-11-16")));
+        String reportDraft = "Weekly report for 16 Nov 2026 to 22 Nov 2026: 1250 parcels booked.";
+
+        geminiSays("This week 1,250 parcels were booked and 40 delivered, a 95.20% success rate.");
+        assertThat(writer.write("Weekly report", reportDraft, report)).contains("1,250");
+
+        // A total Gemini worked out itself (40 + 2) is not in the data.
+        geminiSays("This week 1,250 parcels were booked and 42 deliveries finished.");
+        assertThatThrownBy(() -> writer.write("Weekly report", reportDraft, report))
+                .isInstanceOf(ProviderUnavailableException.class);
+    }
+
+    @Test
     void noAnswerIsAnError() {
         answer = "{\"promptFeedback\":{\"blockReason\":\"SAFETY\"}}";
 

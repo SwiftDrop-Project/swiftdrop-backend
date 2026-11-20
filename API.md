@@ -1449,17 +1449,19 @@ status is present, 0 when none.
 
 ## Assistant (AI delivery assistant)
 
-A chatbot that answers questions such as "Where is my parcel?" or "How much to send 2 kg to Kandy?". It never
+A chatbot that answers questions such as "Where is my parcel?" or "How much to send 2 kg to Kandy?", and gives
+admins daily, weekly and monthly service reports ("This week's report"). It never
 invents facts: every answer is built only from the data of SwiftDrop's own APIs. Each message is answered in two
 steps:
 
-1. **Data.** SwiftDrop's code understands the question (tracking numbers, price details, "my parcels", districts),
+1. **Data.** SwiftDrop's code understands the question (tracking numbers, price details, "my parcels", districts,
+   reports for admins),
    calls the APIs below and builds a plain answer and cards from their data. If something is missing (a district,
    the weight), it asks for it.
 2. **Wording.** With `ASSISTANT_PROVIDER=gemini` and `GEMINI_API_KEY` set, Google Gemini rewrites an answer that has
    data in clear, friendly sentences (`provider: "gemini"`). Gemini gets only the question, the data and the plain
-   answer; it has no tools and can't fetch anything. An answer with an amount or tracking number that isn't in the
-   data is thrown away. Without Gemini, when it fails or times out, and for answers without data, the plain answer is
+   answer; it has no tools and can't fetch anything. An answer with a number (amount, count, percentage, date) or a
+   tracking number that isn't in the data or the plain answer is thrown away. Without Gemini, when it fails or times out, and for answers without data, the plain answer is
    sent (`provider: "rules"`).
 
 The API key stays on the server and is never sent to the browser. The same data tools are also offered to other AI
@@ -1476,14 +1478,24 @@ logged-in customer or merchant, their own parcels. It never sees names, phone nu
 | `estimate_price` | anyone | `pickupDistrict`, `dropOffDistrict` (district codes), `weightKg` (0.01-50), optional `lengthCm`, `widthCm`, `heightCm` (1-300, all three or none) | `POST /pricing/estimate` |
 | `list_districts` | anyone | none | `GET /meta/districts` |
 | `my_parcels` | logged-in CUSTOMER or MERCHANT (`/assistant/chat/me`) | optional `status` | `GET /tracking/mine` (their latest 10) |
+| `service_report` | logged-in ADMIN (`/assistant/chat/me`); never on MCP | `period` (`DAILY`, `WEEKLY`, `MONTHLY`), optional `date` (yyyy-MM-dd, any day in the period; today when left out) | `DeliveryApi.stats` (booked, delivered, failed per day; the same figures as the admin dashboard), `DeliveryApi.countByStatus`, `TrackingApi.breakdown` (districts and failure reasons from `tracking.parcel_index`, like `/admin/tracking/parcels`), `IdentityApi.getUserRoleCounts` |
 
 The data is exactly what these endpoints return: the assistant reads it through the same services
-(`TrackingApi`, `PricingApi`), inside the backend, so the same rules, limits and privacy apply.
+(`TrackingApi`, `PricingApi`, `DeliveryApi`, `IdentityApi`), inside the backend, so the same rules, limits and
+privacy apply.
+
+**Reports (admins).** An admin asks in words: "today's report", "report for yesterday", "this week's report",
+"summary of last month", "monthly report for October", "daily report for 2026-11-10". Without a period the assistant
+asks "Which report would you like: daily, weekly or monthly?". Days are Sri Lanka days; a week runs Monday to Sunday
+and a month is a calendar month. A period that hasn't ended is counted up to today (`partial: true`) and compared with
+the same days of the period before (a month never borrows days of the next month). A period that starts after today
+is refused in the reply. Other roles asking for a report get the normal help answer.
 
 ### `POST /assistant/chat` (public) and `POST /assistant/chat/me` (logged in)
 
 Same body and response. `/assistant/chat` ignores the login cookie (so it never lists anyone's parcels);
-`/assistant/chat/me` needs a login and adds `my_parcels` for customers and merchants. The client keeps the
+`/assistant/chat/me` needs a login and adds `my_parcels` for customers and merchants and `service_report` for
+admins. The client keeps the
 conversation and sends it each time, oldest first; the last message must be the user's.
 
 ```json
@@ -1525,6 +1537,7 @@ conversation and sends it each time, oldest first; the last message must be the 
 | `TRACKING` | `trackingNumber`, `status`, `statusText`, `from`, `to` (town, district), `currentBranch`, `lastUpdate` (text), `updatedAt` |
 | `PARCEL_LIST` | `parcels`: up to 10 rows shaped like `TRACKING` |
 | `PRICE` | as above; `status` is `COMPLETE`, `PROVISIONAL` (no size given: pickup and delivery charges not included) or `MANUAL_QUOTE` (`total` null) |
+| `REPORT` | `period`, `title`, `from`, `to`, `countedTo`, `partial`, `rangeText`, `booked`, `delivered`, `failed`, `successRate` (delivered / (delivered + failed) in %, one decimal, null when none finished), `previous` (`from`, `to`, `text`, the same four figures), `changes` (`booked`, `delivered`, `failed`: `difference`, `percent` or null), `perDay` and `busiestDay` (weekly and monthly only), `topPickupDistricts` / `topDropOffDistricts` (top 5 `district`, `count`), `failureReasons` (`reason`, `count`; parcels that failed in the period and are still FAILED), `statusNow` (`status`, `label`, `count`, all parcels now), `accountsNow` (`total`, `customers`, `merchants`, `couriers`, `dispatchers`, `pendingMerchants`) |
 
 Rules and errors:
 - 1-20 messages; `role` is `user` or `assistant`; `text` not blank, at most 4000 characters; the last message is the

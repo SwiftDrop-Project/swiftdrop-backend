@@ -3,9 +3,11 @@ package com.swiftdrop.assistant.internal.provider;
 import com.swiftdrop.assistant.internal.tools.AssistantCard;
 import com.swiftdrop.assistant.internal.tools.AssistantTools;
 import com.swiftdrop.assistant.internal.tools.Caller;
+import com.swiftdrop.assistant.internal.tools.ServiceReportTool;
 import com.swiftdrop.assistant.internal.tools.ToolResult;
 import com.swiftdrop.assistant.internal.tools.Words;
 import com.swiftdrop.shared.reference.District;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -66,6 +68,11 @@ public class RulesChatProvider {
         List<String> numbers = TRACKING_NUMBER.matcher(latest).results().map(m -> m.group()).limit(3).toList();
         if (!numbers.isEmpty()) {
             return new ChatReply(track(numbers, caller, cards), cards, NAME);
+        }
+        if (isAdmin(caller) && (ReportRequest.isReport(latest)
+                || (ReportRequest.ASK_PERIOD.equals(previousAnswer(conversation))
+                        && ReportRequest.namesPeriod(latest)))) {
+            return new ChatReply(report(latest, caller, cards), cards, NAME);
         }
         String priceText = priceConversation(conversation);
         if (priceText != null) {
@@ -251,6 +258,73 @@ public class RulesChatProvider {
                 + " parcels:\n") + lines;
     }
 
+    // ---- Admin reports ----
+
+    private static boolean isAdmin(Caller caller) {
+        return caller.loggedIn() && "ADMIN".equals(caller.role());
+    }
+
+    @SuppressWarnings("unchecked")
+    private String report(String latest, Caller caller, List<AssistantCard> cards) {
+        ReportRequest request = ReportRequest.read(latest, LocalDate.now(Words.SRI_LANKA));
+        if (request.period() == null) {
+            return ReportRequest.ASK_PERIOD;
+        }
+        ToolResult result = tools.run(ServiceReportTool.NAME,
+                args(Map.of("period", request.period().name(), "date", request.day().toString())), caller);
+        Map<String, Object> data = result.data();
+        if (result.error()) {
+            return String.valueOf(data.get("error"));
+        }
+        cards.add(result.card());
+
+        StringBuilder text = new StringBuilder();
+        text.append(data.get("title")).append(" for ").append(data.get("rangeText")).append(": ")
+                .append(data.get("booked")).append(" parcels booked, ").append(data.get("delivered"))
+                .append(" delivered and ").append(data.get("failed")).append(" failed");
+        if (data.get("successRate") != null) {
+            text.append(", a ").append(data.get("successRate")).append("% delivery success rate");
+        }
+        text.append('.');
+
+        Map<String, Object> previous = (Map<String, Object>) data.get("previous");
+        Map<String, Map<String, Object>> changes = (Map<String, Map<String, Object>>) data.get("changes");
+        text.append(" Compared with ").append(previous.get("text")).append(": bookings ")
+                .append(changeText(changes.get("booked"))).append(", deliveries ")
+                .append(changeText(changes.get("delivered"))).append(", failures ")
+                .append(changeText(changes.get("failed"))).append('.');
+
+        Map<String, Object> busiest = (Map<String, Object>) data.get("busiestDay");
+        if (busiest != null) {
+            text.append(" The busiest day was ").append(busiest.get("dateText")).append(" with ")
+                    .append(busiest.get("booked")).append(" bookings.");
+        }
+        List<Map<String, Object>> pickups = (List<Map<String, Object>>) data.get("topPickupDistricts");
+        if (!pickups.isEmpty()) {
+            text.append(" Most parcels were collected in ").append(pickups.getFirst().get("district")).append(" (")
+                    .append(pickups.getFirst().get("count")).append(").");
+        }
+        List<Map<String, Object>> reasons = (List<Map<String, Object>>) data.get("failureReasons");
+        if (!reasons.isEmpty()) {
+            text.append(" The most common failure reason: ").append(reasons.getFirst().get("reason")).append(" (")
+                    .append(reasons.getFirst().get("count")).append(").");
+        }
+        return text.toString();
+    }
+
+    private static String changeText(Map<String, Object> change) {
+        long difference = ((Number) change.get("difference")).longValue();
+        if (difference == 0) {
+            return "unchanged";
+        }
+        String text = (difference > 0 ? "up " : "down ") + Math.abs(difference);
+        Object percent = change.get("percent");
+        if (percent instanceof java.math.BigDecimal value) {
+            text += " (" + value.abs().stripTrailingZeros().toPlainString() + "%)";
+        }
+        return text;
+    }
+
     // ---- Districts and help ----
 
     private static String districts() {
@@ -262,6 +336,11 @@ public class RulesChatProvider {
     private static String help(Caller caller, String latest) {
         String greeting = latest.trim().matches("(?i)(hi|hello|hey|good (morning|afternoon|evening))\\W*")
                 ? "Hello! " : "I can only help with SwiftDrop deliveries. ";
+        if (isAdmin(caller)) {
+            return greeting + "I can give you daily, weekly and monthly service reports, track a parcel from its "
+                    + "tracking number, estimate a delivery price and list the districts we deliver to. Try: "
+                    + "\"This week's report\" or \"Monthly report for last month\".";
+        }
         return greeting + "I can track a parcel from its tracking number, estimate a delivery price, list the "
                 + "districts we deliver to" + (caller.ownsParcels() ? ", and show your parcels" : "")
                 + ". Try: \"How much to send 2 kg from Colombo to Kandy?\"";
