@@ -44,4 +44,14 @@ class ReportRequestTest {
                 LocalDate.of(2026, 11, 10)));
         assertThat(read("give me a report")).isEqualTo(new ReportRequest(null, TODAY));
     }
+
+    @Test
+    void wordsThatStartLikeMonthsAreNotMonths() {
+        assertThat(read("May I see a separate report on the market?")).isEqualTo(new ReportRequest(null, TODAY));
+        assertThat(ReportRequest.hasPeriod("busiest day")).isFalse();
+        assertThat(read("report for May 2026")).isEqualTo(new ReportRequest(Period.MONTHLY,
+                LocalDate.of(2026, 5, 1)));
+        assertThat(read("monthly report for September")).isEqualTo(new ReportRequest(Period.MONTHLY,
+                LocalDate.of(2026, 9, 1)));
+    }
 }

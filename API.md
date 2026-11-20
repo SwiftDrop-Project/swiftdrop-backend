@@ -1450,7 +1450,9 @@ status is present, 0 when none.
 ## Assistant (AI delivery assistant)
 
 A chatbot that answers questions such as "Where is my parcel?" or "How much to send 2 kg to Kandy?", and gives
-admins daily, weekly and monthly service reports ("This week's report"). It never
+admins daily, weekly and monthly service reports ("This week's report") and answers to their other questions about
+the service ("How many parcels are out for delivery?", "Success rate this month?", "Show failed parcels going to
+Kandy"). It never
 invents facts: every answer is built only from the data of SwiftDrop's own APIs. Each message is answered in two
 steps:
 
@@ -1479,6 +1481,9 @@ logged-in customer or merchant, their own parcels. It never sees names, phone nu
 | `list_districts` | anyone | none | `GET /meta/districts` |
 | `my_parcels` | logged-in CUSTOMER or MERCHANT (`/assistant/chat/me`) | optional `status` | `GET /tracking/mine` (their latest 10) |
 | `service_report` | logged-in ADMIN (`/assistant/chat/me`); never on MCP | `period` (`DAILY`, `WEEKLY`, `MONTHLY`), optional `date` (yyyy-MM-dd, any day in the period; today when left out) | `DeliveryApi.stats` (booked, delivered, failed per day; the same figures as the admin dashboard), `DeliveryApi.countByStatus`, `TrackingApi.breakdown` (districts and failure reasons from `tracking.parcel_index`, like `/admin/tracking/parcels`), `IdentityApi.getUserRoleCounts` |
+| `parcel_counts` | ADMIN | none | `DeliveryApi.countByStatus` (parcels in each status now) |
+| `account_counts` | ADMIN | none | `IdentityApi.getUserRoleCounts` (accounts per role, merchants waiting for approval; counts only) |
+| `find_parcels` | ADMIN | optional `status`, `pickupDistrict`, `dropOffDistrict`, `branch` (parcels at that branch now), `bookedFrom`, `bookedTo` (yyyy-MM-dd) | `DeliveryApi.search` (the admin All Parcels search) or `DeliveryApi.findAtBranch`; how many match and the newest 10, public view only (no names, phones, addresses or amounts) |
 
 The data is exactly what these endpoints return: the assistant reads it through the same services
 (`TrackingApi`, `PricingApi`, `DeliveryApi`, `IdentityApi`), inside the backend, so the same rules, limits and
@@ -1490,6 +1495,18 @@ asks "Which report would you like: daily, weekly or monthly?". Days are Sri Lank
 and a month is a calendar month. A period that hasn't ended is counted up to today (`partial: true`) and compared with
 the same days of the period before (a month never borrows days of the next month). A period that starts after today
 is refused in the reply. Other roles asking for a report get the normal help answer.
+
+**Other admin questions.** Answered from one of the admin tools above:
+
+| Question | Tool | Card |
+|---|---|---|
+| "How many parcels are out for delivery / waiting for pickup / at a branch?", "How many parcels do we have?" | `parcel_counts` | `FACTS` |
+| "How many couriers do we have?", "Any merchants waiting for approval?" | `account_counts` | `FACTS` |
+| "How many parcels were booked / delivered / failed yesterday?", "Success rate this month?", "Busiest day this week?", "Top districts last month?", "Why did deliveries fail this week?" (no period: today; busiest day: this week) | `service_report` | `FACTS` |
+| "Show failed parcels going to Kandy", "Parcels at the Colombo branch", "How many parcels from Galle are in transit?", "Which parcels were booked today?" | `find_parcels` | `PARCEL_LIST` with `total` and `filters` |
+
+A district after "from" is the pickup district, one before "branch" is the branch, any other is the drop-off
+district; a period in a search filters by booking day. The reply always says which filters were used.
 
 ### `POST /assistant/chat` (public) and `POST /assistant/chat/me` (logged in)
 
@@ -1535,7 +1552,8 @@ conversation and sends it each time, oldest first; the last message must be the 
 | `type` | `data` |
 |---|---|
 | `TRACKING` | `trackingNumber`, `status`, `statusText`, `from`, `to` (town, district), `currentBranch`, `lastUpdate` (text), `updatedAt` |
-| `PARCEL_LIST` | `parcels`: up to 10 rows shaped like `TRACKING` |
+| `PARCEL_LIST` | `parcels`: up to 10 rows shaped like `TRACKING`; an admin's search adds `total` (how many match) and `filters` (in words) |
+| `FACTS` | `title`, `subtitle` (the period, or null for figures of right now), `facts`: `label`, `value` (text) |
 | `PRICE` | as above; `status` is `COMPLETE`, `PROVISIONAL` (no size given: pickup and delivery charges not included) or `MANUAL_QUOTE` (`total` null) |
 | `REPORT` | `period`, `title`, `from`, `to`, `countedTo`, `partial`, `rangeText`, `booked`, `delivered`, `failed`, `successRate` (delivered / (delivered + failed) in %, one decimal, null when none finished), `previous` (`from`, `to`, `text`, the same four figures), `changes` (`booked`, `delivered`, `failed`: `difference`, `percent` or null), `perDay` and `busiestDay` (weekly and monthly only), `topPickupDistricts` / `topDropOffDistricts` (top 5 `district`, `count`), `failureReasons` (`reason`, `count`; parcels that failed in the period and are still FAILED), `statusNow` (`status`, `label`, `count`, all parcels now), `accountsNow` (`total`, `customers`, `merchants`, `couriers`, `dispatchers`, `pendingMerchants`) |
 

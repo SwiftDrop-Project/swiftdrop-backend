@@ -51,16 +51,26 @@ public class ServiceReportTool implements AssistantTool {
             this.title = title;
             this.previousText = previousText;
         }
+
+        /** The first day of the period that contains {@code day}: the day, its Monday or the 1st of its month. */
+        public LocalDate start(LocalDate day) {
+            return switch (this) {
+                case DAILY -> day;
+                case WEEKLY -> day.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+                case MONTHLY -> day.withDayOfMonth(1);
+            };
+        }
+
+        /** The last day of the period that contains {@code day}. */
+        public LocalDate end(LocalDate day) {
+            return switch (this) {
+                case DAILY -> day;
+                case WEEKLY -> start(day).plusDays(6);
+                case MONTHLY -> day.with(TemporalAdjusters.lastDayOfMonth());
+            };
+        }
     }
 
-    private static final Map<ParcelStatus, String> STATUS_LABEL = Map.of(
-            ParcelStatus.CREATED, "Waiting for pickup",
-            ParcelStatus.PICKED_UP, "Picked up",
-            ParcelStatus.AT_BRANCH, "At a branch",
-            ParcelStatus.IN_TRANSIT, "In transit",
-            ParcelStatus.OUT_FOR_DELIVERY, "Out for delivery",
-            ParcelStatus.DELIVERED, "Delivered",
-            ParcelStatus.FAILED, "Failed delivery");
     private static final int TOP = 5;
 
     private final DeliveryApi deliveries;
@@ -110,7 +120,7 @@ public class ServiceReportTool implements AssistantTool {
 
     @Override
     public boolean availableTo(Caller caller) {
-        return caller.loggedIn() && "ADMIN".equals(caller.role());
+        return caller.isAdmin();
     }
 
     @Override
@@ -138,16 +148,8 @@ public class ServiceReportTool implements AssistantTool {
 
     /** The report of the period that contains {@code day}, or null when it starts after today. */
     Map<String, Object> report(Period period, LocalDate day, LocalDate today) {
-        LocalDate from = switch (period) {
-            case DAILY -> day;
-            case WEEKLY -> day.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
-            case MONTHLY -> day.withDayOfMonth(1);
-        };
-        LocalDate to = switch (period) {
-            case DAILY -> day;
-            case WEEKLY -> from.plusDays(6);
-            case MONTHLY -> day.with(TemporalAdjusters.lastDayOfMonth());
-        };
+        LocalDate from = period.start(day);
+        LocalDate to = period.end(day);
         if (from.isAfter(today)) {
             return null;
         }
@@ -224,7 +226,7 @@ public class ServiceReportTool implements AssistantTool {
         List<Map<String, Object>> statusNow = new ArrayList<>();
         Map<ParcelStatus, Long> counts = deliveries.countByStatus();
         for (ParcelStatus status : ParcelStatus.values()) {
-            statusNow.add(Map.of("status", status.name(), "label", STATUS_LABEL.get(status),
+            statusNow.add(Map.of("status", status.name(), "label", Words.statusLabel(status),
                     "count", counts.getOrDefault(status, 0L)));
         }
         data.put("statusNow", statusNow);

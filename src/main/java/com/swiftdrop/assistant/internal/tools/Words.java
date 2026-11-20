@@ -81,6 +81,19 @@ public final class Words {
         };
     }
 
+    /** A short label for a status in a count or a table: "Waiting for pickup", "At a branch". */
+    public static String statusLabel(ParcelStatus status) {
+        return switch (status) {
+            case CREATED -> "Waiting for pickup";
+            case PICKED_UP -> "Picked up";
+            case AT_BRANCH -> "At a branch";
+            case IN_TRANSIT -> "In transit";
+            case OUT_FOR_DELIVERY -> "Out for delivery";
+            case DELIVERED -> "Delivered";
+            case FAILED -> "Failed delivery";
+        };
+    }
+
     public static String failureReason(FailureReason reason) {
         return switch (reason) {
             case RECIPIENT_UNAVAILABLE -> "the recipient wasn't available";

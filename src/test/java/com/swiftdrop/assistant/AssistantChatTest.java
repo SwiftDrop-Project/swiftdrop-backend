@@ -223,7 +223,33 @@ class AssistantChatTest extends IntegrationTest {
     }
 
     @Test
+    void anAdminAsksAboutParcelsAndAccounts() throws Exception {
+        Cookie admin = loginAsAdmin();
+        String number = book(customer, "MULLAITIVU", "KILINOCHCHI");
+
+        JsonNode waiting = read(ask(CHAT_AS_USER, admin, "How many parcels are waiting for pickup?"));
+        assertThat(waiting.path("cards").path(0).path("type").asString("")).isEqualTo("FACTS");
+        assertThat(waiting.path("reply").asString("")).contains("waiting for pickup right now");
+
+        JsonNode found = read(ask(CHAT_AS_USER, admin, "Show parcels from Mullaitivu going to Kilinochchi"));
+        JsonNode list = found.path("cards").path(0);
+        assertThat(list.path("type").asString("")).isEqualTo("PARCEL_LIST");
+        assertThat(list.path("data").path("parcels").toString()).contains(number);
+        // The admin sees the public view only: no names, phone numbers or street addresses.
+        assertThat(found.toString()).doesNotContain("Ayesha", "0771234567", "Galle Road");
+
+        JsonNode couriers = read(ask(CHAT_AS_USER, admin, "How many customers do we have?"));
+        assertThat(couriers.path("reply").asString("")).matches("SwiftDrop has \\d+ customer accounts?\\.");
+
+        JsonNode delivered = read(ask(CHAT_AS_USER, admin, "How many parcels were booked today?"));
+        assertThat(delivered.path("reply").asString("")).contains("booked for");
+        assertThat(delivered.path("cards").path(0).path("data").path("facts").size()).isEqualTo(4);
+    }
+
+    @Test
     void onlyAdminsGetReports() throws Exception {
+        ask(CHAT_AS_USER, customer, "How many couriers do we have?")
+                .andExpect(jsonPath("$.cards.length()").value(0));
         ask(CHAT_AS_USER, customer, "Give me this week's report")
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.cards.length()").value(0))

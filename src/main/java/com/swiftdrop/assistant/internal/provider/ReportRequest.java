@@ -19,7 +19,7 @@ record ReportRequest(Period period, LocalDate day) {
 
     private static final Pattern REPORT = Pattern.compile(
             "\\b(reports?|summary|summari[sz]e|stats|statistics|overview|performance)\\b"
-                    + "|\\bhow many parcels\\b|\\bhow (?:did|was|were|is|are)\\b.*\\b(today|yesterday|week|month)\\b",
+                    + "|\\bhow (?:did|was|were|is|are) (?:we|the service|swiftdrop|business|things)\\b",
             Pattern.CASE_INSENSITIVE);
     private static final Pattern DAILY = Pattern.compile("\\b(daily|today|today's|yesterday|day)\\b",
             Pattern.CASE_INSENSITIVE);
@@ -27,9 +27,15 @@ record ReportRequest(Period period, LocalDate day) {
     private static final Pattern MONTHLY = Pattern.compile("\\b(monthly|month|month's)\\b", Pattern.CASE_INSENSITIVE);
     private static final Pattern ISO_DATE = Pattern.compile("\\b(\\d{4})-(\\d{2})-(\\d{2})\\b");
     private static final Pattern DAY_MONTH = Pattern.compile(
-            "\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(" + monthNames() + ")[a-z]*\\.?(?:\\s+(\\d{4}))?\\b",
+            "\\b(\\d{1,2})(?:st|nd|rd|th)?\\s+(" + monthNames() + ")\\b\\.?(?:\\s+(\\d{4}))?\\b",
             Pattern.CASE_INSENSITIVE);
-    private static final Pattern MONTH = Pattern.compile("\\b(" + monthNames() + ")[a-z]*\\.?(?:\\s+(\\d{4}))?\\b",
+    /** A month by name; "may" only with a year or after "in", "for", "of"... (not "may I see"). */
+    private static final Pattern MONTH = Pattern.compile(
+            "\\b(?:(in|for|of|during|from)\\s+)?(" + monthNames() + ")\\b\\.?(?:\\s+(\\d{4}))?\\b",
+            Pattern.CASE_INSENSITIVE);
+    /** Words that name a period, without "day" alone ("busiest day" names no period). */
+    private static final Pattern PERIOD_WORDS = Pattern.compile(
+            "\\b(daily|today|today's|tonight|yesterday|weekly|week|week's|monthly|month|month's)\\b",
             Pattern.CASE_INSENSITIVE);
     private static final Pattern LAST = Pattern.compile("\\b(last|previous|past)\\s+(week|month)\\b",
             Pattern.CASE_INSENSITIVE);
@@ -42,10 +48,27 @@ record ReportRequest(Period period, LocalDate day) {
         return REPORT.matcher(text).find();
     }
 
-    /** Whether the message names a period ("weekly", "this month", "yesterday"). */
+    /** Whether the message names a period ("weekly", "this month", "yesterday"), as an answer to {@link #ASK_PERIOD}. */
     static boolean namesPeriod(String text) {
-        return DAILY.matcher(text).find() || WEEKLY.matcher(text).find() || MONTHLY.matcher(text).find()
-                || MONTH.matcher(text).find() || ISO_DATE.matcher(text).find();
+        return DAILY.matcher(text).find() || hasPeriod(text);
+    }
+
+    /** Whether a question names when: today, yesterday, a week, a month, a month's name or a date. */
+    static boolean hasPeriod(String text) {
+        return PERIOD_WORDS.matcher(text).find() || findMonth(text) != null || ISO_DATE.matcher(text).find()
+                || DAY_MONTH.matcher(text).find();
+    }
+
+    /** The first real month name in the text (not the verb "may"), or null. */
+    private static Matcher findMonth(String text) {
+        Matcher month = MONTH.matcher(text);
+        while (month.find()) {
+            boolean may = month.group(2).equalsIgnoreCase("may");
+            if (!may || month.group(1) != null || month.group(3) != null) {
+                return month;
+            }
+        }
+        return null;
     }
 
     static ReportRequest read(String text, LocalDate today) {
@@ -55,7 +78,7 @@ record ReportRequest(Period period, LocalDate day) {
         Matcher last = LAST.matcher(text);
         Matcher iso = ISO_DATE.matcher(text);
         Matcher dayMonth = DAY_MONTH.matcher(text);
-        Matcher month = MONTH.matcher(text);
+        Matcher month = findMonth(text);
         if (last.find()) {
             boolean week = last.group(2).equalsIgnoreCase("week");
             day = week ? today.minusWeeks(1) : today.minusMonths(1);
@@ -72,11 +95,11 @@ record ReportRequest(Period period, LocalDate day) {
             if (dayMonth.group(3) == null && day.isAfter(today)) {
                 day = day.minusYears(1);
             }
-        } else if (month.find()) {
-            Month name = month(month.group(1));
-            int year = month.group(2) == null ? today.getYear() : Integer.parseInt(month.group(2));
+        } else if (month != null) {
+            Month name = month(month.group(2));
+            int year = month.group(3) == null ? today.getYear() : Integer.parseInt(month.group(3));
             day = LocalDate.of(year, name, 1);
-            if (month.group(2) == null && day.isAfter(today)) {
+            if (month.group(3) == null && day.isAfter(today)) {
                 day = day.minusYears(1);
             }
             period = Period.MONTHLY;
@@ -120,6 +143,7 @@ record ReportRequest(Period period, LocalDate day) {
     }
 
     private static String monthNames() {
-        return "jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec";
+        return "january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sept|sep"
+                + "|october|oct|november|nov|december|dec";
     }
 }

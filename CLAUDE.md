@@ -80,7 +80,9 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
   server at `POST /mcp` (public, JSON-RPC; the public data tools, no Gemini).
   `RulesChatProvider` understands the question and gets the data through tools (`internal/tools`) that call
   `TrackingApi` and `PricingApi`; admins also get daily/weekly/monthly service reports (`ServiceReportTool`, from
-  `DeliveryApi.stats`/`countByStatus`, `TrackingApi.breakdown` and `IdentityApi.getUserRoleCounts`; never on MCP).
+  `DeliveryApi.stats`/`countByStatus`, `TrackingApi.breakdown` and `IdentityApi.getUserRoleCounts`; never on MCP)
+  and answers to other admin questions (`AdminAnswers`: `parcel_counts`, `account_counts`, `find_parcels` through
+  `DeliveryApi.search`, public view only).
   Gemini (`GeminiAnswerWriter`; `ASSISTANT_PROVIDER=gemini`, `GEMINI_API_KEY` only in `.env`, never logged) only rewrites answers that have data, with no tools; an answer with a number or tracking
   number not in the data falls back to the plain one. Tests always use the rules provider.
 - courier (one API, `/courier/deliveries`) shows the parcels of the courier's dispatch tasks (`AssignmentApi`) one

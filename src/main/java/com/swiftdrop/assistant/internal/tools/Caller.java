@@ -19,6 +19,11 @@ public record Caller(UUID userId, String role, String clientKey) {
         return userId != null;
     }
 
+    /** Admins get the service reports and the admin data tools. */
+    public boolean isAdmin() {
+        return loggedIn() && "ADMIN".equals(role);
+    }
+
     /** Customers and merchants have their own parcels. */
     public boolean ownsParcels() {
         return loggedIn() && ("CUSTOMER".equals(role) || "MERCHANT".equals(role));

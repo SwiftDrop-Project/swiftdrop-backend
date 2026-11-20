@@ -53,9 +53,11 @@ public class RulesChatProvider {
     static final String ASK_SIZE = "for the full price.";
 
     private final AssistantTools tools;
+    private final AdminAnswers admin;
 
     public RulesChatProvider(AssistantTools tools) {
         this.tools = tools;
+        this.admin = new AdminAnswers(tools);
     }
 
     /**
@@ -73,6 +75,12 @@ public class RulesChatProvider {
                 || (ReportRequest.ASK_PERIOD.equals(previousAnswer(conversation))
                         && ReportRequest.namesPeriod(latest)))) {
             return new ChatReply(report(latest, caller, cards), cards, NAME);
+        }
+        if (isAdmin(caller)) {
+            String answer = admin.answer(latest, caller, cards);
+            if (answer != null) {
+                return new ChatReply(answer, cards, NAME);
+            }
         }
         String priceText = priceConversation(conversation);
         if (priceText != null) {
@@ -261,7 +269,7 @@ public class RulesChatProvider {
     // ---- Admin reports ----
 
     private static boolean isAdmin(Caller caller) {
-        return caller.loggedIn() && "ADMIN".equals(caller.role());
+        return caller.isAdmin();
     }
 
     @SuppressWarnings("unchecked")
@@ -312,7 +320,7 @@ public class RulesChatProvider {
         return text.toString();
     }
 
-    private static String changeText(Map<String, Object> change) {
+    static String changeText(Map<String, Object> change) {
         long difference = ((Number) change.get("difference")).longValue();
         if (difference == 0) {
             return "unchanged";
@@ -337,23 +345,25 @@ public class RulesChatProvider {
         String greeting = latest.trim().matches("(?i)(hi|hello|hey|good (morning|afternoon|evening))\\W*")
                 ? "Hello! " : "I can only help with SwiftDrop deliveries. ";
         if (isAdmin(caller)) {
-            return greeting + "I can give you daily, weekly and monthly service reports, track a parcel from its "
-                    + "tracking number, estimate a delivery price and list the districts we deliver to. Try: "
-                    + "\"This week's report\" or \"Monthly report for last month\".";
+            return greeting + "I can give you daily, weekly and monthly service reports, figures such as parcels "
+                    + "delivered, the success rate, the busiest day, top districts and failure reasons, how many "
+                    + "parcels are in each status now, account counts, and find parcels by status, district or "
+                    + "branch. I can also track a parcel and estimate a price. Try: \"How many parcels are out for "
+                    + "delivery?\", \"Success rate this month\" or \"Show failed parcels going to Kandy\".";
         }
         return greeting + "I can track a parcel from its tracking number, estimate a delivery price, list the "
                 + "districts we deliver to" + (caller.ownsParcels() ? ", and show your parcels" : "")
                 + ". Try: \"How much to send 2 kg from Colombo to Kandy?\"";
     }
 
-    private static String joinWithAnd(List<String> parts) {
+    static String joinWithAnd(List<String> parts) {
         if (parts.size() == 1) {
             return parts.getFirst();
         }
         return String.join(", ", parts.subList(0, parts.size() - 1)) + " and " + parts.getLast();
     }
 
-    private static ObjectNode args(Map<String, Object> values) {
+    static ObjectNode args(Map<String, Object> values) {
         ObjectNode node = JsonNodeFactory.instance.objectNode();
         values.forEach((key, value) -> {
             if (value instanceof Integer number) {
