@@ -41,6 +41,7 @@ architecture diagram). `SwiftdropBackendApplication` stays at the root.
 | `notifications` | Emails (and later SMS) to users | `notifications` | TBD | Placeholder |
 | `webhooks` | Merchant webhook subscriptions and signed, retried delivery of parcel events (API.md "Webhooks") | `webhooks` | chanuka (WP6) | Contract ready (implementation next) |
 | `outbox` | Relays delivery's outbox events to RabbitMQ | - | TBD | Placeholder |
+| `assistant` | AI delivery assistant: a chatbot (Gemini with function calling, or a built-in rules engine) answering "Where is my parcel?" and "How much to send 2 kg to Kandy?" through tracking and pricing, and the same tools as an MCP server at `/api/v1/mcp` (API.md "Assistant") | - | D.M.A.I. Disanayaka | Built |
 | `courier` | The courier's parcels, one card each (a dispatcher may group several in one task): today's pickups and deliveries, status updates with branch handover and return, Unable to Collect, completed-parcel history; tasks complete by themselves (through `AssignmentApi` and `DeliveryApi`) | - | Kalpani | Built (on the real `AssignmentApi` and `DeliveryApi`) |
 
 Each module's `package-info.java` describes its purpose, owner, schema and the events it publishes and consumes.
@@ -188,6 +189,10 @@ secrets in the code.
 | `DEMO_PASSWORD` | empty | No | Password for the demo accounts |
 | `GOOGLE_CLIENT_ID` | empty | No | Google OAuth client ID. Google sign-in is on only when both Google values are set. |
 | `GOOGLE_CLIENT_SECRET` | empty | No | Google OAuth client secret. Never commit it. |
+| `ASSISTANT_PROVIDER` | `rules` | No | `gemini` uses Google Gemini for the chat assistant (needs `GEMINI_API_KEY`); `rules` answers without AI |
+| `GEMINI_API_KEY` | empty | No | Google AI Studio key for the assistant. Only in `.env`; never commit it. |
+| `GEMINI_MODEL` | `gemini-3.5-flash` | No | Gemini model for the assistant |
+| `ASSISTANT_MESSAGES_PER_MINUTE` | `20` | No | Chat messages and MCP tool calls per user or IP per minute |
 The connection pool is small on purpose (at most 3 connections, none kept while idle), because the
 whole team shares one Neon database. These values are fixed in `application.yml`.
 

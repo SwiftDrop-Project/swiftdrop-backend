@@ -10,6 +10,8 @@
  *   <li>{@code GET /api/v1/tracking/live/recent} (DISPATCHER, ADMIN): the latest changes, for the live board.</li>
  *   <li>{@code GET /api/v1/admin/tracking/parcels} and {@code .../counts} (ADMIN): every parcel's latest status with
  *   filters, from the module's own index.</li>
+ *   <li>{@link com.swiftdrop.tracking.TrackingApi} (for the assistant module): the same public lookup, and a
+ *   customer's or merchant's own parcels, as {@link com.swiftdrop.tracking.ParcelTracking}.</li>
  * </ul>
  *
  * <p>Owner: D.M.A.I. Disanayaka (WP8, live tracking). Database schema: {@code tracking}

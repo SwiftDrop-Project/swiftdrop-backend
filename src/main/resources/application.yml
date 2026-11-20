@@ -134,6 +134,18 @@ swiftdrop:
       enabled: ${SWIFTDROP_WEBHOOKS_DISPATCHER_ENABLED:true}
       interval-ms: ${SWIFTDROP_WEBHOOKS_DISPATCHER_INTERVAL_MS:2000}
       batch-size: 10
+  # AI delivery assistant. ASSISTANT_PROVIDER=gemini with GEMINI_API_KEY (free key from Google AI Studio) uses Gemini;
+  # otherwise, and whenever Gemini fails, the built-in rules provider answers. The key is never logged.
+  assistant:
+    provider: ${ASSISTANT_PROVIDER:rules}
+    messages-per-minute: ${ASSISTANT_MESSAGES_PER_MINUTE:20}
+    max-tool-calls: 5
+    gemini:
+      api-key: ${GEMINI_API_KEY:}
+      # gemini-3.5-flash answers in a few seconds on the free tier; newer models can take 20 s or more.
+      model: ${GEMINI_MODEL:gemini-3.5-flash}
+      base-url: https://generativelanguage.googleapis.com/v1beta
+      timeout: 30s
 
   outbox:
     relay:

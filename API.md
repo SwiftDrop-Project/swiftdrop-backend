@@ -1446,3 +1446,100 @@ the index was added is not listed yet. Live changes come on `/topic/live`.
 How many indexed parcels match the same filters, per status (the status filter is ignored, so a status picker can
 show the numbers): `{ "total": 12, "byStatus": { "CREATED": 3, "AT_BRANCH": 2, ..., "DELIVERED": 7 } }`. Every
 status is present, 0 when none.
+
+## Assistant (AI delivery assistant)
+
+A chatbot that answers questions such as "Where is my parcel?" or "How much to send 2 kg to Kandy?". It never
+invents facts: every answer comes from SwiftDrop's own APIs, called as **tools** (the same tools are offered to other
+AI clients over MCP, below). With `ASSISTANT_PROVIDER=gemini` and `GEMINI_API_KEY` set, Google Gemini reads the
+question and chooses the tools; otherwise, or when Gemini fails or times out, a built-in rules engine answers
+(`provider: "rules"`). The API key stays on the server and is never sent to the browser.
+
+**Privacy.** The assistant sees only what public tracking shows (status, towns, branch, failure reason) and, for a
+logged-in customer or merchant, their own parcels. It never sees names, phone numbers, addresses or amounts due.
+
+### Tools
+
+| Tool | Who | Arguments | Uses |
+|---|---|---|---|
+| `track_parcel` | anyone | `trackingNumber` (spaces and case ignored) | `GET /track/{trackingNumber}` (counts against its 30/minute limit) |
+| `estimate_price` | anyone | `pickupDistrict`, `dropOffDistrict` (district codes), `weightKg` (0.01-50), optional `lengthCm`, `widthCm`, `heightCm` (1-300, all three or none) | `POST /pricing/estimate` |
+| `list_districts` | anyone | none | `GET /meta/districts` |
+| `my_parcels` | logged-in CUSTOMER or MERCHANT, chat only | optional `status` | `GET /tracking/mine` (their latest 10) |
+
+### `POST /assistant/chat` (public) and `POST /assistant/chat/me` (logged in)
+
+Same body and response. `/assistant/chat` ignores the login cookie (so it never lists anyone's parcels);
+`/assistant/chat/me` needs a login and adds `my_parcels` for customers and merchants. The client keeps the
+conversation and sends it each time, oldest first; the last message must be the user's.
+
+```json
+{
+  "messages": [
+    { "role": "user", "text": "How much to send 2 kg to Kandy?" },
+    { "role": "assistant", "text": "Sure. Which district should we collect it from?" },
+    { "role": "user", "text": "Colombo, it's 30 x 20 x 10 cm" }
+  ]
+}
+```
+
+```json
+{
+  "reply": "Sending 2 kg from Colombo to Kandy costs Rs. 472.60.",
+  "provider": "gemini",
+  "cards": [
+    {
+      "type": "PRICE",
+      "data": {
+        "pickupDistrict": "Colombo", "dropOffDistrict": "Kandy", "weightKg": 2,
+        "status": "COMPLETE", "currency": "LKR", "total": 472.60, "totalText": "Rs. 472.60",
+        "billableWeightKg": 2, "vehicle": "BIKE", "distanceKm": 122.6,
+        "lines": [
+          { "component": "WEIGHT", "amount": 50.00 }, { "component": "PICKUP", "amount": 150.00 },
+          { "component": "DELIVERY", "amount": 150.00 }, { "component": "LINEHAUL", "amount": 122.60 }
+        ],
+        "note": "Full estimate."
+      }
+    }
+  ]
+}
+```
+
+`cards` holds what the tools found, for the page to show next to the reply:
+
+| `type` | `data` |
+|---|---|
+| `TRACKING` | `trackingNumber`, `status`, `statusText`, `from`, `to` (town, district), `currentBranch`, `lastUpdate` (text), `updatedAt` |
+| `PARCEL_LIST` | `parcels`: up to 10 rows shaped like `TRACKING` |
+| `PRICE` | as above; `status` is `COMPLETE`, `PROVISIONAL` (no size given: pickup and delivery charges not included) or `MANUAL_QUOTE` (`total` null) |
+
+Rules and errors:
+- 1-20 messages; `role` is `user` or `assistant`; `text` not blank, at most 4000 characters; the last message is the
+  user's and at most 500 characters. Otherwise `400 VALIDATION_FAILED` (field `messages`).
+- At most 20 messages per minute per user (or per IP when not logged in; `ASSISTANT_MESSAGES_PER_MINUTE`), then
+  `429 TOO_MANY_REQUESTS`.
+- `/assistant/chat/me` without a login: `401 UNAUTHENTICATED`.
+- A tool failure (unknown number, bad district, too heavy) is not an error: the reply explains it.
+
+### MCP server: `POST /mcp` (public)
+
+The public tools (`track_parcel`, `estimate_price`, `list_districts`) as a
+[Model Context Protocol](https://modelcontextprotocol.io) server, so AI clients such as Claude Desktop or MCP
+Inspector can use SwiftDrop directly. Streamable HTTP transport, JSON responses only (no event stream), no session id.
+
+| JSON-RPC method | Result |
+|---|---|
+| `initialize` | `protocolVersion` (the client's if supported: 2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05; otherwise the newest), `capabilities.tools`, `serverInfo` `{ "name": "swiftdrop" }` |
+| `ping` | `{}` |
+| `tools/list` | `tools`: `name`, `title`, `description`, `inputSchema` (JSON Schema), `annotations.readOnlyHint: true` |
+| `tools/call` | `content` (one `text` item, the result as JSON), `structuredContent` (the result), `isError` |
+| a notification (no `id`) | `202 Accepted`, no body |
+
+A bad request is a JSON-RPC error with HTTP 200: `-32600` invalid request, `-32601` unknown method, `-32602`
+unknown tool or bad params. A tool's own failure, including the per-IP limit (20 calls per minute), is a normal
+result with `isError: true`. `GET /mcp` is `405` (no server-sent events).
+
+```json
+{ "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+  "params": { "name": "track_parcel", "arguments": { "trackingNumber": "SD2611004817" } } }
+```

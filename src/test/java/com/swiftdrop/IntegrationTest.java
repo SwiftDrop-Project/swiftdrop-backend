@@ -58,7 +58,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "swiftdrop.webhooks.encryption-key=test-only-webhook-key-0123456789-abcdefghijklmnop",
         "swiftdrop.webhooks.allow-insecure-urls=false",
         // no background sender: tests call WebhookDispatcher.dispatchDue() themselves
-        "swiftdrop.webhooks.dispatcher.enabled=false"
+        "swiftdrop.webhooks.dispatcher.enabled=false",
+        // assistant: never call the real Gemini from tests, whatever the local .env says (tests stub it)
+        "swiftdrop.assistant.provider=rules",
+        "swiftdrop.assistant.gemini.api-key="
 })
 @AutoConfigureMockMvc
 @Import({TestcontainersConfiguration.class, TestDoublesConfiguration.class})
