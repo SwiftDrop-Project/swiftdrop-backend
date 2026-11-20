@@ -520,6 +520,33 @@ The figures on the admin home page (`/admin`). Days are Sri Lanka days (Asia/Col
 - `successRate` = `delivered / (delivered + failed) × 100` over the 7 days, one decimal; `0.0` when both are 0.
 - `recentUsers`: the 5 newest accounts (not `REMOVED`), newest first. No email or phone.
 
+#### `GET /admin/reports/summary?from=2026-10-22&to=2026-11-20`
+The Reports & Analytics page (`/admin/reports`). Read only. `from` and `to` are Sri Lanka days, both included.
+```json
+{
+  "totals":   { "from": "2026-10-22", "to": "2026-11-20", "created": 240, "delivered": 180, "failed": 12,
+                "successRate": 93.8 },
+  "previous": { "from": "2026-09-22", "to": "2026-10-21", "created": 210, "delivered": 160, "failed": 15,
+                "successRate": 91.4 },
+  "perDay": [ { "date": "2026-10-22", "created": 8, "delivered": 6, "failed": 0 } ],
+  "byStatus": { "CREATED": 14, "PICKED_UP": 3, "AT_BRANCH": 9, "IN_TRANSIT": 5, "OUT_FOR_DELIVERY": 4,
+                "DELIVERED": 410, "FAILED": 22 }
+}
+```
+- `totals`: the range. `created` = parcels booked in it; `delivered` / `failed` = parcels that reached that status in
+  it. `successRate` = `delivered / (delivered + failed) × 100`, one decimal; `0.0` when both are 0.
+- `previous`: the same number of days just before `from`, to compare with.
+- `perDay`: every day of the range, oldest first, also days with nothing (all 0).
+- `byStatus`: how many parcels are in each status **right now** (all 7 statuses, 0 for none), not limited to the range.
+- Both parameters required, `YYYY-MM-DD`; missing or not a date → `400 VALIDATION_FAILED`. Field errors (`400
+  VALIDATION_FAILED`): `from` "The start date must be on or before the end date." · `to` "The end date can't be in
+  the future." · `to` "Choose a range of up to 366 days."
+
+#### `GET /admin/reports/summary/export?from=&to=`
+The same range as CSV (`text/csv; charset=UTF-8`, download `swiftdrop-report-<from>-to-<to>.csv`): header
+`date,booked,delivered,failed`, one row per day (oldest first), then `total,...`. Same parameters and errors as the
+summary.
+
 ---
 
 ## Cookie and token
@@ -1018,6 +1045,87 @@ Response `200`:
   `vehicle` and `volumetricWeightKg` are `null`); `MANUAL_QUOTE` when no vehicle takes the parcel for the local legs
   (`total` is `null`).
 - `400` `VALIDATION_FAILED` · `401` `UNAUTHENTICATED` · `403` `FORBIDDEN` (not a `CUSTOMER` or `MERCHANT`)
+
+### Zones & pricing (admin, WP4)
+The admin's Zones & Pricing page (`/admin/zones`). Role `ADMIN` only: no login → `401 UNAUTHENTICATED`; any other
+role → `403 FORBIDDEN`. **Read only**: nothing is saved, and rate cards and district centres change only through
+Flyway migrations. Every figure comes from the active rate card and the same distance rule as a quote, so it is
+what a booking on that route is charged.
+
+#### `GET /admin/pricing/rate-card`
+The active rate card with its vehicles, smallest first.
+```json
+{ "version": 5, "active": true, "currency": "LKR", "baseFee": 0.00, "baseWeightKg": 1, "perKgFee": 50.00,
+  "volumetricDivisor": 5000, "codFee": 0.00, "linehaulPerKm": 1.00, "roadFactor": 1.30,
+  "createdAt": "2026-11-14T05:55:00Z",
+  "vehicles": [ { "vehicle": "BIKE", "checkOrder": 1, "maxLengthCm": 45, "maxWidthCm": 35, "maxHeightCm": 35,
+                  "maxWeightKg": 10.00, "legFee": 150.00 } ] }
+```
+
+#### `GET /admin/pricing/rate-cards`
+Every rate card version, **newest first**, each in the same shape as `GET /admin/pricing/rate-card` with its own
+vehicles. Exactly one has `"active": true`. Previous versions never change: a parcel keeps the `rateCardVersion` it
+was priced with, so its fee can be worked out again from that version.
+```json
+[ { "version": 5, "active": true, "baseFee": 0.00, "...": "...", "vehicles": [ ... ] },
+  { "version": 4, "active": false, "baseFee": 150.00, "...": "...", "vehicles": [ ... ] } ]
+```
+
+#### `GET /admin/pricing/districts`
+All 25 districts (a branch is a district) in `GET /meta/districts` order, with the centre distances are measured
+from. `priced` is false (and `latitude`/`longitude` null) for a district without a centre: routes to it can't be
+priced.
+```json
+[ { "district": "AMPARA", "name": "Ampara", "priced": true, "latitude": 7.29760, "longitude": 81.68200 } ]
+```
+
+#### `GET /admin/pricing/routes?from=COLOMBO`
+Distance and linehaul from one branch to every district (25 rows, district order). `from` is required, one of
+`GET /meta/districts`; missing or unknown → `400 VALIDATION_FAILED`.
+```json
+{ "from": "COLOMBO", "fromName": "Colombo", "rateCardVersion": 5, "currency": "LKR", "roadFactor": 1.30,
+  "linehaulPerKm": 1.00,
+  "routes": [ { "to": "KANDY", "toName": "Kandy", "distanceKm": 122.6, "linehaul": 122.60 } ] }
+```
+- `distanceKm` = straight line between the centres × `roadFactor`, one decimal; `0.0` for the `from` district itself.
+- `linehaul` = `distanceKm` × `linehaulPerKm`, two decimals (the quote's `LINEHAUL` line).
+- Both are `null` when either district has no centre.
+
+#### `POST /admin/pricing/estimate`
+The price calculator: the same request, rules, messages and response as `POST /pricing/estimate`, for an admin.
+Nothing is saved. A `MANUAL_QUOTE` result is a parcel that booking refuses with `409 PARCEL_NEEDS_MANUAL_QUOTE`.
+- `400` `VALIDATION_FAILED` · `401` `UNAUTHENTICATED` · `403` `FORBIDDEN` (not an `ADMIN`)
+
+### Delivery rates (admin, WP4)
+The admin's Delivery Rates page (`/admin/rates`). Role `ADMIN` only (`401` / `403` as above). **Read only.** Every
+amount is worked out by the same fee calculator as a quote, so it is what customers pay with that rate card.
+
+#### `GET /admin/pricing/tariff?version=`
+What one rate card charges. `version` is optional: without it, the active card; with it, that version (for the
+history). Unknown version → `404 NOT_FOUND`; not a whole number → `400 VALIDATION_FAILED`.
+```json
+{
+  "rateCardVersion": 5, "active": true, "currency": "LKR", "createdAt": "2026-11-14T05:55:00Z",
+  "baseFee": 0.00, "baseWeightKg": 1, "perKgFee": 50.00, "volumetricDivisor": 5000, "linehaulPerKm": 1.00,
+  "codFee": 0.00,
+  "weightTiers": [ { "billableKg": 1, "weightCharge": 0.00 }, { "billableKg": 2, "weightCharge": 50.00 } ],
+  "vehicles": [ { "vehicle": "BIKE", "legFee": 150.00, "bothLegs": 300.00, "maxLengthCm": 45, "maxWidthCm": 35,
+                  "maxHeightCm": 35, "maxWeightKg": 10.00 } ],
+  "distancesKm": [ 0.0, 25.0, 50.0, 100.0, 200.0, 300.0 ],
+  "samples": [
+    { "key": "SMALL_BOX", "name": "Small box", "weightKg": 2, "lengthCm": 30, "widthCm": 20, "heightCm": 15,
+      "vehicle": "BIKE", "billableWeightKg": 2,
+      "fees": [ { "distanceKm": 0.0, "total": 350.00 }, { "distanceKm": 100.0, "total": 450.00 } ] }
+  ]
+}
+```
+- `weightTiers`: billable kg 1–50 (the heaviest bookable parcel). `weightCharge` = `perKgFee` × the kg above
+  `baseWeightKg`; the base fee, when a card has one, is a separate line and not in it.
+- `vehicles`: smallest first. `bothLegs` = pickup leg + delivery leg, which every parcel on that vehicle pays.
+- `samples`: five typical parcels (`DOCUMENTS`, `SMALL_BOX`, `MEDIUM_BOX`, `LARGE_BOX`, `BULKY_ITEM`), each with its
+  full fee (base fee, weight, both legs and between-branches charge; no cash on delivery) at each of `distancesKm`
+  (road km between the branches; 0 = same district). `vehicle` and every `total` are `null` when no vehicle takes the
+  parcel (booking answers `409 PARCEL_NEEDS_MANUAL_QUOTE`).
 
 ---
 
