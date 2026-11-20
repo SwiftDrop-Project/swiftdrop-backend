@@ -111,9 +111,4 @@ public final class Words {
         found.sort(Comparator.comparingInt(Mention::start));
         return found;
     }
-
-    /** The district codes, for tool schemas. */
-    public static List<String> districtCodes() {
-        return Arrays.stream(District.values()).map(District::name).toList();
-    }
 }

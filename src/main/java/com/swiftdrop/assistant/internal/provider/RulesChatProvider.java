@@ -19,11 +19,12 @@ import tools.jackson.databind.node.JsonNodeFactory;
 import tools.jackson.databind.node.ObjectNode;
 
 /**
- * Answers without an AI model: recognises tracking numbers, price questions, "my parcels" and district questions with
- * patterns, and calls the same tools as the model. Used when Gemini isn't configured or fails, and in tests.
+ * Understands the question and gets the data: recognises tracking numbers, price questions, "my parcels" and district
+ * questions with patterns, calls the tools (SwiftDrop's tracking and pricing APIs) and builds a plain answer from
+ * their data. Gemini may then rewrite that answer ({@code GeminiAnswerWriter}); without Gemini it is sent as is.
  */
 @Component
-public class RulesChatProvider implements ChatProvider {
+public class RulesChatProvider {
 
     static final String NAME = "rules";
 
@@ -55,7 +56,9 @@ public class RulesChatProvider implements ChatProvider {
         this.tools = tools;
     }
 
-    @Override
+    /**
+     * @param conversation oldest first, ending with the user's new message
+     */
     public ChatReply reply(List<Turn> conversation, Caller caller) {
         String latest = conversation.getLast().text();
         List<AssistantCard> cards = new ArrayList<>();

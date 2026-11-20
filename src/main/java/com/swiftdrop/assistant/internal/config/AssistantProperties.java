@@ -7,15 +7,14 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 /**
  * {@code swiftdrop.assistant.*}: which model answers, and the limits.
  *
- * @param provider          {@code gemini} or {@code rules}; gemini needs {@code gemini.api-key}
- * @param messagesPerMinute chat messages and MCP tool calls per client per minute
- * @param maxToolCalls      tool rounds the model may use for one message
+ * @param provider          {@code gemini} (Gemini writes the answers from the data) or {@code rules} (plain answers);
+ *                          gemini needs {@code gemini.api-key}
+ * @param messagesPerMinute chat messages per user (or IP) per minute
  */
 @ConfigurationProperties("swiftdrop.assistant")
 public record AssistantProperties(
         @DefaultValue("rules") String provider,
         @DefaultValue("20") int messagesPerMinute,
-        @DefaultValue("5") int maxToolCalls,
         @DefaultValue Gemini gemini) {
 
     /**

@@ -167,6 +167,14 @@ class AssistantChatTest extends IntegrationTest {
     }
 
     @Test
+    void thereIsNoMcpServer() throws Exception {
+        postJson("/api/v1/mcp", Map.of("jsonrpc", "2.0", "id", 1, "method", "tools/list"), customer)
+                .andExpect(status().isNotFound());
+        postJson("/api/v1/mcp", Map.of("jsonrpc", "2.0", "id", 1, "method", "tools/list"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
     void listsTheDistricts() throws Exception {
         ask(CHAT, null, "Which districts do you deliver to?")
                 .andExpect(status().isOk())

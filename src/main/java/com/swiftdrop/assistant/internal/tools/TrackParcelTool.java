@@ -3,7 +3,6 @@ package com.swiftdrop.assistant.internal.tools;
 import com.swiftdrop.tracking.ParcelTracking;
 import com.swiftdrop.tracking.TrackingApi;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.springframework.stereotype.Component;
@@ -22,28 +21,6 @@ class TrackParcelTool implements AssistantTool {
     @Override
     public String name() {
         return "track_parcel";
-    }
-
-    @Override
-    public String title() {
-        return "Track a parcel";
-    }
-
-    @Override
-    public String description() {
-        return "Find where a SwiftDrop parcel is from its tracking number (SD followed by 10 digits, e.g. "
-                + "SD2611004817; spaces are fine). Returns its status, the towns it travels between and its steps "
-                + "so far, with times in Sri Lankan time. Ask the user for the number if they haven't given it.";
-    }
-
-    @Override
-    public Map<String, Object> parameters() {
-        return Map.of(
-                "type", "object",
-                "properties", Map.of("trackingNumber", Map.of(
-                        "type", "string",
-                        "description", "The tracking number, e.g. SD2611004817")),
-                "required", List.of("trackingNumber"));
     }
 
     @Override

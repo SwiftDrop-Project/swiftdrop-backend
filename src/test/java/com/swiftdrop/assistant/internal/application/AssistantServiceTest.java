@@ -3,6 +3,7 @@ package com.swiftdrop.assistant.internal.application;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -10,54 +11,73 @@ import static org.mockito.Mockito.when;
 
 import com.swiftdrop.assistant.internal.config.AssistantProperties;
 import com.swiftdrop.assistant.internal.provider.ChatReply;
-import com.swiftdrop.assistant.internal.provider.GeminiChatProvider;
+import com.swiftdrop.assistant.internal.provider.GeminiAnswerWriter;
 import com.swiftdrop.assistant.internal.provider.ProviderUnavailableException;
 import com.swiftdrop.assistant.internal.provider.RulesChatProvider;
 import com.swiftdrop.assistant.internal.provider.Turn;
+import com.swiftdrop.assistant.internal.tools.AssistantCard;
 import com.swiftdrop.assistant.internal.tools.Caller;
 import com.swiftdrop.shared.error.FieldValidationException;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 
-/** Which provider answers, and the checks before either is asked. */
+/** SwiftDrop's code gets the data; Gemini only rewrites answers that have data. */
 class AssistantServiceTest {
 
-    private final GeminiChatProvider gemini = mock(GeminiChatProvider.class);
     private final RulesChatProvider rules = mock(RulesChatProvider.class);
+    private final GeminiAnswerWriter gemini = mock(GeminiAnswerWriter.class);
     private final Caller visitor = Caller.anonymous("127.0.0.1");
-    private final List<Turn> question = List.of(new Turn(true, "Hi"));
+    private final List<Turn> question = List.of(new Turn(true, "Where is SD2611874236?"));
+    private final List<AssistantCard> parcel = List.of(new AssistantCard("TRACKING", Map.of("status", "CREATED")));
 
     private AssistantService service(String provider, String key) {
-        AssistantProperties properties = new AssistantProperties(provider, 20, 5,
+        AssistantProperties properties = new AssistantProperties(provider, 20,
                 new AssistantProperties.Gemini(key, "m", "http://unused", Duration.ofSeconds(1)));
-        return new AssistantService(properties, gemini, rules, new AssistantRateLimiter(properties));
+        return new AssistantService(properties, rules, gemini, new AssistantRateLimiter(properties));
     }
 
     @Test
-    void geminiAnswersWhenConfigured() {
-        when(gemini.reply(any(), any())).thenReturn(new ChatReply("from gemini", List.of(), "gemini"));
+    void geminiRewritesAnAnswerThatHasData() {
+        when(rules.reply(any(), any())).thenReturn(new ChatReply("plain", parcel, "rules"));
+        when(gemini.write(anyString(), anyString(), any())).thenReturn("clear");
 
-        assertThat(service("gemini", "key").chat(question, visitor).text()).isEqualTo("from gemini");
-        verify(rules, never()).reply(any(), any());
+        ChatReply reply = service("gemini", "key").chat(question, visitor);
+
+        assertThat(reply.text()).isEqualTo("clear");
+        assertThat(reply.cards()).isEqualTo(parcel);
+        assertThat(reply.provider()).isEqualTo("gemini");
+        verify(gemini).write("Where is SD2611874236?", "plain", parcel);
     }
 
     @Test
-    void rulesAnswerWhenGeminiFails() {
-        when(gemini.reply(any(), any())).thenThrow(new ProviderUnavailableException("quota"));
-        when(rules.reply(any(), any())).thenReturn(new ChatReply("from rules", List.of(), "rules"));
+    void thePlainAnswerIsSentWhenGeminiFails() {
+        when(rules.reply(any(), any())).thenReturn(new ChatReply("plain", parcel, "rules"));
+        when(gemini.write(anyString(), anyString(), any())).thenThrow(new ProviderUnavailableException("timeout"));
 
-        assertThat(service("gemini", "key").chat(question, visitor).provider()).isEqualTo("rules");
+        ChatReply reply = service("gemini", "key").chat(question, visitor);
+
+        assertThat(reply.text()).isEqualTo("plain");
+        assertThat(reply.provider()).isEqualTo("rules");
     }
 
     @Test
-    void rulesAnswerWithoutAKeyOrWhenChosen() {
-        when(rules.reply(any(), any())).thenReturn(new ChatReply("from rules", List.of(), "rules"));
+    void answersWithoutDataAreNotRewritten() {
+        when(rules.reply(any(), any())).thenReturn(new ChatReply("Which district?", List.of(), "rules"));
+
+        assertThat(service("gemini", "key").chat(question, visitor).text()).isEqualTo("Which district?");
+        verify(gemini, never()).write(anyString(), anyString(), any());
+    }
+
+    @Test
+    void geminiIsNotUsedWithoutAKeyOrWhenRulesAreChosen() {
+        when(rules.reply(any(), any())).thenReturn(new ChatReply("plain", parcel, "rules"));
 
         service("gemini", " ").chat(question, visitor);
         service("rules", "key").chat(question, visitor);
 
-        verify(gemini, never()).reply(any(), any());
+        verify(gemini, never()).write(anyString(), anyString(), any());
     }
 
     @Test

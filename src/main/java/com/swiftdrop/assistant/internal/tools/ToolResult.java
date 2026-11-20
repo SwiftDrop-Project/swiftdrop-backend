@@ -3,7 +3,7 @@ package com.swiftdrop.assistant.internal.tools;
 import java.util.Map;
 
 /**
- * What a tool returns: data for the model (and MCP clients), and optionally a card for the chat UI.
+ * What a tool returns: the data (from SwiftDrop's APIs), and optionally a card for the chat UI.
  *
  * @param error true when the tool couldn't do it; {@code data.error} says why, in words a person can act on
  */

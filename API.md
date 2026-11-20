@@ -1450,22 +1450,34 @@ status is present, 0 when none.
 ## Assistant (AI delivery assistant)
 
 A chatbot that answers questions such as "Where is my parcel?" or "How much to send 2 kg to Kandy?". It never
-invents facts: every answer comes from SwiftDrop's own APIs, called as **tools** (the same tools are offered to other
-AI clients over MCP, below). With `ASSISTANT_PROVIDER=gemini` and `GEMINI_API_KEY` set, Google Gemini reads the
-question and chooses the tools; otherwise, or when Gemini fails or times out, a built-in rules engine answers
-(`provider: "rules"`). The API key stays on the server and is never sent to the browser.
+invents facts: every answer is built only from the data of SwiftDrop's own APIs. Each message is answered in two
+steps:
+
+1. **Data.** SwiftDrop's code understands the question (tracking numbers, price details, "my parcels", districts),
+   calls the APIs below and builds a plain answer and cards from their data. If something is missing (a district,
+   the weight), it asks for it.
+2. **Wording.** With `ASSISTANT_PROVIDER=gemini` and `GEMINI_API_KEY` set, Google Gemini rewrites an answer that has
+   data in clear, friendly sentences (`provider: "gemini"`). Gemini gets only the question, the data and the plain
+   answer; it has no tools and can't fetch anything. An answer with an amount or tracking number that isn't in the
+   data is thrown away. Without Gemini, when it fails or times out, and for answers without data, the plain answer is
+   sent (`provider: "rules"`).
+
+The API key stays on the server and is never sent to the browser.
 
 **Privacy.** The assistant sees only what public tracking shows (status, towns, branch, failure reason) and, for a
 logged-in customer or merchant, their own parcels. It never sees names, phone numbers, addresses or amounts due.
 
-### Tools
+### Where the data comes from
 
-| Tool | Who | Arguments | Uses |
+| Step | Who | Needs | Uses |
 |---|---|---|---|
 | `track_parcel` | anyone | `trackingNumber` (spaces and case ignored) | `GET /track/{trackingNumber}` (counts against its 30/minute limit) |
 | `estimate_price` | anyone | `pickupDistrict`, `dropOffDistrict` (district codes), `weightKg` (0.01-50), optional `lengthCm`, `widthCm`, `heightCm` (1-300, all three or none) | `POST /pricing/estimate` |
 | `list_districts` | anyone | none | `GET /meta/districts` |
-| `my_parcels` | logged-in CUSTOMER or MERCHANT, chat only | optional `status` | `GET /tracking/mine` (their latest 10) |
+| `my_parcels` | logged-in CUSTOMER or MERCHANT (`/assistant/chat/me`) | optional `status` | `GET /tracking/mine` (their latest 10) |
+
+The data is exactly what these endpoints return: the assistant reads it through the same services
+(`TrackingApi`, `PricingApi`), inside the backend, so the same rules, limits and privacy apply.
 
 ### `POST /assistant/chat` (public) and `POST /assistant/chat/me` (logged in)
 
@@ -1505,7 +1517,7 @@ conversation and sends it each time, oldest first; the last message must be the 
 }
 ```
 
-`cards` holds what the tools found, for the page to show next to the reply:
+`cards` holds the data the answer was built from, for the page to show next to the reply:
 
 | `type` | `data` |
 |---|---|
@@ -1519,27 +1531,4 @@ Rules and errors:
 - At most 20 messages per minute per user (or per IP when not logged in; `ASSISTANT_MESSAGES_PER_MINUTE`), then
   `429 TOO_MANY_REQUESTS`.
 - `/assistant/chat/me` without a login: `401 UNAUTHENTICATED`.
-- A tool failure (unknown number, bad district, too heavy) is not an error: the reply explains it.
-
-### MCP server: `POST /mcp` (public)
-
-The public tools (`track_parcel`, `estimate_price`, `list_districts`) as a
-[Model Context Protocol](https://modelcontextprotocol.io) server, so AI clients such as Claude Desktop or MCP
-Inspector can use SwiftDrop directly. Streamable HTTP transport, JSON responses only (no event stream), no session id.
-
-| JSON-RPC method | Result |
-|---|---|
-| `initialize` | `protocolVersion` (the client's if supported: 2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05; otherwise the newest), `capabilities.tools`, `serverInfo` `{ "name": "swiftdrop" }` |
-| `ping` | `{}` |
-| `tools/list` | `tools`: `name`, `title`, `description`, `inputSchema` (JSON Schema), `annotations.readOnlyHint: true` |
-| `tools/call` | `content` (one `text` item, the result as JSON), `structuredContent` (the result), `isError` |
-| a notification (no `id`) | `202 Accepted`, no body |
-
-A bad request is a JSON-RPC error with HTTP 200: `-32600` invalid request, `-32601` unknown method, `-32602`
-unknown tool or bad params. A tool's own failure, including the per-IP limit (20 calls per minute), is a normal
-result with `isError: true`. `GET /mcp` is `405` (no server-sent events).
-
-```json
-{ "jsonrpc": "2.0", "id": 3, "method": "tools/call",
-  "params": { "name": "track_parcel", "arguments": { "trackingNumber": "SD2611004817" } } }
-```
+- A lookup that finds nothing (unknown number, bad district, too heavy) is not an error: the reply explains it.

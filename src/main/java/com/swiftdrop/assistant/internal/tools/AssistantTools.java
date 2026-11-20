@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.JsonNodeFactory;
 
-/** Every assistant tool, for the chat model and for MCP. */
+/** Every assistant tool. */
 @Component
 public class AssistantTools {
 
@@ -33,7 +33,7 @@ public class AssistantTools {
     }
 
     /**
-     * Runs a tool. An unknown tool or an unexpected failure becomes a failed result the model can explain; only a
+     * Runs a tool. An unknown tool or an unexpected failure becomes a failed result the answer can explain; only a
      * rate limit is thrown (429 for the whole request).
      */
     public ToolResult run(String name, JsonNode arguments, Caller caller) {

@@ -139,7 +139,6 @@ swiftdrop:
   assistant:
     provider: ${ASSISTANT_PROVIDER:rules}
     messages-per-minute: ${ASSISTANT_MESSAGES_PER_MINUTE:20}
-    max-tool-calls: 5
     gemini:
       api-key: ${GEMINI_API_KEY:}
       # gemini-3.5-flash answers in a few seconds on the free tier; newer models can take 20 s or more.

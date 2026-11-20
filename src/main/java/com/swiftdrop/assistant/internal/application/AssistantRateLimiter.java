@@ -10,7 +10,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.springframework.stereotype.Component;
 
 /**
- * Chat messages and MCP tool calls per client per minute (default 20, {@code swiftdrop.assistant.messages-per-minute}),
+ * Chat messages per user (or IP) per minute (default 20, {@code swiftdrop.assistant.messages-per-minute}),
  * so nobody can run up the model's free quota or use the assistant to guess tracking numbers. In memory, per instance.
  */
 @Component
