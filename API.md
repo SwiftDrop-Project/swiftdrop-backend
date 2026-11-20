@@ -1021,17 +1021,88 @@ Response `200`:
 
 ---
 
-## Merchant Orders (WP5 — coming in PR 3, after WP3 merges)
+## Merchant Orders (WP5)
 
-Authenticated with either the `SD_TOKEN` cookie **or** an `X-Api-Key: <rawKey>` header.
+Authenticated with either the `SD_TOKEN` cookie **or** an `X-Api-Key: <rawKey>` header (role `MERCHANT`).
+The merchant id always comes from the login — it is never in the request body.
+Only `APPROVED` merchants may create or list orders; a `PENDING` or `REJECTED` account gets `403 MERCHANT_NOT_APPROVED`.
 
 ### Create order
 `POST /merchant/orders`
 
-### List orders
-`GET /merchant/orders`
+Request:
+```json
+{
+  "merchantOrderRef": "TECH-ORD-1001",
+  "pickup":    { "name": "Lanka Crafts", "phone": "077 123 4567", "addressLine": "12 High Level Road",
+                 "city": "Nugegoda", "district": "COLOMBO" },
+  "recipient": { "name": "Nimal Perera", "phone": "0719876543", "addressLine": "45 Peradeniya Road",
+                 "city": "Kandy", "district": "KANDY" },
+  "weightKg": 1.5,
+  "codAmount": 2500.00,
+  "instructions": "Call before coming",
+  "lengthCm": 30,
+  "widthCm": 20,
+  "heightCm": 10,
+  "keepUpright": false
+}
+```
 
-> Full request/response shapes will be documented here when WP3's `DeliveryApi` contract is finalised.
+| Field | Rule | Message |
+|---|---|---|
+| `merchantOrderRef` | Optional, up to 100 characters. Idempotency key: resending the same value returns the original parcel. | "Use 100 characters or fewer." |
+| `pickup`, `recipient` | Required | "Enter the pickup details." / "Enter the recipient's details." |
+| `*.name` | 1–100 characters | "Enter a name." / "Use 100 characters or fewer." |
+| `*.phone` | Sri Lankan mobile in any accepted form; stored as `+947XXXXXXXX` | "Enter a Sri Lankan mobile number, like 077 123 4567." |
+| `*.addressLine` | 1–200 characters | "Enter the address." / "Use 200 characters or fewer." |
+| `*.city` | 1–80 characters | "Enter the city." / "Use 80 characters or fewer." |
+| `*.district` | One of `GET /meta/districts` | "Select a district." |
+| `weightKg` | 0.01–50, up to 2 decimals | "Enter the weight." / "Enter a weight above 0 kg." / "A parcel can weigh up to 50 kg." / "Use up to 2 decimal places." |
+| `codAmount` | Optional; 0.01–500000, up to 2 decimals | "Enter an amount above 0, or leave it out." / "Cash on delivery can be up to Rs. 500,000." |
+| `instructions` | Optional, up to 500 characters | "Use 500 characters or fewer." |
+| `lengthCm`, `widthCm`, `heightCm` | Required; whole cm 1–300 | "Enter the length." / "Enter the width." / "Enter the height." / "Use whole centimetres from 1 to 300." |
+| `keepUpright` | Optional, default `false` | |
+
+Response `201`: a Merchant Order.
+```json
+{
+  "id": "6f1c2b8e-3a4d-4c8e-9b1a-2f3e4d5c6b7a",
+  "trackingNumber": "SD2611004817",
+  "status": "CREATED",
+  "merchantOrderRef": "TECH-ORD-1001",
+  "pickup":    { "name": "Lanka Crafts", "phone": "+94771234567", "addressLine": "12 High Level Road",
+                 "city": "Nugegoda", "district": "COLOMBO" },
+  "recipient": { "name": "Nimal Perera", "phone": "+94719876543", "addressLine": "45 Peradeniya Road",
+                 "city": "Kandy", "district": "KANDY" },
+  "weightKg": 1.5,
+  "codAmount": 2500.00,
+  "instructions": "Call before coming",
+  "feeAmount": 450.00,
+  "currency": "LKR",
+  "createdAt": "2026-11-07T04:30:00Z",
+  "updatedAt": "2026-11-07T04:30:00Z",
+  "currentBranch": null,
+  "failureReason": null,
+  "proof": null,
+  "size": { "lengthCm": 30, "widthCm": 20, "heightCm": 10, "keepUpright": false },
+  "vehicle": "BIKE",
+  "billableWeightKg": 1
+}
+```
+- `merchantOrderRef`: the value you supplied; `null` when omitted. Resending the same ref returns the original parcel unchanged (idempotent retry).
+- `feeAmount` / `currency`: set by pricing at creation time (same quote as `POST /pricing/estimate`).
+- `currentBranch`: set only while `AT_BRANCH`. `failureReason`: only while `FAILED`. `proof`: `{ "recipientName": "Nimal Perera", "hasPhoto": false }` once `DELIVERED`.
+- `400` `VALIDATION_FAILED` · `401` `UNAUTHENTICATED` · `403` `MERCHANT_NOT_APPROVED` (account not yet approved) · `403` `FORBIDDEN` (not a `MERCHANT`) · `409` `PARCEL_NEEDS_MANUAL_QUOTE` (no vehicle carries or fits it)
+
+### List orders
+`GET /merchant/orders?page=0&size=20&status=CREATED`
+
+The merchant's own orders, newest first, as a page of Merchant Order (the shape above):
+```json
+{ "content": [ /* Merchant Order */ ], "page": 0, "size": 20, "totalElements": 5, "totalPages": 1 }
+```
+- `page` from 0 (default 0); `size` 1–100 (default 20); `status` optional, one of the parcel statuses.
+- `200` · `400` `VALIDATION_FAILED` (`fieldErrors.page`: "Use a page number of 0 or more.", `fieldErrors.size`: "Use a page size from 1 to 100.") · `401` · `403` `MERCHANT_NOT_APPROVED` · `403` `FORBIDDEN`
 
 ---
 

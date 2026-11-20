@@ -5,6 +5,10 @@
  * {@link com.swiftdrop.identity.MerchantProfiles}; this module implements it. Approval and rejection change the user's
  * status through {@link com.swiftdrop.identity.IdentityApi}. So merchants depends on identity, never the other way.
  *
+ * <p>Merchant orders (POST/GET /merchant/orders) are forwarded to delivery through
+ * {@link com.swiftdrop.delivery.DeliveryApi}; the approval gate for API-key and cookie-authenticated merchants lives
+ * here.
+ *
  * <p>Public API: {@link com.swiftdrop.merchants.MerchantApi}, {@link com.swiftdrop.merchants.MerchantSummary},
  * {@link com.swiftdrop.merchants.ApprovalStatus}.
  *
