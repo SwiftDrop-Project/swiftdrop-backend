@@ -1625,3 +1625,145 @@ the index was added is not listed yet. Live changes come on `/topic/live`.
 How many indexed parcels match the same filters, per status (the status filter is ignored, so a status picker can
 show the numbers): `{ "total": 12, "byStatus": { "CREATED": 3, "AT_BRANCH": 2, ..., "DELIVERED": 7 } }`. Every
 status is present, 0 when none.
+
+## Assistant (AI delivery assistant)
+
+A chatbot that answers questions such as "Where is my parcel?" or "How much to send 2 kg to Kandy?", and gives
+admins daily, weekly and monthly service reports ("This week's report") and answers to their other questions about
+the service ("How many parcels are out for delivery?", "Success rate this month?", "Show failed parcels going to
+Kandy"). It never
+invents facts: every answer is built only from the data of SwiftDrop's own APIs. Each message is answered in two
+steps:
+
+1. **Data.** SwiftDrop's code understands the question (tracking numbers, price details, "my parcels", districts,
+   reports for admins),
+   calls the APIs below and builds a plain answer and cards from their data. If something is missing (a district,
+   the weight), it asks for it.
+2. **Wording.** With `ASSISTANT_PROVIDER=gemini` and `GEMINI_API_KEY` set, Google Gemini rewrites an answer that has
+   data in clear, friendly sentences (`provider: "gemini"`). Gemini gets only the question, the data and the plain
+   answer; it has no tools and can't fetch anything. An answer with a number (amount, count, percentage, date) or a
+   tracking number that isn't in the data or the plain answer is thrown away. Without Gemini, when it fails or times out, and for answers without data, the plain answer is
+   sent (`provider: "rules"`).
+
+The API key stays on the server and is never sent to the browser. The same data tools are also offered to other AI
+clients over MCP (below).
+
+**Privacy.** The assistant sees only what public tracking shows (status, towns, branch, failure reason) and, for a
+logged-in customer or merchant, their own parcels. It never sees names, phone numbers, addresses or amounts due.
+
+### Where the data comes from
+
+| Step | Who | Needs | Uses |
+|---|---|---|---|
+| `track_parcel` | anyone | `trackingNumber` (spaces and case ignored) | `GET /track/{trackingNumber}` (counts against its 30/minute limit) |
+| `estimate_price` | anyone | `pickupDistrict`, `dropOffDistrict` (district codes), `weightKg` (0.01-50), optional `lengthCm`, `widthCm`, `heightCm` (1-300, all three or none) | `POST /pricing/estimate` |
+| `list_districts` | anyone | none | `GET /meta/districts` |
+| `my_parcels` | logged-in CUSTOMER or MERCHANT (`/assistant/chat/me`) | optional `status` | `GET /tracking/mine` (their latest 10) |
+| `service_report` | logged-in ADMIN (`/assistant/chat/me`); never on MCP | `period` (`DAILY`, `WEEKLY`, `MONTHLY`), optional `date` (yyyy-MM-dd, any day in the period; today when left out) | `DeliveryApi.stats` (booked, delivered, failed per day; the same figures as the admin dashboard), `DeliveryApi.countByStatus`, `TrackingApi.breakdown` (districts and failure reasons from `tracking.parcel_index`, like `/admin/tracking/parcels`), `IdentityApi.getUserRoleCounts` |
+| `parcel_counts` | ADMIN | none | `DeliveryApi.countByStatus` (parcels in each status now) |
+| `account_counts` | ADMIN | none | `IdentityApi.getUserRoleCounts` (accounts per role, merchants waiting for approval; counts only) |
+| `find_parcels` | ADMIN | optional `status`, `pickupDistrict`, `dropOffDistrict`, `branch` (parcels at that branch now), `bookedFrom`, `bookedTo` (yyyy-MM-dd) | `DeliveryApi.search` (the admin All Parcels search) or `DeliveryApi.findAtBranch`; how many match and the newest 10, public view only (no names, phones, addresses or amounts) |
+
+The data is exactly what these endpoints return: the assistant reads it through the same services
+(`TrackingApi`, `PricingApi`, `DeliveryApi`, `IdentityApi`), inside the backend, so the same rules, limits and
+privacy apply.
+
+**Reports (admins).** An admin asks in words: "today's report", "report for yesterday", "this week's report",
+"summary of last month", "monthly report for October", "daily report for 2026-11-10". Without a period the assistant
+asks "Which report would you like: daily, weekly or monthly?". Days are Sri Lanka days; a week runs Monday to Sunday
+and a month is a calendar month. A period that hasn't ended is counted up to today (`partial: true`) and compared with
+the same days of the period before (a month never borrows days of the next month). A period that starts after today
+is refused in the reply. Other roles asking for a report get the normal help answer.
+
+**Other admin questions.** Answered from one of the admin tools above:
+
+| Question | Tool | Card |
+|---|---|---|
+| "How many parcels are out for delivery / waiting for pickup / at a branch?", "How many parcels do we have?" | `parcel_counts` | `FACTS` |
+| "How many couriers do we have?", "Any merchants waiting for approval?" | `account_counts` | `FACTS` |
+| "How many parcels were booked / delivered / failed yesterday?", "Success rate this month?", "Busiest day this week?", "Top districts last month?", "Why did deliveries fail this week?" (no period: today; busiest day: this week) | `service_report` | `FACTS` |
+| "Show failed parcels going to Kandy", "Parcels at the Colombo branch", "How many parcels from Galle are in transit?", "Which parcels were booked today?" | `find_parcels` | `PARCEL_LIST` with `total` and `filters` |
+
+A district after "from" is the pickup district, one before "branch" is the branch, any other is the drop-off
+district; a period in a search filters by booking day. The reply always says which filters were used.
+
+### `POST /assistant/chat` (public) and `POST /assistant/chat/me` (logged in)
+
+Same body and response. `/assistant/chat` ignores the login cookie (so it never lists anyone's parcels);
+`/assistant/chat/me` needs a login and adds `my_parcels` for customers and merchants and `service_report` for
+admins. The client keeps the
+conversation and sends it each time, oldest first; the last message must be the user's.
+
+```json
+{
+  "messages": [
+    { "role": "user", "text": "How much to send 2 kg to Kandy?" },
+    { "role": "assistant", "text": "Sure. Which district should we collect it from?" },
+    { "role": "user", "text": "Colombo, it's 30 x 20 x 10 cm" }
+  ]
+}
+```
+
+```json
+{
+  "reply": "Sending 2 kg from Colombo to Kandy costs Rs. 472.60.",
+  "provider": "gemini",
+  "cards": [
+    {
+      "type": "PRICE",
+      "data": {
+        "pickupDistrict": "Colombo", "dropOffDistrict": "Kandy", "weightKg": 2,
+        "status": "COMPLETE", "currency": "LKR", "total": 472.60, "totalText": "Rs. 472.60",
+        "billableWeightKg": 2, "vehicle": "BIKE", "distanceKm": 122.6,
+        "lines": [
+          { "component": "WEIGHT", "amount": 50.00 }, { "component": "PICKUP", "amount": 150.00 },
+          { "component": "DELIVERY", "amount": 150.00 }, { "component": "LINEHAUL", "amount": 122.60 }
+        ],
+        "note": "Full estimate."
+      }
+    }
+  ]
+}
+```
+
+`cards` holds the data the answer was built from, for the page to show next to the reply:
+
+| `type` | `data` |
+|---|---|
+| `TRACKING` | `trackingNumber`, `status`, `statusText`, `from`, `to` (town, district), `currentBranch`, `lastUpdate` (text), `updatedAt` |
+| `PARCEL_LIST` | `parcels`: up to 10 rows shaped like `TRACKING`; an admin's search adds `total` (how many match) and `filters` (in words) |
+| `FACTS` | `title`, `subtitle` (the period, or null for figures of right now), `facts`: `label`, `value` (text) |
+| `PRICE` | as above; `status` is `COMPLETE`, `PROVISIONAL` (no size given: pickup and delivery charges not included) or `MANUAL_QUOTE` (`total` null) |
+| `REPORT` | `period`, `title`, `from`, `to`, `countedTo`, `partial`, `rangeText`, `booked`, `delivered`, `failed`, `successRate` (delivered / (delivered + failed) in %, one decimal, null when none finished), `previous` (`from`, `to`, `text`, the same four figures), `changes` (`booked`, `delivered`, `failed`: `difference`, `percent` or null), `perDay` and `busiestDay` (weekly and monthly only), `topPickupDistricts` / `topDropOffDistricts` (top 5 `district`, `count`), `failureReasons` (`reason`, `count`; parcels that failed in the period and are still FAILED), `statusNow` (`status`, `label`, `count`, all parcels now), `accountsNow` (`total`, `customers`, `merchants`, `couriers`, `dispatchers`, `pendingMerchants`) |
+
+Rules and errors:
+- 1-20 messages; `role` is `user` or `assistant`; `text` not blank, at most 4000 characters; the last message is the
+  user's and at most 500 characters. Otherwise `400 VALIDATION_FAILED` (field `messages`).
+- At most 20 messages per minute per user (or per IP when not logged in; `ASSISTANT_MESSAGES_PER_MINUTE`), then
+  `429 TOO_MANY_REQUESTS`.
+- `/assistant/chat/me` without a login: `401 UNAUTHENTICATED`.
+- A lookup that finds nothing (unknown number, bad district, too heavy) is not an error: the reply explains it.
+
+### MCP server: `POST /mcp` (public)
+
+The public data tools (`track_parcel`, `estimate_price`, `list_districts`) as a
+[Model Context Protocol](https://modelcontextprotocol.io) server, so AI clients such as Claude Desktop or MCP
+Inspector can use SwiftDrop's data directly. The client's own AI decides which tool to call; SwiftDrop only returns
+the data (the same data as the endpoints above). Gemini is not used here, and `my_parcels` is not offered. Streamable HTTP transport, JSON responses only (no event stream), no session id.
+
+| JSON-RPC method | Result |
+|---|---|
+| `initialize` | `protocolVersion` (the client's if supported: 2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05; otherwise the newest), `capabilities.tools`, `serverInfo` `{ "name": "swiftdrop" }` |
+| `ping` | `{}` |
+| `tools/list` | `tools`: `name`, `title`, `description`, `inputSchema` (JSON Schema), `annotations.readOnlyHint: true` |
+| `tools/call` | `content` (one `text` item, the result as JSON), `structuredContent` (the result), `isError` |
+| a notification (no `id`) | `202 Accepted`, no body |
+
+A bad request is a JSON-RPC error with HTTP 200: `-32600` invalid request, `-32601` unknown method, `-32602`
+unknown tool or bad params. A tool's own failure, including the per-IP limit (20 calls per minute), is a normal
+result with `isError: true`. `GET /mcp` is `405` (no server-sent events).
+
+```json
+{ "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+  "params": { "name": "track_parcel", "arguments": { "trackingNumber": "SD2611004817" } } }
+```

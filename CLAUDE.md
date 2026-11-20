@@ -19,7 +19,8 @@ Every direct sub-package of `com.swiftdrop` is a module. `SwiftdropBackendApplic
 | `delivery` | DeliveryApi, DeliveryOutboxApi, OutboxMessage, DeliverySnapshot, DeliveryContact, CreateDeliveryCommand, ChangeStatusCommand, ParcelStatus (incl. `AT_BRANCH`; branch = `District`), ParcelStatusEntry, ParcelStatusChanged, FailureReason, ProofPhoto, ProofPhotoRef, DeliveryStats | `delivery` (incl. `outbox_events`) | Pasindu |
 | `dispatch` | AssignmentApi (courier-facing), AssignmentView, AssignmentItemView, RecordOutcomeCommand, AssignmentType, AssignmentStatus, ItemOutcome, TaskProblem | `dispatch` (`courier_assignments`, `assignment_items`, `pickup_queue`) | D.M.A.I. Disanayaka (WP8) |
 | `reporting` | - | none | TBD |
-| `tracking` | - (endpoints, WebSocket/STOMP and a RabbitMQ listener only) | `tracking` (`parcel_index`) | D.M.A.I. Disanayaka (WP8) |
+| `tracking` | TrackingApi, ParcelTracking, ParcelBreakdown (read-only lookups for the assistant; plus endpoints, WebSocket/STOMP and a RabbitMQ listener) | `tracking` (`parcel_index`) | D.M.A.I. Disanayaka (WP8) |
+| `assistant` | - (endpoints only: the AI chat and the MCP server) | none | D.M.A.I. Disanayaka |
 | `notifications` | NotificationsApi, AccountEmail | `notifications` | TBD |
 | `webhooks` | - | `webhooks` (`subscriptions`, `deliveries`) | chanuka (WP6) |
 | `outbox` | - (reads the outbox only through `DeliveryOutboxApi`) | none | TBD |
@@ -49,7 +50,8 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
 - Unbuilt modules have placeholder contracts ("Contract owned by <module> - extend in Phase 0"); the owner extends them.
 - Current dependencies: identity -> notifications, shared; merchants -> identity, shared; delivery -> pricing, shared;
   dispatch -> delivery, identity, shared; tracking -> delivery, shared; courier -> delivery, dispatch, shared;
-  pricing -> shared; infrastructure -> shared; webhooks -> delivery, merchants, shared. Nothing depends on courier or
+  pricing -> shared; infrastructure -> shared; webhooks -> delivery, merchants, shared;
+  assistant -> tracking, pricing, delivery, identity, shared. Nothing depends on courier, assistant or
   webhooks.
 - webhooks (contract in API.md "Webhooks", being built): reads `ParcelStatusChanged` from `webhooks.q` (declared by
   infrastructure; never declare it again with other arguments), stores one delivery row per event and subscription,
@@ -74,6 +76,15 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
   `GET /tracking/mine`). In-memory simple broker; each instance has its own auto-delete RabbitMQ queue.
   The admin's all-parcels list (`/admin/tracking/parcels`) reads tracking's own `tracking.parcel_index`, filled from
   `ParcelStatusChanged` and from lookups (delivery has no admin search).
+- assistant (API.md "Assistant"): `POST /assistant/chat` (public), `/assistant/chat/me` (logged in) and an MCP
+  server at `POST /mcp` (public, JSON-RPC; the public data tools, no Gemini).
+  `RulesChatProvider` understands the question and gets the data through tools (`internal/tools`) that call
+  `TrackingApi` and `PricingApi`; admins also get daily/weekly/monthly service reports (`ServiceReportTool`, from
+  `DeliveryApi.stats`/`countByStatus`, `TrackingApi.breakdown` and `IdentityApi.getUserRoleCounts`; never on MCP)
+  and answers to other admin questions (`AdminAnswers`: `parcel_counts`, `account_counts`, `find_parcels` through
+  `DeliveryApi.search`, public view only).
+  Gemini (`GeminiAnswerWriter`; `ASSISTANT_PROVIDER=gemini`, `GEMINI_API_KEY` only in `.env`, never logged) only rewrites answers that have data, with no tools; an answer with a number or tracking
+  number not in the data falls back to the plain one. Tests always use the rules provider.
 - courier (one API, `/courier/deliveries`) shows the parcels of the courier's dispatch tasks (`AssignmentApi`) one
   by one, even when a dispatcher grouped several in one task. On each status change it calls
   `DeliveryApi.changeStatus` and then `AssignmentApi.recordOutcome` in one transaction; "Unable to Collect" records
