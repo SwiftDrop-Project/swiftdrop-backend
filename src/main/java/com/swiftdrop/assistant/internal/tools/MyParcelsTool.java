@@ -3,6 +3,7 @@ package com.swiftdrop.assistant.internal.tools;
 import com.swiftdrop.delivery.ParcelStatus;
 import com.swiftdrop.tracking.ParcelTracking;
 import com.swiftdrop.tracking.TrackingApi;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -25,6 +26,28 @@ class MyParcelsTool implements AssistantTool {
     @Override
     public String name() {
         return "my_parcels";
+    }
+
+    @Override
+    public String title() {
+        return "My parcels";
+    }
+
+    @Override
+    public String description() {
+        return "List the logged-in user's own parcels (their bookings or orders), newest first, at most " + LIMIT
+                + ", with each parcel's status. Optionally only one status. Use it for questions like \"Where are "
+                + "my parcels?\" or \"Has my parcel been delivered?\" when no tracking number is given.";
+    }
+
+    @Override
+    public Map<String, Object> parameters() {
+        return Map.of(
+                "type", "object",
+                "properties", Map.of("status", Map.of(
+                        "type", "string",
+                        "description", "Only parcels with this status",
+                        "enum", Arrays.stream(ParcelStatus.values()).map(Enum::name).toList())));
     }
 
     @Override

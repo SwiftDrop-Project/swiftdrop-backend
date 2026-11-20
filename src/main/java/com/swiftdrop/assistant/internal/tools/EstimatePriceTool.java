@@ -7,6 +7,7 @@ import com.swiftdrop.shared.reference.District;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.slf4j.Logger;
@@ -31,6 +32,43 @@ class EstimatePriceTool implements AssistantTool {
     @Override
     public String name() {
         return "estimate_price";
+    }
+
+    @Override
+    public String title() {
+        return "Estimate a delivery fee";
+    }
+
+    @Override
+    public String description() {
+        return "Estimate the SwiftDrop delivery fee in Sri Lankan rupees (LKR) for a parcel between two Sri Lankan "
+                + "districts. Needs the pickup district, the drop-off district and the weight in kg (0.01-50). The "
+                + "length, width and height in cm are optional: without them the estimate leaves out the pickup and "
+                + "delivery charges (status PROVISIONAL). Never guess a district the user hasn't given: ask.";
+    }
+
+    @Override
+    public Map<String, Object> parameters() {
+        Map<String, Object> district = Map.of("type", "string", "enum", Words.districtCodes());
+        Map<String, Object> centimetres = Map.of("type", "integer", "minimum", 1, "maximum", 300);
+        Map<String, Object> properties = new LinkedHashMap<>();
+        properties.put("pickupDistrict", withDescription(district, "District the parcel is collected from"));
+        properties.put("dropOffDistrict", withDescription(district, "District the parcel is delivered to"));
+        properties.put("weightKg", Map.of("type", "number", "minimum", 0.01, "maximum", 50,
+                "description", "Weight in kg including packaging"));
+        properties.put("lengthCm", withDescription(centimetres, "Packed length in cm (optional)"));
+        properties.put("widthCm", withDescription(centimetres, "Packed width in cm (optional)"));
+        properties.put("heightCm", withDescription(centimetres, "Packed height in cm (optional)"));
+        return Map.of(
+                "type", "object",
+                "properties", properties,
+                "required", List.of("pickupDistrict", "dropOffDistrict", "weightKg"));
+    }
+
+    private static Map<String, Object> withDescription(Map<String, Object> schema, String description) {
+        Map<String, Object> copy = new LinkedHashMap<>(schema);
+        copy.put("description", description);
+        return copy;
     }
 
     @Override

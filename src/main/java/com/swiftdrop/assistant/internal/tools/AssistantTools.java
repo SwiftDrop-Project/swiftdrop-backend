@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.node.JsonNodeFactory;
 
-/** Every assistant tool. */
+/** Every assistant tool, for the chat and for MCP. */
 @Component
 public class AssistantTools {
 

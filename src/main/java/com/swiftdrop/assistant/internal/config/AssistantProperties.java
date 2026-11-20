@@ -9,7 +9,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  *
  * @param provider          {@code gemini} (Gemini writes the answers from the data) or {@code rules} (plain answers);
  *                          gemini needs {@code gemini.api-key}
- * @param messagesPerMinute chat messages per user (or IP) per minute
+ * @param messagesPerMinute chat messages and MCP tool calls per user (or IP) per minute
  */
 @ConfigurationProperties("swiftdrop.assistant")
 public record AssistantProperties(

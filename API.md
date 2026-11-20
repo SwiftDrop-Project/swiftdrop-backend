@@ -1462,7 +1462,8 @@ steps:
    data is thrown away. Without Gemini, when it fails or times out, and for answers without data, the plain answer is
    sent (`provider: "rules"`).
 
-The API key stays on the server and is never sent to the browser.
+The API key stays on the server and is never sent to the browser. The same data tools are also offered to other AI
+clients over MCP (below).
 
 **Privacy.** The assistant sees only what public tracking shows (status, towns, branch, failure reason) and, for a
 logged-in customer or merchant, their own parcels. It never sees names, phone numbers, addresses or amounts due.
@@ -1532,3 +1533,27 @@ Rules and errors:
   `429 TOO_MANY_REQUESTS`.
 - `/assistant/chat/me` without a login: `401 UNAUTHENTICATED`.
 - A lookup that finds nothing (unknown number, bad district, too heavy) is not an error: the reply explains it.
+
+### MCP server: `POST /mcp` (public)
+
+The public data tools (`track_parcel`, `estimate_price`, `list_districts`) as a
+[Model Context Protocol](https://modelcontextprotocol.io) server, so AI clients such as Claude Desktop or MCP
+Inspector can use SwiftDrop's data directly. The client's own AI decides which tool to call; SwiftDrop only returns
+the data (the same data as the endpoints above). Gemini is not used here, and `my_parcels` is not offered. Streamable HTTP transport, JSON responses only (no event stream), no session id.
+
+| JSON-RPC method | Result |
+|---|---|
+| `initialize` | `protocolVersion` (the client's if supported: 2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05; otherwise the newest), `capabilities.tools`, `serverInfo` `{ "name": "swiftdrop" }` |
+| `ping` | `{}` |
+| `tools/list` | `tools`: `name`, `title`, `description`, `inputSchema` (JSON Schema), `annotations.readOnlyHint: true` |
+| `tools/call` | `content` (one `text` item, the result as JSON), `structuredContent` (the result), `isError` |
+| a notification (no `id`) | `202 Accepted`, no body |
+
+A bad request is a JSON-RPC error with HTTP 200: `-32600` invalid request, `-32601` unknown method, `-32602`
+unknown tool or bad params. A tool's own failure, including the per-IP limit (20 calls per minute), is a normal
+result with `isError: true`. `GET /mcp` is `405` (no server-sent events).
+
+```json
+{ "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+  "params": { "name": "track_parcel", "arguments": { "trackingNumber": "SD2611004817" } } }
+```

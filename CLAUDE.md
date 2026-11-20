@@ -20,7 +20,7 @@ Every direct sub-package of `com.swiftdrop` is a module. `SwiftdropBackendApplic
 | `dispatch` | AssignmentApi (courier-facing), AssignmentView, AssignmentItemView, RecordOutcomeCommand, AssignmentType, AssignmentStatus, ItemOutcome, TaskProblem | `dispatch` (`courier_assignments`, `assignment_items`, `pickup_queue`) | D.M.A.I. Disanayaka (WP8) |
 | `reporting` | - | none | TBD |
 | `tracking` | TrackingApi, ParcelTracking (read-only lookups for the assistant; plus endpoints, WebSocket/STOMP and a RabbitMQ listener) | `tracking` (`parcel_index`) | D.M.A.I. Disanayaka (WP8) |
-| `assistant` | - (endpoints only: the AI chat) | none | D.M.A.I. Disanayaka |
+| `assistant` | - (endpoints only: the AI chat and the MCP server) | none | D.M.A.I. Disanayaka |
 | `notifications` | NotificationsApi, AccountEmail | `notifications` | TBD |
 | `webhooks` | - | `webhooks` (`subscriptions`, `deliveries`) | chanuka (WP6) |
 | `outbox` | - (reads the outbox only through `DeliveryOutboxApi`) | none | TBD |
@@ -76,7 +76,8 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
   `GET /tracking/mine`). In-memory simple broker; each instance has its own auto-delete RabbitMQ queue.
   The admin's all-parcels list (`/admin/tracking/parcels`) reads tracking's own `tracking.parcel_index`, filled from
   `ParcelStatusChanged` and from lookups (delivery has no admin search).
-- assistant (API.md "Assistant"): `POST /assistant/chat` (public) and `/assistant/chat/me` (logged in). No MCP.
+- assistant (API.md "Assistant"): `POST /assistant/chat` (public), `/assistant/chat/me` (logged in) and an MCP
+  server at `POST /mcp` (public, JSON-RPC; the public data tools, no Gemini).
   `RulesChatProvider` understands the question and gets the data through tools (`internal/tools`) that call
   `TrackingApi` and `PricingApi`. Gemini (`GeminiAnswerWriter`; `ASSISTANT_PROVIDER=gemini`, `GEMINI_API_KEY` only in
   `.env`, never logged) only rewrites answers that have data, with no tools; an answer with an amount or tracking
