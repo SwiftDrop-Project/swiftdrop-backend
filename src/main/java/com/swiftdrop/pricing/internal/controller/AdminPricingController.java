@@ -2,7 +2,9 @@ package com.swiftdrop.pricing.internal.controller;
 
 import com.swiftdrop.pricing.PricingApi;
 import com.swiftdrop.pricing.internal.application.AdminPricingService;
+import com.swiftdrop.pricing.internal.application.AdminTariffService;
 import com.swiftdrop.pricing.internal.dto.AdminRateCardResponse;
+import com.swiftdrop.pricing.internal.dto.AdminTariffResponse;
 import com.swiftdrop.pricing.internal.dto.DistrictCentreResponse;
 import com.swiftdrop.pricing.internal.dto.FeeEstimateRequest;
 import com.swiftdrop.pricing.internal.dto.FeeEstimateResponse;
@@ -22,8 +24,9 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 
 /**
- * The admin's Zones &amp; Pricing page (API.md "Zones &amp; pricing (admin, WP4)"). ADMIN only and read only: the
- * estimate saves nothing, and rate cards change only through Flyway migrations.
+ * The admin's Zones &amp; Pricing and Delivery Rates pages (API.md "Zones &amp; pricing (admin, WP4)" and "Delivery
+ * rates (admin, WP4)"). ADMIN only and read only: the estimate saves nothing, and rate cards change only through
+ * Flyway migrations.
  */
 @RestController
 @RequestMapping("/admin/pricing")
@@ -32,11 +35,20 @@ import java.util.List;
 public class AdminPricingController {
 
     private final AdminPricingService adminPricing;
+    private final AdminTariffService tariffs;
     private final PricingApi pricing;
 
-    public AdminPricingController(AdminPricingService adminPricing, PricingApi pricing) {
+    public AdminPricingController(AdminPricingService adminPricing, AdminTariffService tariffs, PricingApi pricing) {
         this.adminPricing = adminPricing;
+        this.tariffs = tariffs;
         this.pricing = pricing;
+    }
+
+    @GetMapping("/tariff")
+    @Operation(summary = "Delivery rates of a rate card (the active one without version): weight tiers, vehicle "
+            + "tariff and sample fees for typical parcels")
+    public AdminTariffResponse tariff(@RequestParam(required = false) Integer version) {
+        return tariffs.tariff(version);
     }
 
     @GetMapping("/rate-card")

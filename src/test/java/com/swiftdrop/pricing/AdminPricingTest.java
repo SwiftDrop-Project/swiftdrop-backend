@@ -27,6 +27,7 @@ class AdminPricingTest extends IntegrationTest {
     void needsALogin() throws Exception {
         mvc.perform(get(BASE + "/rate-card")).andExpect(status().isUnauthorized());
         mvc.perform(get(BASE + "/rate-cards")).andExpect(status().isUnauthorized());
+        mvc.perform(get(BASE + "/tariff")).andExpect(status().isUnauthorized());
         mvc.perform(get(BASE + "/districts")).andExpect(status().isUnauthorized());
         mvc.perform(get(BASE + "/routes").param("from", "COLOMBO")).andExpect(status().isUnauthorized());
         postJson(BASE + "/estimate", estimateBody()).andExpect(status().isUnauthorized());
@@ -38,6 +39,7 @@ class AdminPricingTest extends IntegrationTest {
 
         mvc.perform(get(BASE + "/rate-card").cookie(customer)).andExpect(status().isForbidden());
         mvc.perform(get(BASE + "/rate-cards").cookie(customer)).andExpect(status().isForbidden());
+        mvc.perform(get(BASE + "/tariff").cookie(customer)).andExpect(status().isForbidden());
         mvc.perform(get(BASE + "/districts").cookie(customer)).andExpect(status().isForbidden());
         mvc.perform(get(BASE + "/routes").param("from", "COLOMBO").cookie(customer))
                 .andExpect(status().isForbidden());
@@ -78,6 +80,57 @@ class AdminPricingTest extends IntegrationTest {
             }
         }
         assertThat(activeCount).isEqualTo(1);
+    }
+
+    @Test
+    void theTariffOfTheActiveCardMatchesTheCalculator() throws Exception {
+        Cookie admin = loginAsAdmin();
+
+        JsonNode tariff = json(mvc.perform(get(BASE + "/tariff").cookie(admin))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        JsonNode active = json(mvc.perform(get(BASE + "/rate-card").cookie(admin))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+
+        assertThat(tariff.get("rateCardVersion").asInt()).isEqualTo(active.get("version").asInt());
+        assertThat(tariff.get("active").asBoolean()).isTrue();
+        assertThat(tariff.get("weightTiers")).hasSize(50);
+        assertThat(tariff.get("vehicles").size()).isEqualTo(active.get("vehicles").size());
+        assertThat(tariff.get("samples").size()).isEqualTo(5);
+
+        // The small box at 0 km is the same parcel the calculator prices inside one district.
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("pickupDistrict", "COLOMBO");
+        body.put("dropOffDistrict", "COLOMBO");
+        body.put("weightKg", 2);
+        body.put("lengthCm", 30);
+        body.put("widthCm", 20);
+        body.put("heightCm", 15);
+        JsonNode quote = json(postJson(BASE + "/estimate", body, admin)
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
+        JsonNode smallBox = null;
+        for (JsonNode sample : tariff.get("samples")) {
+            if (sample.get("key").asString().equals("SMALL_BOX")) {
+                smallBox = sample;
+            }
+        }
+        assertThat(smallBox).isNotNull();
+        assertThat(smallBox.get("fees").get(0).get("total").decimalValue())
+                .isEqualByComparingTo(quote.get("total").decimalValue());
+    }
+
+    @Test
+    void anOlderTariffCanBeShownAndAnUnknownVersionIsNotFound() throws Exception {
+        Cookie admin = loginAsAdmin();
+
+        mvc.perform(get(BASE + "/tariff").param("version", "1").cookie(admin))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rateCardVersion").value(1))
+                .andExpect(jsonPath("$.active").value(false));
+        mvc.perform(get(BASE + "/tariff").param("version", "9999").cookie(admin))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("NOT_FOUND"));
+        mvc.perform(get(BASE + "/tariff").param("version", "abc").cookie(admin))
+                .andExpect(status().isBadRequest());
     }
 
     @Test
