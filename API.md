@@ -366,6 +366,9 @@ No login → `401 UNAUTHENTICATED`; any other role → `403 FORBIDDEN`.
 - `POST /admin/merchants/{userId}/reject` → `200` User (status becomes `REJECTED`, `merchant.approvalStatus` `REJECTED`)
 - Both work from any current state (so an admin can correct a mistake) and record who reviewed it and when.
   Unknown `userId` → `404 NOT_FOUND`.
+- After either decision is saved, the merchant is emailed it ("Your SwiftDrop merchant account is approved" /
+  "Your SwiftDrop merchant application", with the business name). The email goes out in the background and never
+  changes the response; a mail problem doesn't undo the decision. The demo merchant seeder sends no email.
 
 ### Users (admin)
 Every account (customers, merchants, couriers, dispatchers, admins). Role `ADMIN` only: no login →

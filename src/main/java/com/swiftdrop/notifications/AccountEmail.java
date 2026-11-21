@@ -23,7 +23,11 @@ public record AccountEmail(Type type, String recipient, String displayName, Map<
         /** A 6-digit code to set a new password. Variables: {@code code}, {@code minutes}. */
         PASSWORD_RESET,
         /** Tells the person their password was just changed. No variables. */
-        PASSWORD_CHANGED
+        PASSWORD_CHANGED,
+        /** Tells a merchant an admin approved their application; they can log in now. Variables: {@code businessName}. */
+        MERCHANT_APPROVED,
+        /** Tells a merchant an admin did not approve their application. Variables: {@code businessName}. */
+        MERCHANT_REJECTED
     }
 
     public AccountEmail {
