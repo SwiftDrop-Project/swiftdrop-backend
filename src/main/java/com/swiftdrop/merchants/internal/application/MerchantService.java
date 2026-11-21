@@ -13,6 +13,8 @@ import com.swiftdrop.merchants.internal.application.MerchantViews.MerchantApplic
 import com.swiftdrop.merchants.internal.application.MerchantViews.MerchantProfileView;
 import com.swiftdrop.merchants.internal.domain.MerchantProfile;
 import com.swiftdrop.merchants.internal.persistence.MerchantProfileRepository;
+import com.swiftdrop.notifications.AccountEmail;
+import com.swiftdrop.notifications.NotificationsApi;
 import com.swiftdrop.shared.error.ErrorCode;
 import com.swiftdrop.shared.error.NotFoundException;
 import org.springframework.stereotype.Service;
@@ -36,10 +38,12 @@ public class MerchantService implements MerchantApi, MerchantProfiles {
 
     private final MerchantProfileRepository profiles;
     private final IdentityApi identity;
+    private final NotificationsApi notifications;
 
-    public MerchantService(MerchantProfileRepository profiles, IdentityApi identity) {
+    public MerchantService(MerchantProfileRepository profiles, IdentityApi identity, NotificationsApi notifications) {
         this.profiles = profiles;
         this.identity = identity;
+        this.notifications = notifications;
     }
 
     /** Called by identity inside its sign-up transaction, right after the MERCHANT user was created or completed. */
@@ -85,22 +89,39 @@ public class MerchantService implements MerchantApi, MerchantProfiles {
                 .toList();
     }
 
-    /** Approves the application; the merchant can log in afterwards. */
+    /**
+     * Approves the application; the merchant can log in afterwards. The merchant is emailed the decision once the
+     * transaction commits (a mail problem never undoes the approval).
+     */
     @Transactional
     public MerchantAccountView approve(UUID merchantUserId, UUID adminId) {
+        MerchantAccountView account = markApproved(merchantUserId, adminId);
+        emailDecision(AccountEmail.Type.MERCHANT_APPROVED, account);
+        return account;
+    }
+
+    /** Rejects the application; login then returns ACCOUNT_REJECTED. The merchant is emailed the decision. */
+    @Transactional
+    public MerchantAccountView reject(UUID merchantUserId, UUID adminId) {
+        MerchantProfile profile = getProfile(merchantUserId);
+        profile.reject(adminId);
+        UserSummary user = identity.changeStatus(merchantUserId, UserStatus.REJECTED);
+        MerchantAccountView account = new MerchantAccountView(user, toView(profiles.saveAndFlush(profile)));
+        emailDecision(AccountEmail.Type.MERCHANT_REJECTED, account);
+        return account;
+    }
+
+    /** The approval itself, without the email (the demo seeder approves its own merchant and emails no one). */
+    private MerchantAccountView markApproved(UUID merchantUserId, UUID adminId) {
         MerchantProfile profile = getProfile(merchantUserId);
         profile.approve(adminId);
         UserSummary user = identity.changeStatus(merchantUserId, UserStatus.ACTIVE);
         return new MerchantAccountView(user, toView(profiles.saveAndFlush(profile)));
     }
 
-    /** Rejects the application; login then returns ACCOUNT_REJECTED. */
-    @Transactional
-    public MerchantAccountView reject(UUID merchantUserId, UUID adminId) {
-        MerchantProfile profile = getProfile(merchantUserId);
-        profile.reject(adminId);
-        UserSummary user = identity.changeStatus(merchantUserId, UserStatus.REJECTED);
-        return new MerchantAccountView(user, toView(profiles.saveAndFlush(profile)));
+    private void emailDecision(AccountEmail.Type type, MerchantAccountView account) {
+        notifications.sendAccountEmail(new AccountEmail(type, account.user().email(), account.user().fullName(),
+                Map.of("businessName", account.profile().businessName())));
     }
 
     /**
@@ -113,7 +134,7 @@ public class MerchantService implements MerchantApi, MerchantProfiles {
         UserSummary user = identity.registerUser(contactPerson, email, normalizedPhone, rawPassword, Role.MERCHANT,
                 UserStatus.PENDING_APPROVAL);
         create(user.id(), business);
-        approve(user.id(), adminId);
+        markApproved(user.id(), adminId);
     }
 
     private MerchantProfile getProfile(UUID userId) {

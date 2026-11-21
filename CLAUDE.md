@@ -16,10 +16,11 @@ Every direct sub-package of `com.swiftdrop` is a module. `SwiftdropBackendApplic
 | `identity` | IdentityApi, UserSummary, CourierSummary, UserRoleCounts, Role, UserStatus, MerchantProfiles (implemented by merchants) | `identity` | Viduranga |
 | `merchants` | MerchantApi, MerchantSummary, ApprovalStatus | `merchants` | Viduranga |
 | `pricing` | PricingApi, QuoteRequest, PriceQuote, Vehicle | `pricing` (rate_cards, vehicle_rates, district_locations) | TBD (fee estimate: Pasindu) |
-| `delivery` | DeliveryApi, DeliveryOutboxApi, OutboxMessage, DeliverySnapshot, DeliveryContact, CreateDeliveryCommand, ChangeStatusCommand, ParcelStatus (incl. `AT_BRANCH`; branch = `District`), ParcelStatusEntry, ParcelStatusChanged, FailureReason, ProofPhoto, ProofPhotoRef, DeliveryStats | `delivery` (incl. `outbox_events`) | Pasindu |
+| `delivery` | DeliveryApi, DeliveryOutboxApi, OutboxMessage, DeliverySnapshot, DeliveryContact, CreateDeliveryCommand, ChangeStatusCommand, ParcelStatus (incl. `AT_BRANCH`; branch = `District`), ParcelStatusEntry, ParcelStatusChanged, FailureReason, ProofPhoto, ProofPhotoRef, DeliveryStats, PaymentMethod (how the fee is paid; not the COD) | `delivery` (incl. `outbox_events`) | Pasindu |
 | `dispatch` | AssignmentApi (courier-facing), AssignmentView, AssignmentItemView, RecordOutcomeCommand, AssignmentType, AssignmentStatus, ItemOutcome, TaskProblem | `dispatch` (`courier_assignments`, `assignment_items`, `pickup_queue`) | D.M.A.I. Disanayaka (WP8) |
 | `reporting` | - | none | TBD |
-| `tracking` | - (endpoints, WebSocket/STOMP and a RabbitMQ listener only) | `tracking` (`parcel_index`) | D.M.A.I. Disanayaka (WP8) |
+| `tracking` | TrackingApi, ParcelTracking, ParcelBreakdown (read-only lookups for the assistant; plus endpoints, WebSocket/STOMP and a RabbitMQ listener) | `tracking` (`parcel_index`) | D.M.A.I. Disanayaka (WP8) |
+| `assistant` | - (endpoints only: the AI chat and the MCP server) | none | D.M.A.I. Disanayaka |
 | `notifications` | NotificationsApi, AccountEmail | `notifications` | TBD |
 | `webhooks` | - | `webhooks` (`subscriptions`, `deliveries`) | chanuka (WP6) |
 | `outbox` | - (reads the outbox only through `DeliveryOutboxApi`) | none | TBD |
@@ -47,11 +48,12 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
 - Controllers never return entities. Map to DTOs in `internal/dto`.
 - A module's public URLs: implement `shared.web.PublicEndpoints` as a bean in the module. Never edit identity's SecurityConfig for that.
 - Unbuilt modules have placeholder contracts ("Contract owned by <module> - extend in Phase 0"); the owner extends them.
-- Current dependencies: identity -> notifications, shared; merchants -> identity, shared; delivery -> pricing, shared;
-  dispatch -> delivery, identity, shared; tracking -> delivery, shared; courier -> delivery, dispatch, identity, shared;
-  pricing -> shared; infrastructure -> shared; webhooks -> delivery, merchants, shared. Nothing depends on courier or
+- Current dependencies: identity -> notifications, shared; merchants -> identity, notifications, shared; delivery -> pricing, shared;
+  dispatch -> delivery, identity, shared; tracking -> delivery, shared; courier -> delivery, dispatch, shared;
+  pricing -> shared; infrastructure -> shared; webhooks -> delivery, merchants, shared;
+  assistant -> tracking, pricing, delivery, identity, shared. Nothing depends on courier, assistant or
   webhooks.
-- webhooks (contract in API.md "Webhooks", being built): reads `ParcelStatusChanged` from `webhooks.q` (declared by
+- webhooks (contract in API.md "Webhooks", built): reads `ParcelStatusChanged` from `webhooks.q` (declared by
   infrastructure; never declare it again with other arguments), stores one delivery row per event and subscription,
   and a scheduled worker sends them. Retries live in the database (`webhooks.deliveries`), not in RabbitMQ queues.
   Signing secrets are stored encrypted (AES-GCM), never hashed and never logged. Merchants get a public payload,
@@ -61,7 +63,10 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
   (callback URL + signing secret + one or more event types), never one per event: merchants select several events on
   one subscription and use more subscriptions only for different systems (at most 5 active per merchant). A callback
   URL may be used by only one active subscription per merchant (`WEBHOOK_URL_IN_USE`, compared with
-  `CallbackDestination`; other merchants may use the same URL).
+  `CallbackDestination`; other merchants may use the same URL). A test ping is tried once. Merchants' "Send test" and
+  "Retry" are limited (`swiftdrop.webhooks.limits`): a 10 s cooldown per subscription / per delivery, kept in the
+  database, and 30 per merchant per minute in memory (`WebhookActionLimiter`); over it: 429 with `Retry-After`
+  (`shared.error.TooManyRequestsException`). Admin retries are not limited.
 - dispatch: `AssignmentApi` is implemented; dispatcher endpoints are under `/dispatch` (DISPATCHER and ADMIN, API.md
   "Dispatch"). Delivery has no "waiting for pickup" query, so dispatch keeps `dispatch.pickup_queue` from
   `ParcelStatusChanged` (RabbitMQ queue `dispatch.q`); it fills only while the outbox relay runs
@@ -74,10 +79,23 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
   `GET /tracking/mine`). In-memory simple broker; each instance has its own auto-delete RabbitMQ queue.
   The admin's all-parcels list (`/admin/tracking/parcels`) reads tracking's own `tracking.parcel_index`, filled from
   `ParcelStatusChanged` and from lookups (delivery has no admin search).
-- courier shows the parcels of the courier's dispatch tasks (`AssignmentApi`) and, on each status change, calls
-  `DeliveryApi.changeStatus` and then `AssignmentApi.recordOutcome` in one transaction (completing the task when its
-  last item closes). It never reads delivery's deprecated `assignedCourierId`. `courier/internal/fake`
-  (`SWIFTDROP_FAKE_DELIVERY`) no longer works with this and its two wiring tests are `@Disabled`: delete them.
+- assistant (API.md "Assistant"): `POST /assistant/chat` (public), `/assistant/chat/me` (logged in) and an MCP
+  server at `POST /mcp` (public, JSON-RPC; the public data tools, no Gemini).
+  `RulesChatProvider` understands the question and gets the data through tools (`internal/tools`) that call
+  `TrackingApi` and `PricingApi`; admins also get daily/weekly/monthly service reports (`ServiceReportTool`, from
+  `DeliveryApi.stats`/`countByStatus`, `TrackingApi.breakdown` and `IdentityApi.getUserRoleCounts`; never on MCP)
+  and answers to other admin questions (`AdminAnswers`: `parcel_counts`, `account_counts`, `find_parcels` through
+  `DeliveryApi.search`, public view only).
+  Gemini (`GeminiAnswerWriter`; `ASSISTANT_PROVIDER=gemini`, `GEMINI_API_KEY` only in `.env`, never logged) only rewrites answers that have data, with no tools; an answer with a number or tracking
+  number not in the data falls back to the plain one. Tests always use the rules provider.
+- courier (one API, `/courier/deliveries`) shows the parcels of the courier's dispatch tasks (`AssignmentApi`) one
+  by one, even when a dispatcher grouped several in one task. On each status change it calls
+  `DeliveryApi.changeStatus` and then `AssignmentApi.recordOutcome` in one transaction; "Unable to Collect" records
+  NOT_COLLECTED / NOT_LOADED without a parcel status change. A parcel is `completed` when its item closes
+  (`ItemOutcome.closes`), and the task is completed through `AssignmentApi.complete` in the same transaction when its
+  last item closes: dispatch's rules decide both, courier never copies them. There is no manual "complete task". It
+  never reads delivery's deprecated `assignedCourierId`. History of completed parcels reads all the courier's tasks
+  (`findOpenForCourier` from `Instant.EPOCH`) because dispatch has no item-level query yet.
 - delivery must never depend on identity: identity -> notifications, and notifications will consume
   `ParcelStatusChanged` (notifications -> delivery), so that would be a cycle. User ids are plain UUIDs and roles are
   plain names (e.g. `COURIER`). Multi-branch: several couriers handle one parcel, so callers authorize

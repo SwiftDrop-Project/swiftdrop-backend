@@ -85,9 +85,10 @@ Change it in the same PR as the code, and tell the frontend team.
 | 409 | `WEBHOOK_LIMIT_REACHED` | Webhooks: creating or turning on a 6th active subscription |
 | 409 | `WEBHOOK_DELIVERY_NOT_RETRYABLE` | Webhooks: retrying a delivery that is not `FAILED` |
 | 409 | `WEBHOOK_URL_IN_USE` | Webhooks: another of your active subscriptions already uses this callback URL |
+| 409 | `WEBHOOK_CHANGED` | Webhooks: someone else changed the same subscription at the same moment (e.g. two tabs); nothing was saved |
 | 409 | `ACCOUNT_REMOVED` | An admin action or password action on a removed account |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | Request body is not `application/json` |
-| 429 | `TOO_MANY_REQUESTS` | Too many requests from this IP address; the `Retry-After` header says how many seconds to wait |
+| 429 | `TOO_MANY_REQUESTS` | Too many requests from this IP address (or, for webhook tests and retries, from this merchant); the `Retry-After` header says how many seconds to wait |
 | 500 | `INTERNAL_ERROR` | Anything unexpected (generic message only) |
 | 503 | `SERVICE_UNAVAILABLE` | A part of SwiftDrop isn't running yet (e.g. courier endpoints before parcels exist on the server) |
 
@@ -114,6 +115,7 @@ Messages of the new codes (show them as-is):
 | `WEBHOOK_LIMIT_REACHED` | You can have up to 5 active webhooks. Turn one off before adding another. |
 | `WEBHOOK_DELIVERY_NOT_RETRYABLE` | Only failed deliveries can be sent again. |
 | `WEBHOOK_URL_IN_USE` | You already have a webhook for this address. Add the events to it instead. |
+| `WEBHOOK_CHANGED` | This webhook was just changed somewhere else. Refresh and try again. |
 | `CANNOT_CHANGE_OWN_ACCOUNT` (409) | You can't block your own account. |
 | `ACCOUNT_NOT_ACTIVE` (409) | Only active accounts can be blocked. Refresh to see the account's latest status. |
 | `ACCOUNT_NOT_BLOCKED` (409) | Only blocked accounts can be unblocked. Refresh to see the account's latest status. |
@@ -366,6 +368,9 @@ No login → `401 UNAUTHENTICATED`; any other role → `403 FORBIDDEN`.
 - `POST /admin/merchants/{userId}/reject` → `200` User (status becomes `REJECTED`, `merchant.approvalStatus` `REJECTED`)
 - Both work from any current state (so an admin can correct a mistake) and record who reviewed it and when.
   Unknown `userId` → `404 NOT_FOUND`.
+- After either decision is saved, the merchant is emailed it ("Your SwiftDrop merchant account is approved" /
+  "Your SwiftDrop merchant application", with the business name). The email goes out in the background and never
+  changes the response; a mail problem doesn't undo the decision. The demo merchant seeder sends no email.
 
 ### Users (admin)
 Every account (customers, merchants, couriers, dispatchers, admins). Role `ADMIN` only: no login →
@@ -519,6 +524,33 @@ The figures on the admin home page (`/admin`). Days are Sri Lanka days (Asia/Col
   that day. `perDay` has all 7 days, oldest first, also days with nothing (all 0). `today` is the last day of `perDay`.
 - `successRate` = `delivered / (delivered + failed) × 100` over the 7 days, one decimal; `0.0` when both are 0.
 - `recentUsers`: the 5 newest accounts (not `REMOVED`), newest first. No email or phone.
+
+#### `GET /admin/reports/summary?from=2026-10-22&to=2026-11-20`
+The Reports & Analytics page (`/admin/reports`). Read only. `from` and `to` are Sri Lanka days, both included.
+```json
+{
+  "totals":   { "from": "2026-10-22", "to": "2026-11-20", "created": 240, "delivered": 180, "failed": 12,
+                "successRate": 93.8 },
+  "previous": { "from": "2026-09-22", "to": "2026-10-21", "created": 210, "delivered": 160, "failed": 15,
+                "successRate": 91.4 },
+  "perDay": [ { "date": "2026-10-22", "created": 8, "delivered": 6, "failed": 0 } ],
+  "byStatus": { "CREATED": 14, "PICKED_UP": 3, "AT_BRANCH": 9, "IN_TRANSIT": 5, "OUT_FOR_DELIVERY": 4,
+                "DELIVERED": 410, "FAILED": 22 }
+}
+```
+- `totals`: the range. `created` = parcels booked in it; `delivered` / `failed` = parcels that reached that status in
+  it. `successRate` = `delivered / (delivered + failed) × 100`, one decimal; `0.0` when both are 0.
+- `previous`: the same number of days just before `from`, to compare with.
+- `perDay`: every day of the range, oldest first, also days with nothing (all 0).
+- `byStatus`: how many parcels are in each status **right now** (all 7 statuses, 0 for none), not limited to the range.
+- Both parameters required, `YYYY-MM-DD`; missing or not a date → `400 VALIDATION_FAILED`. Field errors (`400
+  VALIDATION_FAILED`): `from` "The start date must be on or before the end date." · `to` "The end date can't be in
+  the future." · `to` "Choose a range of up to 366 days."
+
+#### `GET /admin/reports/summary/export?from=&to=`
+The same range as CSV (`text/csv; charset=UTF-8`, download `swiftdrop-report-<from>-to-<to>.csv`): header
+`date,booked,delivered,failed`, one row per day (oldest first), then `total,...`. Same parameters and errors as the
+summary.
 
 ---
 
@@ -749,17 +781,28 @@ The secret is never in this shape. The create and rotate responses add it once:
 |---|---|---|
 | `POST /merchant/webhooks` `{"url", "eventTypes": [...]}` | Create an active subscription (201, subscription + `secret`) | 400 `url`, `eventTypes`; 403 `MERCHANT_NOT_APPROVED`; 409 `WEBHOOK_LIMIT_REACHED`, `WEBHOOK_URL_IN_USE` |
 | `GET /merchant/webhooks` | Your subscriptions, active and turned off, newest first (array of subscriptions) | — |
-| `PATCH /merchant/webhooks/{id}` `{"url"?, "eventTypes"?, "active"?}` | Change only the fields sent (subscription) | 400; 404; 409 `WEBHOOK_LIMIT_REACHED` (turning one on), `WEBHOOK_URL_IN_USE` (new URL or turning one on) |
-| `DELETE /merchant/webhooks/{id}` | Turn off (`active: false`; history is kept). 204. Idempotent | 404 |
-| `POST /merchant/webhooks/{id}/rotate-secret` | New secret; the old one stops working at once, also for retries (200, subscription + `secret`) | 404 |
-| `POST /merchant/webhooks/{id}/test` | Queue a `webhook.ping` for this subscription, sent within seconds (202, delivery). Also works while it is turned off, so a URL can be checked before turning it on. If a ping for it is still waiting to be sent, that one is returned (202) instead of queuing another | 404 |
+| `PATCH /merchant/webhooks/{id}` `{"url"?, "eventTypes"?, "active"?}` | Change only the fields sent (subscription) | 400; 404; 409 `WEBHOOK_LIMIT_REACHED` (turning one on), `WEBHOOK_URL_IN_USE` (new URL or turning one on), `WEBHOOK_CHANGED` |
+| `DELETE /merchant/webhooks/{id}` | Turn off (`active: false`; history is kept). 204. Idempotent, also when two requests turn it off at once | 404; 409 `WEBHOOK_CHANGED` (someone turned it back on at that moment) |
+| `POST /merchant/webhooks/{id}/rotate-secret` | New secret; the old one stops working at once, also for retries (200, subscription + `secret`). If two rotations clash, the loser gets 409 and no secret | 404; 409 `WEBHOOK_CHANGED` |
+| `POST /merchant/webhooks/{id}/test` | Queue a `webhook.ping` for this subscription, sent within seconds and tried once (202, delivery). Also works while it is turned off, so a URL can be checked before turning it on. If a ping for it is still waiting to be sent, that one is returned (202) instead of queuing another. A new ping only 10 seconds after the previous one (see "Limits") | 404; 429 `TOO_MANY_REQUESTS` |
 | `GET /merchant/webhooks/{id}/deliveries?status=&eventType=&search=&from=&to=&page=0&size=20` | Delivery history of one subscription, newest first (page of deliveries). Optional filters: `status`, `eventType`, `search`, `from`, `to` (see "Searching deliveries") | 400 `status`, `eventType`, `search`, `from`, `to`, `page`, `size` (1-100); 404 |
-| `POST /merchant/webhooks/deliveries/{id}/retry` | Send a `FAILED` delivery again, with a new set of attempts: `PENDING`, `attempts: 0`, due now; `lastStatusCode`/`lastError` keep the old values until the next attempt (delivery). A parcel delivery of a turned-off subscription fails again with `SUBSCRIPTION_INACTIVE`: turn the subscription on first | 404; 409 `WEBHOOK_DELIVERY_NOT_RETRYABLE` |
+| `GET /merchant/webhooks/deliveries?status=&eventType=&search=&from=&to=&page=0&size=20` | All your deliveries, from every subscription (active or turned off), newest first (page of deliveries; `subscriptionId` says which one). Same optional filters. `search=<parcel id>` gives every message sent about that parcel, e.g. for an order's details. Only your own deliveries are ever searched | 400 `status`, `eventType`, `search`, `from`, `to`, `page`, `size` (1-100) |
+| `POST /merchant/webhooks/deliveries/{id}/retry` | Send a `FAILED` delivery again, with a new set of attempts (one for a test ping): `PENDING`, `attempts: 0`, due now; `lastStatusCode`/`lastError` keep the old values until the next attempt (delivery). A parcel delivery of a turned-off subscription fails again with `SUBSCRIPTION_INACTIVE`: turn the subscription on first. Only 10 seconds after the delivery's last attempt (see "Limits") | 404; 409 `WEBHOOK_DELIVERY_NOT_RETRYABLE`; 429 `TOO_MANY_REQUESTS` |
 | `GET /admin/webhooks/deliveries?status=FAILED&merchantId=&eventType=&search=&from=&to=&page=0&size=20` | ADMIN: every merchant's deliveries, newest first (page of deliveries, each with `merchantId`). Optional filters: `status`, `merchantId`, `eventType`, `search`, `from`, `to` | 400 `status`, `eventType`, `search`, `from`, `to`, `page`, `size` |
 | `POST /admin/webhooks/deliveries/{id}/retry` | ADMIN: same as the merchant retry | 404; 409 `WEBHOOK_DELIVERY_NOT_RETRYABLE` |
 
 Another merchant's subscription or delivery answers 404, never 403. A merchant has at most 5 active subscriptions.
 Delivery lists are newest first (`createdAt`, then `id`, both descending) and never include the payload.
+
+**Limits.** "Send test" and "Retry" make SwiftDrop send a real request to the merchant's URL, so they are limited
+(over a limit: `429 TOO_MANY_REQUESTS`, with `Retry-After: <seconds>`; show "Try again in N seconds"):
+- **Send test:** a new ping for a subscription only 10 seconds after its previous ping was queued. While a ping is
+  still waiting, the same one is returned (202), as above.
+- **Retry:** a `FAILED` delivery only 10 seconds after its last attempt. An older failure can be retried at once. A
+  delivery that isn't `FAILED` is still `409 WEBHOOK_DELIVERY_NOT_RETRYABLE`.
+- **Per merchant:** at most 30 tests and retries a minute, all subscriptions together.
+- Admin retries are not limited. The numbers are settings: `SWIFTDROP_WEBHOOKS_COOLDOWN_SECONDS` (default 10, 0 turns
+  the cooldown off) and `SWIFTDROP_WEBHOOKS_ACTIONS_PER_MINUTE` (default 30).
 
 **Searching deliveries.** All filters are optional and combine (AND).
 - `search`: a delivery id, event id or parcel id (exact; a test ping is found only by its own id), or else a tracking
@@ -826,6 +869,8 @@ parsing), compare it with the signature in constant time, and reject timestamps 
   15 min, 1 h and 6 h (6 attempts in all).
 - Any other 4xx or a 3xx, or the 6th failed attempt, makes the delivery `FAILED`. The merchant or an admin can retry
   it.
+- A test ping (`webhook.ping`) is tried once: if that attempt fails for any reason, it is `FAILED` at once with its
+  `lastStatusCode`/`lastError` (no automatic retries). Send another test, or retry it (one more attempt).
 - Delivery is at-least-once and not ordered: use `id` and `sequence`, as above.
 - A change to a subscription (URL, event types, turned off) applies to new events. A turned-off subscription gets no
   new parcel events, and its `PENDING` parcel deliveries are not sent: they become `FAILED` with `lastError`
@@ -873,7 +918,8 @@ Request:
   "lengthCm": 40,
   "widthCm": 30,
   "heightCm": 12,
-  "keepUpright": false
+  "keepUpright": false,
+  "paymentMethod": "AT_PICKUP"
 }
 ```
 There is no customer id and no fee: the customer comes from the login, and the server sets the fee (with pricing,
@@ -892,6 +938,11 @@ the same quote as `POST /pricing/estimate`) and the tracking number.
 | `instructions` | Optional, up to 500 characters (blank = none) | "Use 500 characters or fewer." |
 | `lengthCm`, `widthCm`, `heightCm` | Required: packed outside measurements, whole cm 1–300 | "Enter the length." / "Enter the width." / "Enter the height." / "Use whole centimetres from 1 to 300." |
 | `keepUpright` | Optional, default `false`: the parcel may not lie on its side | |
+| `paymentMethod` | Required: how the delivery fee is paid. `ONLINE` (paid online), `AT_PICKUP` (the sender pays the courier in cash at pickup) or `AT_DROP_OFF` (the recipient pays the courier in cash at delivery, with any cash on delivery). Fixed once booked | "Choose how the delivery fee will be paid." (missing or an unknown value) |
+
+The payment method only says how the fee will be paid, so the courier knows whether to collect it and from whom. It
+is not the cash on delivery (`codAmount`, the price of the goods), and taking an online payment is not part of this
+endpoint.
 
 Response `201`: a Delivery.
 ```json
@@ -915,15 +966,17 @@ Response `201`: a Delivery.
   "proof": null,
   "size": { "lengthCm": 40, "widthCm": 30, "heightCm": 12, "keepUpright": false },
   "vehicle": "BIKE",
-  "billableWeightKg": 3
+  "billableWeightKg": 3,
+  "paymentMethod": "AT_PICKUP"
 }
 ```
 - `feeAmount` is pricing's quote for the route, weight, size and cash on delivery (see "Pricing (WP4)"). The parcel
   keeps the vehicle, billable weight, rate card version and fee lines. `size`, `vehicle` and `billableWeightKg` are
   `null` for parcels booked before sizes.
+- `paymentMethod`: how the fee is paid, as booked; `null` for parcels booked before payment methods.
 - `currentBranch`: set only while `AT_BRANCH` (a district, e.g. `GAMPAHA`). `failureReason`: only while `FAILED`.
   `proof`: `{ "recipientName": "Kamala Silva", "hasPhoto": false }` once `DELIVERED`. Otherwise all three are `null`.
-- `400` `VALIDATION_FAILED` (keys like `pickup.phone`, `weightKg`, `lengthCm`) · `401` `UNAUTHENTICATED` · `403`
+- `400` `VALIDATION_FAILED` (keys like `pickup.phone`, `weightKg`, `lengthCm`, `paymentMethod`) · `401` `UNAUTHENTICATED` · `403`
   `FORBIDDEN` (logged in, but not a `CUSTOMER`) · `409` `PARCEL_NEEDS_MANUAL_QUOTE` (no vehicle carries or fits it)
 
 ### My deliveries
@@ -1019,6 +1072,87 @@ Response `200`:
   (`total` is `null`).
 - `400` `VALIDATION_FAILED` · `401` `UNAUTHENTICATED` · `403` `FORBIDDEN` (not a `CUSTOMER` or `MERCHANT`)
 
+### Zones & pricing (admin, WP4)
+The admin's Zones & Pricing page (`/admin/zones`). Role `ADMIN` only: no login → `401 UNAUTHENTICATED`; any other
+role → `403 FORBIDDEN`. **Read only**: nothing is saved, and rate cards and district centres change only through
+Flyway migrations. Every figure comes from the active rate card and the same distance rule as a quote, so it is
+what a booking on that route is charged.
+
+#### `GET /admin/pricing/rate-card`
+The active rate card with its vehicles, smallest first.
+```json
+{ "version": 5, "active": true, "currency": "LKR", "baseFee": 0.00, "baseWeightKg": 1, "perKgFee": 50.00,
+  "volumetricDivisor": 5000, "codFee": 0.00, "linehaulPerKm": 1.00, "roadFactor": 1.30,
+  "createdAt": "2026-11-14T05:55:00Z",
+  "vehicles": [ { "vehicle": "BIKE", "checkOrder": 1, "maxLengthCm": 45, "maxWidthCm": 35, "maxHeightCm": 35,
+                  "maxWeightKg": 10.00, "legFee": 150.00 } ] }
+```
+
+#### `GET /admin/pricing/rate-cards`
+Every rate card version, **newest first**, each in the same shape as `GET /admin/pricing/rate-card` with its own
+vehicles. Exactly one has `"active": true`. Previous versions never change: a parcel keeps the `rateCardVersion` it
+was priced with, so its fee can be worked out again from that version.
+```json
+[ { "version": 5, "active": true, "baseFee": 0.00, "...": "...", "vehicles": [ ... ] },
+  { "version": 4, "active": false, "baseFee": 150.00, "...": "...", "vehicles": [ ... ] } ]
+```
+
+#### `GET /admin/pricing/districts`
+All 25 districts (a branch is a district) in `GET /meta/districts` order, with the centre distances are measured
+from. `priced` is false (and `latitude`/`longitude` null) for a district without a centre: routes to it can't be
+priced.
+```json
+[ { "district": "AMPARA", "name": "Ampara", "priced": true, "latitude": 7.29760, "longitude": 81.68200 } ]
+```
+
+#### `GET /admin/pricing/routes?from=COLOMBO`
+Distance and linehaul from one branch to every district (25 rows, district order). `from` is required, one of
+`GET /meta/districts`; missing or unknown → `400 VALIDATION_FAILED`.
+```json
+{ "from": "COLOMBO", "fromName": "Colombo", "rateCardVersion": 5, "currency": "LKR", "roadFactor": 1.30,
+  "linehaulPerKm": 1.00,
+  "routes": [ { "to": "KANDY", "toName": "Kandy", "distanceKm": 122.6, "linehaul": 122.60 } ] }
+```
+- `distanceKm` = straight line between the centres × `roadFactor`, one decimal; `0.0` for the `from` district itself.
+- `linehaul` = `distanceKm` × `linehaulPerKm`, two decimals (the quote's `LINEHAUL` line).
+- Both are `null` when either district has no centre.
+
+#### `POST /admin/pricing/estimate`
+The price calculator: the same request, rules, messages and response as `POST /pricing/estimate`, for an admin.
+Nothing is saved. A `MANUAL_QUOTE` result is a parcel that booking refuses with `409 PARCEL_NEEDS_MANUAL_QUOTE`.
+- `400` `VALIDATION_FAILED` · `401` `UNAUTHENTICATED` · `403` `FORBIDDEN` (not an `ADMIN`)
+
+### Delivery rates (admin, WP4)
+The admin's Delivery Rates page (`/admin/rates`). Role `ADMIN` only (`401` / `403` as above). **Read only.** Every
+amount is worked out by the same fee calculator as a quote, so it is what customers pay with that rate card.
+
+#### `GET /admin/pricing/tariff?version=`
+What one rate card charges. `version` is optional: without it, the active card; with it, that version (for the
+history). Unknown version → `404 NOT_FOUND`; not a whole number → `400 VALIDATION_FAILED`.
+```json
+{
+  "rateCardVersion": 5, "active": true, "currency": "LKR", "createdAt": "2026-11-14T05:55:00Z",
+  "baseFee": 0.00, "baseWeightKg": 1, "perKgFee": 50.00, "volumetricDivisor": 5000, "linehaulPerKm": 1.00,
+  "codFee": 0.00,
+  "weightTiers": [ { "billableKg": 1, "weightCharge": 0.00 }, { "billableKg": 2, "weightCharge": 50.00 } ],
+  "vehicles": [ { "vehicle": "BIKE", "legFee": 150.00, "bothLegs": 300.00, "maxLengthCm": 45, "maxWidthCm": 35,
+                  "maxHeightCm": 35, "maxWeightKg": 10.00 } ],
+  "distancesKm": [ 0.0, 25.0, 50.0, 100.0, 200.0, 300.0 ],
+  "samples": [
+    { "key": "SMALL_BOX", "name": "Small box", "weightKg": 2, "lengthCm": 30, "widthCm": 20, "heightCm": 15,
+      "vehicle": "BIKE", "billableWeightKg": 2,
+      "fees": [ { "distanceKm": 0.0, "total": 350.00 }, { "distanceKm": 100.0, "total": 450.00 } ] }
+  ]
+}
+```
+- `weightTiers`: billable kg 1–50 (the heaviest bookable parcel). `weightCharge` = `perKgFee` × the kg above
+  `baseWeightKg`; the base fee, when a card has one, is a separate line and not in it.
+- `vehicles`: smallest first. `bothLegs` = pickup leg + delivery leg, which every parcel on that vehicle pays.
+- `samples`: five typical parcels (`DOCUMENTS`, `SMALL_BOX`, `MEDIUM_BOX`, `LARGE_BOX`, `BULKY_ITEM`), each with its
+  full fee (base fee, weight, both legs and between-branches charge; no cash on delivery) at each of `distancesKm`
+  (road km between the branches; 0 = same district). `vehicle` and every `total` are `null` when no vehicle takes the
+  parcel (booking answers `409 PARCEL_NEEDS_MANUAL_QUOTE`).
+
 ---
 
 ## Merchant Orders (WP5)
@@ -1044,7 +1178,8 @@ Request:
   "lengthCm": 30,
   "widthCm": 20,
   "heightCm": 10,
-  "keepUpright": false
+  "keepUpright": false,
+  "paymentMethod": "AT_PICKUP"
 }
 ```
 
@@ -1062,6 +1197,7 @@ Request:
 | `instructions` | Optional, up to 500 characters | "Use 500 characters or fewer." |
 | `lengthCm`, `widthCm`, `heightCm` | Required; whole cm 1–300 | "Enter the length." / "Enter the width." / "Enter the height." / "Use whole centimetres from 1 to 300." |
 | `keepUpright` | Optional, default `false` | |
+| `paymentMethod` | Required: how the delivery fee is paid. `ONLINE` (paid online), `AT_PICKUP` (your shop pays the courier in cash at pickup) or `AT_DROP_OFF` (the recipient pays the courier in cash at delivery, with any cash on delivery). Fixed once created | "Choose how the delivery fee will be paid." (missing or an unknown value) |
 
 Response `201`: a Merchant Order.
 ```json
@@ -1086,13 +1222,15 @@ Response `201`: a Merchant Order.
   "proof": null,
   "size": { "lengthCm": 30, "widthCm": 20, "heightCm": 10, "keepUpright": false },
   "vehicle": "BIKE",
-  "billableWeightKg": 1
+  "billableWeightKg": 1,
+  "paymentMethod": "AT_PICKUP"
 }
 ```
 - `merchantOrderRef`: the value you supplied; `null` when omitted. Resending the same ref returns the original parcel unchanged (idempotent retry).
+- `paymentMethod`: how the fee is paid, as created; `null` for orders made before payment methods.
 - `feeAmount` / `currency`: set by pricing at creation time (same quote as `POST /pricing/estimate`).
 - `currentBranch`: set only while `AT_BRANCH`. `failureReason`: only while `FAILED`. `proof`: `{ "recipientName": "Nimal Perera", "hasPhoto": false }` once `DELIVERED`.
-- `400` `VALIDATION_FAILED` · `401` `UNAUTHENTICATED` · `403` `MERCHANT_NOT_APPROVED` (account not yet approved) · `403` `FORBIDDEN` (not a `MERCHANT`) · `409` `PARCEL_NEEDS_MANUAL_QUOTE` (no vehicle carries or fits it)
+- `400` `VALIDATION_FAILED` (keys like `weightKg`, `lengthCm`, `paymentMethod`) · `401` `UNAUTHENTICATED` · `403` `MERCHANT_NOT_APPROVED` (account not yet approved) · `403` `FORBIDDEN` (not a `MERCHANT`) · `409` `PARCEL_NEEDS_MANUAL_QUOTE` (no vehicle carries or fits it)
 
 ### List orders
 `GET /merchant/orders?page=0&size=20&status=CREATED`
@@ -1108,11 +1246,22 @@ The merchant's own orders, newest first, as a page of Merchant Order (the shape 
 
 ## Courier (role `COURIER` only)
 
-The logged-in courier's parcels (WP9): the parcels in the dispatch tasks a dispatcher gave them (see "Dispatch").
-No login → `401 UNAUTHENTICATED`; any other role (including `ADMIN`) → `403 FORBIDDEN`. A courier only sees parcels
-that were in one of their tasks: another courier's parcel or an unknown id → `404 NOT_FOUND`. "Today" is the current
-day in Sri Lankan time (Asia/Colombo). Each status change also records the task step (outcome) in dispatch, and the
-task completes when its last parcel is done.
+The logged-in courier's parcels (WP9): the parcels in the dispatch tasks a dispatcher gave them (see "Dispatch"). A
+dispatcher may group several parcels in one task; the courier sees and works **each parcel on its own**. No login →
+`401 UNAUTHENTICATED`; any other role (including `ADMIN`) → `403 FORBIDDEN`. A courier only sees parcels that were in
+one of their tasks: another courier's parcel or an unknown id → `404 NOT_FOUND`. "Today" is the current day in Sri
+Lankan time (Asia/Colombo).
+
+Each step changes the parcel (delivery) and records the task outcome (dispatch) in one transaction: both or neither
+are kept. A parcel is **completed** for the courier as soon as its own outcome closes it (dispatch's rule):
+
+| Task | Completed after | Still active |
+|---|---|---|
+| `PICKUP` | `HANDED_OVER` (handed over at the branch), `NOT_COLLECTED` (Unable to Collect) | `PENDING`, `COLLECTED` (must be handed over) |
+| `DELIVERY` | `DELIVERED`, `RETURNED` (failed and returned to the branch), `NOT_LOADED` (Unable to Collect) | `PENDING`, `LOADED` (out for delivery), `FAILED` (must be returned) |
+
+The **task** becomes `COMPLETED` by itself, in the same transaction, when its last parcel is completed. There is no
+"complete task" call.
 
 ### Courier delivery (response)
 ```json
@@ -1121,102 +1270,218 @@ task completes when its last parcel is done.
   "trackingNumber": "SD2611004817",
   "status": "OUT_FOR_DELIVERY",
   "stop": "DELIVERY",
-  "pickup": { "name": "Lanka Crafts", "phone": "+94712345678", "address": "12 High Level Road",
-              "city": "Nugegoda", "district": "COLOMBO" },
+  "pickup": null,
   "recipient": { "name": "Nimal Perera", "phone": "+94771234567", "address": "45 Peradeniya Road",
                  "city": "Kandy", "district": "KANDY" },
+  "from": { "city": "Nugegoda", "district": "COLOMBO" },
+  "to": { "city": "Kandy", "district": "KANDY" },
   "weightKg": 1.2,
   "codAmount": 2450.00,
   "instructions": "Call before you arrive.",
   "assignedAt": "2026-11-05T02:30:00Z",
   "updatedAt": "2026-11-05T05:10:00Z",
   "nextStatuses": ["DELIVERED", "FAILED"],
-  "task": { "assignmentId": "uuid", "type": "DELIVERY", "outcome": "LOADED", "branch": "COLOMBO" }
+  "canMarkUnableToCollect": false,
+  "completed": false,
+  "completedAt": null,
+  "proof": null,
+  "task": { "assignmentId": "uuid", "type": "DELIVERY", "status": "IN_PROGRESS", "outcome": "LOADED",
+            "branch": "COLOMBO", "problem": null, "receivedBy": null }
 }
 ```
+- `status`: the parcel's own status (delivery). "Unable to Collect" doesn't change it.
 - `stop`: `PICKUP` for a pickup task, otherwise `DELIVERY` (`task.type` tells a transfer from a delivery).
+- `pickup` / `recipient` (privacy): only the contact the courier's step needs, and only while the parcel is still
+  theirs to work: the sender (`pickup`) in a pickup, the `recipient` in a delivery, nobody in a transfer. Both are
+  `null` once the parcel is completed or the task is closed. `from` / `to` (city and district) are always there.
 - `assignedAt`: when the dispatcher created the task.
 - `codAmount`: cash to collect in rupees; `null` when already paid. `instructions` may be `null`.
-- `task`: the courier's task step for this parcel. `outcome` is the dispatch item outcome; `branch` is where the
-  parcel is handed over (a pickup's or transfer's destination branch; a delivery's origin branch, for a return).
-- `nextStatuses`: what this courier may set now, from the task step and the parcel's status (empty once the step is
-  done):
+- `completed`: the courier is done with this parcel (table above), whatever the other parcels of its task are doing.
+  `completedAt`: when; `null` while it is active.
+- `proof`: `{ "recipientName": "Nimal Perera", "hasPhoto": true }` (who received it, and whether the photo of the
+  signed delivery slip is attached; see "Proof of delivery" below) **only on the entry of the `DELIVERY` step that
+  delivered the parcel** (`task.outcome` `DELIVERED`); `null` on every other entry, also for a parcel delivered later:
+  a pickup, a failed or returned delivery, Unable to Collect, a cancelled task. A courier who only collected or
+  returned the parcel never gets the recipient's name or learns that a signed slip exists.
+- `canMarkUnableToCollect`: "Unable to Collect" is possible now (the parcel's step is `PENDING` in an open task).
+- `task`: the courier's task for this parcel. `status` is the whole task's status. `outcome` is the dispatch item
+  outcome. `branch` is where the parcel is handed over (a pickup's or transfer's destination branch; a delivery's
+  origin branch, for a return). `problem`: why it couldn't be collected (`NOT_COLLECTED`, `NOT_LOADED`).
+  `receivedBy`: who took it at the branch.
+- `nextStatuses`: the statuses this courier may set now, from the task step and the parcel's status (empty once the
+  parcel is completed or the task closed). Loading (`IN_TRANSIT`, `OUT_FOR_DELIVERY`) also needs the parcel at the
+  task's origin branch:
 
 | Task | Step (`outcome`) | Allowed next | Records |
 |---|---|---|---|
-| `PICKUP` | `PENDING` | `PICKED_UP` | `COLLECTED` |
+| `PICKUP` | `PENDING` | `PICKED_UP`, or Unable to Collect | `COLLECTED`, `NOT_COLLECTED` |
 | `PICKUP` | `COLLECTED` | `AT_BRANCH` (at `task.branch`) | `HANDED_OVER` |
-| `TRANSFER` | `PENDING` | `IN_TRANSIT` | `LOADED` |
+| `TRANSFER` | `PENDING` | `IN_TRANSIT`, or Unable to Collect | `LOADED`, `NOT_LOADED` |
 | `TRANSFER` | `LOADED` | `AT_BRANCH` (at `task.branch`) | `HANDED_OVER` |
-| `DELIVERY` | `PENDING` | `OUT_FOR_DELIVERY` | `LOADED` |
+| `DELIVERY` | `PENDING` | `OUT_FOR_DELIVERY`, or Unable to Collect | `LOADED`, `NOT_LOADED` |
 | `DELIVERY` | `LOADED` | `DELIVERED`, `FAILED` | `DELIVERED`, `FAILED` |
 | `DELIVERY` | `FAILED` | `AT_BRANCH` (back at `task.branch`) | `RETURNED` |
 
-Problems (`NOT_COLLECTED`, `NOT_LOADED`) have no parcel status, so they are not reported through this API.
+Couriers are given `PICKUP` and `DELIVERY` tasks; `TRANSFER` stays supported because dispatch still has it.
 
 `failureReason`: `RECIPIENT_UNAVAILABLE` | `WRONG_ADDRESS` | `RECIPIENT_REFUSED` | `ADDRESS_UNREACHABLE` |
 `PARCEL_DAMAGED` | `OTHER`
+
+`problem` (Unable to Collect): `SENDER_UNAVAILABLE` | `PARCEL_NOT_READY` | `PARCEL_MISSING` | `PARCEL_DAMAGED` |
+`ADDRESS_UNREACHABLE` | `OTHER`
 
 ### `GET /courier/deliveries/today`
 ```json
 { "date": "2026-11-05", "toDo": 5, "done": 2, "items": [ /* Courier delivery */ ] }
 ```
-The parcels in the courier's open tasks (whatever day they were assigned), plus the steps they finished today. A
-parcel in two of their tasks today shows once, with the open step. Order: open pickups (oldest `assignedAt` first),
-then the other open steps (oldest `assignedAt` first), then finished ones (newest first). `toDo` = not finished,
-`done` = finished today. Cancelled tasks are left out.
+The parcels in the courier's open tasks (whatever day they were assigned or planned for), plus the parcels they
+completed today. A parcel in two of their tasks today shows once, with the open step. Order: open pickups (oldest
+`assignedAt` first), then the other active parcels (oldest `assignedAt` first), then completed ones (newest first).
+`toDo` = active parcels, `done` = parcels completed today. Cancelled tasks are left out.
 - `200` · `401` · `403`
 
-### `GET /courier/deliveries/history?page=0&size=20&trackingNumber=SD2611004817`
-Delivery steps this courier finished (`DELIVERED`, `FAILED`, `RETURNED`), newest first, as a page of Courier
-delivery (`nextStatuses` empty):
+### `GET /courier/deliveries/history?page=0&size=20&trackingNumber=SD2611004817&type=PICKUP&outcome=HANDED_OVER&completedFrom=2026-11-01&completedTo=2026-11-21`
+The parcels this courier completed, pickups and deliveries (`HANDED_OVER`, `NOT_COLLECTED`, `DELIVERED`, `RETURNED`,
+`NOT_LOADED`), newest completion first, as a page of Courier delivery (`completed: true`, `nextStatuses` empty, no
+contacts). A parcel is listed as soon as it is completed, even while the rest of its task is still in progress;
+`COLLECTED` and `FAILED` parcels are not listed until they are handed over or returned. A parcel the courier worked in
+two tasks (e.g. a failed delivery, then a new delivery) has one entry per completed task.
 ```json
 { "content": [ /* Courier delivery */ ], "page": 0, "size": 20, "totalElements": 42, "totalPages": 3 }
 ```
-`page` from 0 (default 0); `size` 1-100 (default 20); `trackingNumber` optional, spaces and case ignored.
-- `200` · `400` `VALIDATION_FAILED` (`fieldErrors.page` / `fieldErrors.size`) · `401` · `403`
+`page` from 0 (default 0); `size` 1-100 (default 20); `trackingNumber` optional, spaces and case ignored; an unknown
+number gives an empty page.
+
+Optional filters, combined with each other and with `trackingNumber`, applied to all of the courier's entries
+**before** paging (`totalElements` / `totalPages` count only matching entries); blank means no filter:
+
+| Filter | Values |
+|---|---|
+| `type` | `PICKUP`, `DELIVERY` (case ignored) |
+| `outcome` | `HANDED_OVER`, `DELIVERED`, `RETURNED`, `NOT_COLLECTED`, `NOT_LOADED` (the outcomes a history entry can have) |
+| `completedFrom`, `completedTo` | Days `yyyy-MM-dd` in Sri Lankan time (Asia/Colombo), both included, compared with when that parcel's own step was completed |
+
+Dispatcher-cancelled tasks are not history entries (only completed steps are), so there is no "cancelled" outcome here.
+- `200` · `400` `VALIDATION_FAILED` (`fieldErrors.page` / `size` / `type` / `outcome` / `completedFrom` / `completedTo`:
+  "Choose pickups or deliveries.", "Choose one of the listed outcomes.", "Use a date like 2026-11-21.", "Choose an end
+  date on or after the start date.") · `401` · `403`
 
 ### `GET /courier/deliveries/{parcelId}`
-All Courier delivery fields, plus:
+All Courier delivery fields (for the open step if the parcel is in one of the courier's open tasks, else the most
+recent one), plus:
 ```json
 {
   "history": [
-    { "status": "OUT_FOR_DELIVERY", "note": null, "failureReason": null, "occurredAt": "2026-11-05T05:10:00Z" },
-    { "status": "PICKED_UP", "note": "Collected from front desk", "failureReason": null, "occurredAt": "2026-11-05T03:00:00Z" }
+    { "status": "OUT_FOR_DELIVERY", "branch": null, "failureReason": null, "occurredAt": "2026-11-05T05:10:00Z" },
+    { "status": "AT_BRANCH", "branch": "COLOMBO", "failureReason": null, "occurredAt": "2026-11-05T03:00:00Z" }
   ],
   "proof": null,
   "failureReason": null
 }
 ```
-- `history`: newest first. `proof`: `{ "recipientName": "Nimal Perera", "hasPhoto": false }` once `DELIVERED`,
-  otherwise `null`. `failureReason`: only once `FAILED`.
+- `history`: newest first, without notes (they are written by other people for their own work). `branch` only for
+  `AT_BRANCH`, `failureReason` only for `FAILED`.
+- `proof`: as above, only on the entry of the delivery that delivered it, otherwise `null`.
+  `failureReason`: only on a delivery that failed and is waiting to be returned (`task.outcome` `FAILED`, the parcel is
+  `FAILED`); `null` on any other entry. A returned delivery shows the reason in its `history`.
 - `200` · `400` (non-UUID id) · `401` · `403` · `404` `NOT_FOUND`
+
+### `GET /courier/deliveries/{parcelId}/history/{assignmentId}`
+One finished entry of the courier's history (one item of `GET /courier/deliveries/history`) exactly as it was: the
+parcel's step in **that** task, not its latest one, so a parcel's entries (e.g. its pickup and later its delivery) are
+each opened on their own. Same fields as `GET /courier/deliveries/{parcelId}`, read-only:
+- `task`, `completed`, `completedAt`, `proof`: that entry's (e.g. a pickup entry: `HANDED_OVER`, `receivedBy`,
+  `proof: null`).
+- `nextStatuses: []`, `canMarkUnableToCollect: false`, `pickup` / `recipient`: `null` (contacts are only for open steps).
+- `history`: the parcel's events **until that entry finished**: its item's close time (not the task's: other parcels of
+  the task may finish later), or, for a parcel left open when the dispatcher closed the task, when the task was
+  closed. Nothing that happened afterwards is included. Delivery's status events carry no task, so this is the
+  parcel's timeline up to that moment; that entry's own step is its newest event.
+- `status`: the parcel's status **now** (it may have moved on since the entry), not the entry's outcome.
+- `200` · `400` (non-UUID id) · `401` · `403` · `404` `NOT_FOUND`: the task is unknown or not yours, the parcel isn't in
+  it, or its step isn't finished yet (an open step is live work: use `GET /courier/deliveries/{parcelId}`). The same
+  404 for all of these, with no parcel data.
 
 ### `POST /courier/deliveries/{parcelId}/status`
 ```json
 { "status": "PICKED_UP", "note": "Collected from front desk" }
 ```
 ```json
-{ "status": "DELIVERED", "recipientName": "Nimal Perera", "note": "Left with the guard" }
+{ "status": "AT_BRANCH", "receivedBy": "S. Silva", "note": "Counter 2" }
+```
+```json
+{ "status": "OUT_FOR_DELIVERY" }
+```
+```json
+{ "status": "DELIVERED", "recipientName": "Nimal Perera", "proofPhotoId": "3f1d…", "note": "Left with the guard" }
 ```
 ```json
 { "status": "FAILED", "failureReason": "RECIPIENT_UNAVAILABLE", "note": "No answer, called twice" }
 ```
-```json
-{ "status": "AT_BRANCH", "note": "Handed to the Colombo hub" }
-```
-- `AT_BRANCH` goes to `task.branch`; the request has no branch field.
-- `DELIVERED` needs `recipientName`. `FAILED` needs `failureReason`; `OTHER` also needs a `note`.
-- `recipientName` only with `DELIVERED`; `failureReason` only with `FAILED`. `note` is optional otherwise.
-- `200`: the updated parcel (same shape as `GET /courier/deliveries/{parcelId}`). Customers, merchants and the
+- `AT_BRANCH` hands the parcel over at `task.branch` (pickup, transfer) or returns a failed delivery there; the request
+  has no branch field. It needs `receivedBy`: the person at the branch who took the parcel.
+- `DELIVERED` needs `recipientName` and `proofPhotoId`: the photo of the signed delivery slip, uploaded first with
+  `POST /courier/deliveries/{parcelId}/proof` by the same courier for the same parcel. It is attached in the same
+  transaction as the status change and can never be replaced. `FAILED` needs `failureReason`; `OTHER` also needs a
+  `note`. Pickups, `FAILED`, the return to the branch (`AT_BRANCH`) and Unable to Collect take no photo.
+- `recipientName` and `proofPhotoId` only with `DELIVERED`; `failureReason` only with `FAILED`; `receivedBy` only with
+  `AT_BRANCH`. `note` is optional otherwise.
+- `200`: the updated parcel (same shape as `GET /courier/deliveries/{parcelId}`), with `completed` and `task.status`
+  as they are after the step (`COMPLETED` when this was the task's last open parcel). Customers, merchants and the
   tracking page are told through the delivery module's `ParcelStatusChanged` event (`actorRole: COURIER`).
 - `400` `VALIDATION_FAILED` · `401` · `403` · `404` `NOT_FOUND`
-- `409` `INVALID_STATUS_TRANSITION`: not the task's next step, or not allowed from the parcel's current status (e.g.
-  a skipped step, the button pressed twice, or the dispatcher changed it). The frontend reloads the parcel. `409`
-  `ASSIGNMENT_CLOSED` when the dispatcher cancelled the task meanwhile.
-- Checked in this order: the request (400), the parcel is yours (404), the step is allowed (409).
+- `409` `ASSIGNMENT_CLOSED`: the task was completed or cancelled. `409` `TASK_STEP_NOT_ALLOWED`: not the task's next
+  step (a skipped step, the button pressed twice, a completed parcel). `409` `INVALID_STATUS_TRANSITION`: the parcel
+  can't make the move now (its status changed, or it isn't at the task's origin branch for loading). `409`
+  `ASSIGNMENT_CHANGED`: the dispatcher changed the task at the same moment. Nothing was saved; the frontend reloads the
+  parcel.
+- Checked in this order: the request (400), the parcel is yours (404), the task is open, the step is allowed, the
+  parcel can move (409).
 
-Proof-of-delivery photos (upload and download) come in a later version.
+### `POST /courier/deliveries/{parcelId}/unable-to-collect`
+"Unable to Collect": the courier couldn't take the parcel (one action for both task types).
+```json
+{ "problem": "SENDER_UNAVAILABLE", "note": "Shop closed until 2 pm" }
+```
+- Records `NOT_COLLECTED` for a pickup, `NOT_LOADED` for a delivery (or transfer), with the `problem`. The parcel's
+  `status` doesn't change (it never moved); the parcel is completed for the courier and goes back to the dispatcher's
+  queue. Allowed only while `canMarkUnableToCollect` is true.
+- `200`: the parcel (same shape as `GET /courier/deliveries/{parcelId}`), `completed: true`.
+- `400` `VALIDATION_FAILED` · `401` · `403` · `404` `NOT_FOUND`
+- `409` `ASSIGNMENT_CLOSED` · `409` `TASK_STEP_NOT_ALLOWED` (already collected or out for delivery) · `409`
+  `ASSIGNMENT_CHANGED`
+
+### Proof of delivery
+
+When handing over a parcel, the courier photographs the delivery slip the recipient signed (or picks the photo from
+the device), uploads it, then marks the parcel `DELIVERED` with the returned `proofPhotoId`. The image is kept in
+private file storage (Cloudinary `authenticated` assets in production; there is no public URL), with a durable
+reference in `delivery.proof_photos` linked to the parcel id; `delivery.parcels.proof_photo_id` points to it once the
+parcel is `DELIVERED`. Uploads that are never attached are removed after 24 hours; an attached proof is never removed
+or replaced.
+
+#### `POST /courier/deliveries/{parcelId}/proof`
+`multipart/form-data` with one field `file`: a JPEG, PNG or WebP photo up to 5 MB. The type comes from the file's
+content, not its name. EXIF (camera, time, GPS), XMP and comments are removed before storing, without re-encoding.
+Only for a parcel this courier is delivering now (an open `DELIVERY` step, `OUT_FOR_DELIVERY`). Until the parcel is
+`DELIVERED`, uploading again gives a new id (the unused one is cleaned up later).
+```json
+{ "proofPhotoId": "3f1d2c4b-…", "contentType": "image/jpeg", "sizeBytes": 412345, "uploadedAt": "2026-11-20T10:15:00Z" }
+```
+- `201` · `400` `VALIDATION_FAILED` `fieldErrors.file`: "Add a photo of the signed delivery slip." (missing), "Use a
+  photo up to 5 MB.", "Use a JPEG, PNG or WebP photo.", "This photo can't be read. Take it again.", "This file is too
+  large." (over 6 MB, refused before it is read) · `401` · `403` · `404` `NOT_FOUND` (not your parcel)
+- `409` `ASSIGNMENT_CLOSED` · `409` `TASK_STEP_NOT_ALLOWED` (a pickup, not out for delivery yet, or already delivered:
+  a proof can't be replaced) · `409` `INVALID_STATUS_TRANSITION` · `503` `SERVICE_UNAVAILABLE` (the image storage
+  can't be reached; nothing was kept)
+
+#### `GET /courier/deliveries/{parcelId}/proof`
+The proof photo of a parcel this courier delivered, as the image itself (`Content-Type: image/jpeg|png|webp`,
+`Cache-Control: no-store, private`). Another courier, including the one who picked the parcel up, gets `404`.
+- `200` · `401` · `403` · `404` `NOT_FOUND` (not delivered by you, or no proof) · `503` `SERVICE_UNAVAILABLE`
+
+Other modules read the proof through `DeliveryApi.findProofPhoto(parcelId)` (content type and bytes) and check
+`DeliverySnapshot.hasProofPhoto()` first; they decide who may see it and serve it themselves.
 
 ### Validation rules (courier)
 
@@ -1224,15 +1489,21 @@ Proof-of-delivery photos (upload and download) come in a later version.
 |---|---|---|
 | `status` | Required, one of the parcel statuses | Select the new status. |
 | `note` | Optional, max 500 chars | Keep the note under 500 characters. |
-| `note` (`failureReason: OTHER`) | Required, 3-500 chars | Describe what went wrong. |
+| `note` (`failureReason` or `problem` `OTHER`) | Required, 3-500 chars | Describe what went wrong. |
 | `recipientName` (`DELIVERED`) | Required, 2-100 chars | Enter the name of the person who received the parcel. |
 | `recipientName` with another status | Not allowed | Only for delivered parcels. |
+| `proofPhotoId` (`DELIVERED`) | Required: a photo uploaded for this parcel by you, not attached yet | Add a photo of the signed delivery slip. / Add the photo again. |
+| `proofPhotoId` with another status | Not allowed | Only for delivered parcels. |
+| `file` (proof upload) | Required: JPEG, PNG or WebP, up to 5 MB, a readable image | See "Proof of delivery". |
 | `failureReason` (`FAILED`) | Required, one of the values above | Select why the delivery failed. |
 | `failureReason` with another status | Not allowed | Only for failed deliveries. |
+| `receivedBy` (`AT_BRANCH`) | Required, 2-100 chars | Enter the name of the person at the branch who received the parcel. |
+| `receivedBy` with another status | Not allowed | Only when you hand the parcel over at a branch. |
+| `problem` (Unable to Collect) | Required, one of the values above | Select why you couldn't take the parcel. |
 | `page` (history) | 0 or more | Use a page number of 0 or more. |
 | `size` (history) | 1-100 | Use a page size from 1 to 100. |
 
-An unknown `status` or `failureReason` value gives `400` with that field in `fieldErrors`.
+An unknown `status`, `failureReason` or `problem` value gives `400` with that field in `fieldErrors`.
 
 ## Dispatch (WP8, roles `DISPATCHER` and `ADMIN`)
 
@@ -1456,3 +1727,145 @@ the index was added is not listed yet. Live changes come on `/topic/live`.
 How many indexed parcels match the same filters, per status (the status filter is ignored, so a status picker can
 show the numbers): `{ "total": 12, "byStatus": { "CREATED": 3, "AT_BRANCH": 2, ..., "DELIVERED": 7 } }`. Every
 status is present, 0 when none.
+
+## Assistant (AI delivery assistant)
+
+A chatbot that answers questions such as "Where is my parcel?" or "How much to send 2 kg to Kandy?", and gives
+admins daily, weekly and monthly service reports ("This week's report") and answers to their other questions about
+the service ("How many parcels are out for delivery?", "Success rate this month?", "Show failed parcels going to
+Kandy"). It never
+invents facts: every answer is built only from the data of SwiftDrop's own APIs. Each message is answered in two
+steps:
+
+1. **Data.** SwiftDrop's code understands the question (tracking numbers, price details, "my parcels", districts,
+   reports for admins),
+   calls the APIs below and builds a plain answer and cards from their data. If something is missing (a district,
+   the weight), it asks for it.
+2. **Wording.** With `ASSISTANT_PROVIDER=gemini` and `GEMINI_API_KEY` set, Google Gemini rewrites an answer that has
+   data in clear, friendly sentences (`provider: "gemini"`). Gemini gets only the question, the data and the plain
+   answer; it has no tools and can't fetch anything. An answer with a number (amount, count, percentage, date) or a
+   tracking number that isn't in the data or the plain answer is thrown away. Without Gemini, when it fails or times out, and for answers without data, the plain answer is
+   sent (`provider: "rules"`).
+
+The API key stays on the server and is never sent to the browser. The same data tools are also offered to other AI
+clients over MCP (below).
+
+**Privacy.** The assistant sees only what public tracking shows (status, towns, branch, failure reason) and, for a
+logged-in customer or merchant, their own parcels. It never sees names, phone numbers, addresses or amounts due.
+
+### Where the data comes from
+
+| Step | Who | Needs | Uses |
+|---|---|---|---|
+| `track_parcel` | anyone | `trackingNumber` (spaces and case ignored) | `GET /track/{trackingNumber}` (counts against its 30/minute limit) |
+| `estimate_price` | anyone | `pickupDistrict`, `dropOffDistrict` (district codes), `weightKg` (0.01-50), optional `lengthCm`, `widthCm`, `heightCm` (1-300, all three or none) | `POST /pricing/estimate` |
+| `list_districts` | anyone | none | `GET /meta/districts` |
+| `my_parcels` | logged-in CUSTOMER or MERCHANT (`/assistant/chat/me`) | optional `status` | `GET /tracking/mine` (their latest 10) |
+| `service_report` | logged-in ADMIN (`/assistant/chat/me`); never on MCP | `period` (`DAILY`, `WEEKLY`, `MONTHLY`), optional `date` (yyyy-MM-dd, any day in the period; today when left out) | `DeliveryApi.stats` (booked, delivered, failed per day; the same figures as the admin dashboard), `DeliveryApi.countByStatus`, `TrackingApi.breakdown` (districts and failure reasons from `tracking.parcel_index`, like `/admin/tracking/parcels`), `IdentityApi.getUserRoleCounts` |
+| `parcel_counts` | ADMIN | none | `DeliveryApi.countByStatus` (parcels in each status now) |
+| `account_counts` | ADMIN | none | `IdentityApi.getUserRoleCounts` (accounts per role, merchants waiting for approval; counts only) |
+| `find_parcels` | ADMIN | optional `status`, `pickupDistrict`, `dropOffDistrict`, `branch` (parcels at that branch now), `bookedFrom`, `bookedTo` (yyyy-MM-dd) | `DeliveryApi.search` (the admin All Parcels search) or `DeliveryApi.findAtBranch`; how many match and the newest 10, public view only (no names, phones, addresses or amounts) |
+
+The data is exactly what these endpoints return: the assistant reads it through the same services
+(`TrackingApi`, `PricingApi`, `DeliveryApi`, `IdentityApi`), inside the backend, so the same rules, limits and
+privacy apply.
+
+**Reports (admins).** An admin asks in words: "today's report", "report for yesterday", "this week's report",
+"summary of last month", "monthly report for October", "daily report for 2026-11-10". Without a period the assistant
+asks "Which report would you like: daily, weekly or monthly?". Days are Sri Lanka days; a week runs Monday to Sunday
+and a month is a calendar month. A period that hasn't ended is counted up to today (`partial: true`) and compared with
+the same days of the period before (a month never borrows days of the next month). A period that starts after today
+is refused in the reply. Other roles asking for a report get the normal help answer.
+
+**Other admin questions.** Answered from one of the admin tools above:
+
+| Question | Tool | Card |
+|---|---|---|
+| "How many parcels are out for delivery / waiting for pickup / at a branch?", "How many parcels do we have?" | `parcel_counts` | `FACTS` |
+| "How many couriers do we have?", "Any merchants waiting for approval?" | `account_counts` | `FACTS` |
+| "How many parcels were booked / delivered / failed yesterday?", "Success rate this month?", "Busiest day this week?", "Top districts last month?", "Why did deliveries fail this week?" (no period: today; busiest day: this week) | `service_report` | `FACTS` |
+| "Show failed parcels going to Kandy", "Parcels at the Colombo branch", "How many parcels from Galle are in transit?", "Which parcels were booked today?" | `find_parcels` | `PARCEL_LIST` with `total` and `filters` |
+
+A district after "from" is the pickup district, one before "branch" is the branch, any other is the drop-off
+district; a period in a search filters by booking day. The reply always says which filters were used.
+
+### `POST /assistant/chat` (public) and `POST /assistant/chat/me` (logged in)
+
+Same body and response. `/assistant/chat` ignores the login cookie (so it never lists anyone's parcels);
+`/assistant/chat/me` needs a login and adds `my_parcels` for customers and merchants and `service_report` for
+admins. The client keeps the
+conversation and sends it each time, oldest first; the last message must be the user's.
+
+```json
+{
+  "messages": [
+    { "role": "user", "text": "How much to send 2 kg to Kandy?" },
+    { "role": "assistant", "text": "Sure. Which district should we collect it from?" },
+    { "role": "user", "text": "Colombo, it's 30 x 20 x 10 cm" }
+  ]
+}
+```
+
+```json
+{
+  "reply": "Sending 2 kg from Colombo to Kandy costs Rs. 472.60.",
+  "provider": "gemini",
+  "cards": [
+    {
+      "type": "PRICE",
+      "data": {
+        "pickupDistrict": "Colombo", "dropOffDistrict": "Kandy", "weightKg": 2,
+        "status": "COMPLETE", "currency": "LKR", "total": 472.60, "totalText": "Rs. 472.60",
+        "billableWeightKg": 2, "vehicle": "BIKE", "distanceKm": 122.6,
+        "lines": [
+          { "component": "WEIGHT", "amount": 50.00 }, { "component": "PICKUP", "amount": 150.00 },
+          { "component": "DELIVERY", "amount": 150.00 }, { "component": "LINEHAUL", "amount": 122.60 }
+        ],
+        "note": "Full estimate."
+      }
+    }
+  ]
+}
+```
+
+`cards` holds the data the answer was built from, for the page to show next to the reply:
+
+| `type` | `data` |
+|---|---|
+| `TRACKING` | `trackingNumber`, `status`, `statusText`, `from`, `to` (town, district), `currentBranch`, `lastUpdate` (text), `updatedAt` |
+| `PARCEL_LIST` | `parcels`: up to 10 rows shaped like `TRACKING`; an admin's search adds `total` (how many match) and `filters` (in words) |
+| `FACTS` | `title`, `subtitle` (the period, or null for figures of right now), `facts`: `label`, `value` (text) |
+| `PRICE` | as above; `status` is `COMPLETE`, `PROVISIONAL` (no size given: pickup and delivery charges not included) or `MANUAL_QUOTE` (`total` null) |
+| `REPORT` | `period`, `title`, `from`, `to`, `countedTo`, `partial`, `rangeText`, `booked`, `delivered`, `failed`, `successRate` (delivered / (delivered + failed) in %, one decimal, null when none finished), `previous` (`from`, `to`, `text`, the same four figures), `changes` (`booked`, `delivered`, `failed`: `difference`, `percent` or null), `perDay` and `busiestDay` (weekly and monthly only), `topPickupDistricts` / `topDropOffDistricts` (top 5 `district`, `count`), `failureReasons` (`reason`, `count`; parcels that failed in the period and are still FAILED), `statusNow` (`status`, `label`, `count`, all parcels now), `accountsNow` (`total`, `customers`, `merchants`, `couriers`, `dispatchers`, `pendingMerchants`) |
+
+Rules and errors:
+- 1-20 messages; `role` is `user` or `assistant`; `text` not blank, at most 4000 characters; the last message is the
+  user's and at most 500 characters. Otherwise `400 VALIDATION_FAILED` (field `messages`).
+- At most 20 messages per minute per user (or per IP when not logged in; `ASSISTANT_MESSAGES_PER_MINUTE`), then
+  `429 TOO_MANY_REQUESTS`.
+- `/assistant/chat/me` without a login: `401 UNAUTHENTICATED`.
+- A lookup that finds nothing (unknown number, bad district, too heavy) is not an error: the reply explains it.
+
+### MCP server: `POST /mcp` (public)
+
+The public data tools (`track_parcel`, `estimate_price`, `list_districts`) as a
+[Model Context Protocol](https://modelcontextprotocol.io) server, so AI clients such as Claude Desktop or MCP
+Inspector can use SwiftDrop's data directly. The client's own AI decides which tool to call; SwiftDrop only returns
+the data (the same data as the endpoints above). Gemini is not used here, and `my_parcels` is not offered. Streamable HTTP transport, JSON responses only (no event stream), no session id.
+
+| JSON-RPC method | Result |
+|---|---|
+| `initialize` | `protocolVersion` (the client's if supported: 2025-11-25, 2025-06-18, 2025-03-26, 2024-11-05; otherwise the newest), `capabilities.tools`, `serverInfo` `{ "name": "swiftdrop" }` |
+| `ping` | `{}` |
+| `tools/list` | `tools`: `name`, `title`, `description`, `inputSchema` (JSON Schema), `annotations.readOnlyHint: true` |
+| `tools/call` | `content` (one `text` item, the result as JSON), `structuredContent` (the result), `isError` |
+| a notification (no `id`) | `202 Accepted`, no body |
+
+A bad request is a JSON-RPC error with HTTP 200: `-32600` invalid request, `-32601` unknown method, `-32602`
+unknown tool or bad params. A tool's own failure, including the per-IP limit (20 calls per minute), is a normal
+result with `isError: true`. `GET /mcp` is `405` (no server-sent events).
+
+```json
+{ "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+  "params": { "name": "track_parcel", "arguments": { "trackingNumber": "SD2611004817" } } }
+```

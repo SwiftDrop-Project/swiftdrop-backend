@@ -49,6 +49,8 @@ import java.util.UUID;
  * @param billableWeightKg   the billable weight it was priced with, or null
  * @param rateCardVersion    the pricing rate card of its fee, so the fee can be worked out again; null for the old
  *                           flat fee
+ * @param paymentMethod      how the delivery fee is paid ({@link PaymentMethod}), so the courier knows whether to
+ *                           collect it and from whom; null for parcels booked before payment methods
  */
 public record DeliverySnapshot(
         UUID id,
@@ -76,7 +78,22 @@ public record DeliverySnapshot(
         ParcelSize size,
         String vehicle,
         Integer billableWeightKg,
-        Integer rateCardVersion) {
+        Integer rateCardVersion,
+        PaymentMethod paymentMethod) {
+
+    /** A snapshot without a payment method. Kept so callers written before payment methods still compile. */
+    public DeliverySnapshot(UUID id, String trackingNumber, ParcelStatus status, UUID customerId, UUID merchantId,
+                            DeliveryContact pickup, DeliveryContact recipient, BigDecimal weightKg,
+                            BigDecimal codAmount, String instructions, UUID assignedCourierId, Instant assignedAt,
+                            Instant createdAt, Instant updatedAt, String proofRecipientName, boolean hasProofPhoto,
+                            FailureReason failureReason, String merchantOrderRef, BigDecimal feeAmount,
+                            String currency, long version, District currentBranch, ParcelSize size, String vehicle,
+                            Integer billableWeightKg, Integer rateCardVersion) {
+        this(id, trackingNumber, status, customerId, merchantId, pickup, recipient, weightKg, codAmount, instructions,
+                assignedCourierId, assignedAt, createdAt, updatedAt, proofRecipientName, hasProofPhoto, failureReason,
+                merchantOrderRef, feeAmount, currency, version, currentBranch, size, vehicle, billableWeightKg,
+                rateCardVersion, null);
+    }
 
     /** A snapshot without pricing details. Kept so callers written before parcel sizes still compile. */
     public DeliverySnapshot(UUID id, String trackingNumber, ParcelStatus status, UUID customerId, UUID merchantId,
@@ -121,6 +138,6 @@ public record DeliverySnapshot(
                 + ", merchantOrderRef=" + merchantOrderRef + ", feeAmount=" + feeAmount + ", currency=" + currency
                 + ", version=" + version + ", currentBranch=" + currentBranch + ", size=" + size
                 + ", vehicle=" + vehicle + ", billableWeightKg=" + billableWeightKg
-                + ", rateCardVersion=" + rateCardVersion + "]";
+                + ", rateCardVersion=" + rateCardVersion + ", paymentMethod=" + paymentMethod + "]";
     }
 }

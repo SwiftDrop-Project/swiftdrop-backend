@@ -7,6 +7,8 @@ import com.swiftdrop.notifications.internal.persistence.ParcelNotificationReposi
 
 import jakarta.persistence.EntityManager;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -14,6 +16,9 @@ import java.util.UUID;
 
 @Service
 public class ParcelNotificationService {
+
+    private static final Logger log =
+            LoggerFactory.getLogger(ParcelNotificationService.class);
 
     private final EntityManager entityManager;
     private final ParcelNotificationRepository notifications;
@@ -34,12 +39,24 @@ public class ParcelNotificationService {
                 event.eventId() == null ||
                 event.parcelId() == null ||
                 event.toStatus() == null ||
-                event.customerId() == null ||
                 event.parcelVersion() < 0) {
 
             throw new IllegalArgumentException(
                     "Invalid parcel notification event"
             );
+        }
+
+        // Step 1b: Skip merchant orders. They have no customer account
+        // (CreateDeliveryCommand sets exactly one of customerId/merchantId);
+        // the merchant is notified through WP6 webhooks. Returning here,
+        // before any database work, acknowledges the message so it is not
+        // retried or dead-lettered.
+        if (event.customerId() == null) {
+            log.debug(
+                    "Skipping parcel notification without customer: eventId={}",
+                    event.eventId()
+            );
+            return;
         }
 
         // Step 2: Atomically track the latest parcel version

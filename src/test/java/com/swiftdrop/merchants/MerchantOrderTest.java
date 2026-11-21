@@ -10,6 +10,7 @@ import java.math.BigDecimal;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.hasItem;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.startsWith;
@@ -22,6 +23,7 @@ class MerchantOrderTest extends IntegrationTest {
 
     private static final String ORDERS_PATH = "/api/v1/merchant/orders";
     private static final String KEYS_PATH = "/api/v1/merchant/api-keys";
+    private static final String PAYMENT_METHOD_REQUIRED = "Choose how the delivery fee will be paid.";
 
     @Autowired
     JdbcTemplate jdbc;
@@ -39,7 +41,7 @@ class MerchantOrderTest extends IntegrationTest {
         return jdbc.queryForObject("SELECT id::text FROM identity.users WHERE email = ?", String.class, email);
     }
 
-    /** A valid merchant order body (COLOMBO → KANDY, 1.5 kg bike parcel). */
+    /** A valid merchant order body (COLOMBO → KANDY, 1.5 kg bike parcel, fee paid at pickup). */
     private static Map<String, Object> orderBody(String ref) {
         Map<String, Object> pickup = Map.of(
                 "name", "Lanka Crafts",
@@ -63,6 +65,7 @@ class MerchantOrderTest extends IntegrationTest {
         body.put("lengthCm", 30);
         body.put("widthCm", 20);
         body.put("heightCm", 10);
+        body.put("paymentMethod", "AT_PICKUP");
         return body;
     }
 
@@ -111,7 +114,8 @@ class MerchantOrderTest extends IntegrationTest {
                 .andExpect(jsonPath("$.pickup.phone").value("+94771234567"))
                 .andExpect(jsonPath("$.recipient.phone").value("+94719876543"))
                 .andExpect(jsonPath("$.feeAmount").isNumber())
-                .andExpect(jsonPath("$.currency").value("LKR"));
+                .andExpect(jsonPath("$.currency").value("LKR"))
+                .andExpect(jsonPath("$.paymentMethod").value("AT_PICKUP"));
     }
 
     @Test
@@ -167,6 +171,51 @@ class MerchantOrderTest extends IntegrationTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
                 .andExpect(jsonPath("$.fieldErrors.lengthCm").isNotEmpty());
+    }
+
+    // ---- Payment method ----
+
+    @Test
+    void theOrderStoresAndListsHowTheFeeIsPaid() throws Exception {
+        Cookie merchant = approveAndLogin(uniqueEmail(), uniquePhone());
+        Map<String, Object> body = orderBody("PAY-DROP-1");
+        body.put("paymentMethod", "AT_DROP_OFF");
+
+        String created = postJson(ORDERS_PATH, body, merchant)
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.paymentMethod").value("AT_DROP_OFF"))
+                .andReturn().getResponse().getContentAsString();
+        String id = json.readTree(created).get("id").asString();
+
+        assertThat(jdbc.queryForObject("SELECT payment_method FROM delivery.parcels WHERE id = ?::uuid",
+                String.class, id)).isEqualTo("AT_DROP_OFF");
+        mvc.perform(get(ORDERS_PATH).cookie(merchant))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[?(@.id == '" + id + "')].paymentMethod", hasItem("AT_DROP_OFF")));
+    }
+
+    @Test
+    void missingPaymentMethodReturns400() throws Exception {
+        Cookie merchant = approveAndLogin(uniqueEmail(), uniquePhone());
+        Map<String, Object> body = orderBody(null);
+        body.remove("paymentMethod");
+
+        postJson(ORDERS_PATH, body, merchant)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.fieldErrors.paymentMethod").value(PAYMENT_METHOD_REQUIRED));
+    }
+
+    @Test
+    void unknownPaymentMethodReturns400() throws Exception {
+        Cookie merchant = approveAndLogin(uniqueEmail(), uniquePhone());
+        Map<String, Object> body = orderBody(null);
+        body.put("paymentMethod", "CASH");
+
+        postJson(ORDERS_PATH, body, merchant)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+                .andExpect(jsonPath("$.fieldErrors.paymentMethod").value(PAYMENT_METHOD_REQUIRED));
     }
 
     // ---- List ----

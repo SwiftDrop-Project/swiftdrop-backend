@@ -3,6 +3,7 @@ package com.swiftdrop.webhooks.internal.application;
 import com.sun.net.httpserver.HttpServer;
 import com.swiftdrop.FakeHostResolver;
 import com.swiftdrop.IntegrationTest;
+import com.swiftdrop.shared.error.TooManyRequestsException;
 import com.swiftdrop.webhooks.internal.client.WebhookHttpSender;
 import com.swiftdrop.webhooks.internal.domain.WebhookDelivery;
 import com.swiftdrop.webhooks.internal.domain.WebhookEventType;
@@ -42,6 +43,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The worker end to end: real database, real HTTP to a local server on 127.0.0.1.
@@ -225,6 +227,126 @@ class WebhookDispatcherTest extends IntegrationTest {
     }
 
     @Test
+    void aTestPingThatFailsIsNotTriedAgain() throws Exception {
+        answer.set(503); // retryable for a parcel event
+        WebhookDelivery ping = due(subscribe(hookUrl, SECRET), WebhookEventType.WEBHOOK_PING);
+
+        assertThat(dispatcher.dispatchDue()).isEqualTo(1);
+
+        assertThat(received.poll(5, TimeUnit.SECONDS)).isNotNull();
+        assertThat(row(ping)).containsEntry("status", "FAILED").containsEntry("attempts", 1)
+                .containsEntry("last_status_code", 503).containsEntry("last_error", "HTTP_503")
+                .containsEntry("next_attempt_at", null);
+        clock.advance(Duration.ofDays(1));
+        assertThat(dispatcher.dispatchDue()).as("no automatic attempt for a ping").isZero();
+        assertThat(received).isEmpty();
+    }
+
+    @Test
+    void aTestPingToAServerThatDoesntAnswerFailsAtOnce() throws IOException {
+        int closedPort;
+        try (var socket = new java.net.ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+            closedPort = socket.getLocalPort(); // nothing listens here once it's closed: a connection error
+        }
+        WebhookDelivery ping = due(subscribe("http://127.0.0.1:" + closedPort + "/hook", SECRET),
+                WebhookEventType.WEBHOOK_PING);
+
+        dispatcher.dispatchDue();
+
+        assertThat(row(ping)).containsEntry("status", "FAILED").containsEntry("attempts", 1)
+                .containsEntry("last_status_code", null).containsEntry("last_error", "CONNECTION_FAILED")
+                .containsEntry("next_attempt_at", null);
+    }
+
+    @Test
+    void afterAFailedTestPingSendTestQueuesANewOne() throws Exception {
+        answer.set(500);
+        WebhookSubscription subscription = subscribe(hookUrl, SECRET);
+        WebhookDeliveryService service = new WebhookDeliveryService(deliveries, subscriptions, payloads, clock);
+        UUID first = inTransaction().execute(tx -> service.queuePing(merchant, subscription.getId())).id();
+        dispatcher.dispatchDue();
+        assertThat(received.poll(5, TimeUnit.SECONDS)).isNotNull();
+
+        clock.advance(WebhookDeliveryService.DEFAULT_COOLDOWN); // the wait between two tests
+        UUID second = inTransaction().execute(tx -> service.queuePing(merchant, subscription.getId())).id();
+
+        assertThat(second).as("the failed ping isn't waiting any more, so a new one is queued").isNotEqualTo(first);
+        answer.set(200);
+        assertThat(dispatcher.dispatchDue()).isEqualTo(1);
+        assertThat(jdbc.queryForMap("select status from webhooks.deliveries where id = ?", second))
+                .containsEntry("status", "SUCCEEDED");
+    }
+
+    @Test
+    void aRetriedTestPingGetsOneMoreAttempt() throws Exception {
+        answer.set(503);
+        WebhookDelivery ping = due(subscribe(hookUrl, SECRET), WebhookEventType.WEBHOOK_PING);
+        dispatcher.dispatchDue();
+        assertThat(row(ping)).containsEntry("status", "FAILED");
+        WebhookDeliveryService service = new WebhookDeliveryService(deliveries, subscriptions, payloads, clock);
+
+        clock.advance(WebhookDeliveryService.DEFAULT_COOLDOWN); // a delivery that just failed can't be retried at once
+        inTransaction().executeWithoutResult(tx -> service.retry(merchant, ping.getId()));
+        assertThat(dispatcher.dispatchDue()).isEqualTo(1);
+
+        assertThat(row(ping)).containsEntry("status", "FAILED").containsEntry("attempts", 1)
+                .containsEntry("next_attempt_at", null);
+        assertThat(received).hasSize(2);
+    }
+
+    @Test
+    void sendTestWaitsForTheCooldownAfterTheLastPing() throws Exception {
+        answer.set(500);
+        WebhookSubscription subscription = subscribe(hookUrl, SECRET);
+        WebhookDeliveryService service = new WebhookDeliveryService(deliveries, subscriptions, payloads, clock);
+        inTransaction().executeWithoutResult(tx -> service.queuePing(merchant, subscription.getId()));
+        dispatcher.dispatchDue(); // FAILED within the same second
+
+        clock.advance(Duration.ofSeconds(3));
+        assertThatThrownBy(() -> inTransaction().executeWithoutResult(
+                tx -> service.queuePing(merchant, subscription.getId())))
+                .isInstanceOfSatisfying(TooManyRequestsException.class,
+                        ex -> assertThat(ex.retryAfterSeconds()).isEqualTo(7));
+
+        clock.advance(Duration.ofSeconds(7));
+        inTransaction().executeWithoutResult(tx -> service.queuePing(merchant, subscription.getId()));
+        assertThat(jdbc.queryForObject("select count(*) from webhooks.deliveries where subscription_id = ?",
+                Long.class, subscription.getId())).isEqualTo(2);
+    }
+
+    @Test
+    void aDeliveryThatJustFailedIsRetriedOnlyAfterTheCooldown() {
+        answer.set(400);
+        WebhookDelivery delivery = due(subscribe(hookUrl, SECRET), WebhookEventType.PARCEL_DELIVERED);
+        dispatcher.dispatchDue();
+        WebhookDeliveryService service = new WebhookDeliveryService(deliveries, subscriptions, payloads, clock);
+
+        clock.advance(Duration.ofSeconds(4));
+        assertThatThrownBy(() -> inTransaction().executeWithoutResult(
+                tx -> service.retry(merchant, delivery.getId())))
+                .isInstanceOfSatisfying(TooManyRequestsException.class,
+                        ex -> assertThat(ex.retryAfterSeconds()).isEqualTo(6));
+        assertThat(row(delivery)).containsEntry("status", "FAILED");
+
+        clock.advance(Duration.ofSeconds(6));
+        inTransaction().executeWithoutResult(tx -> service.retry(merchant, delivery.getId()));
+        assertThat(row(delivery)).containsEntry("status", "PENDING");
+    }
+
+    @Test
+    void aZeroCooldownTurnsTheWaitOff() {
+        answer.set(400);
+        WebhookDelivery delivery = due(subscribe(hookUrl, SECRET), WebhookEventType.PARCEL_DELIVERED);
+        dispatcher.dispatchDue();
+        WebhookDeliveryService service = new WebhookDeliveryService(deliveries, subscriptions, payloads, clock,
+                Duration.ZERO);
+
+        inTransaction().executeWithoutResult(tx -> service.retry(merchant, delivery.getId()));
+
+        assertThat(row(delivery)).containsEntry("status", "PENDING");
+    }
+
+    @Test
     void aHostThatNowResolvesToAPrivateAddressIsNeverCalled() throws Exception {
         WebhookDelivery delivery = due(subscribe("https://hooks.private.test/swiftdrop", SECRET),
                 WebhookEventType.PARCEL_DELIVERED);
@@ -298,6 +420,7 @@ class WebhookDispatcherTest extends IntegrationTest {
         WebhookDeliveryService service = new WebhookDeliveryService(deliveries, subscriptions, payloads, clock);
 
         answer.set(200);
+        clock.advance(WebhookDeliveryService.DEFAULT_COOLDOWN); // a delivery that just failed can't be retried at once
         // built by hand (to share the test clock), so the transaction @Transactional gives in the app is opened here
         inTransaction().executeWithoutResult(tx -> service.retry(merchant, delivery.getId()));
         assertThat(dispatcher.dispatchDue()).isEqualTo(1);

@@ -41,6 +41,9 @@ class AdminParcelTrackingTest extends IntegrationTest {
     LiveUpdates liveUpdates;
 
     @Autowired
+    TrackingApi trackingApi;
+
+    @Autowired
     TrackingRateLimiter trackingLimiter;
 
     private Cookie customer;
@@ -120,6 +123,26 @@ class AdminParcelTrackingTest extends IntegrationTest {
     }
 
     @Test
+    void breakdownCountsTheDaysParcelsByDistrict() throws Exception {
+        LocalDate today = LocalDate.now(ZoneId.of("Asia/Colombo"));
+        java.util.Map<District, Long> before = trackingApi.breakdown(today, today).pickupDistricts();
+        for (DeliverySnapshot parcel : java.util.List.of(book("NUWARA_ELIYA", "BADULLA"),
+                book("NUWARA_ELIYA", "MATALE"))) {
+            mvc.perform(get("/api/v1/track/" + parcel.trackingNumber())).andExpect(status().isOk());
+        }
+
+        ParcelBreakdown breakdown = trackingApi.breakdown(today, today);
+
+        org.assertj.core.api.Assertions.assertThat(breakdown.pickupDistricts().get(District.NUWARA_ELIYA))
+                .isEqualTo(before.getOrDefault(District.NUWARA_ELIYA, 0L) + 2);
+        org.assertj.core.api.Assertions.assertThat(breakdown.dropOffDistricts()).containsKey(District.BADULLA);
+        org.assertj.core.api.Assertions.assertThat(trackingApi.breakdown(today.minusYears(5), today.minusYears(5))
+                .pickupDistricts()).isEmpty();
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> trackingApi.breakdown(today, today.minusDays(1)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     void pagesAndRejectsBadInput() throws Exception {
         DeliverySnapshot second = book("KEGALLE", "KALUTARA");
         mvc.perform(get("/api/v1/track/" + second.trackingNumber())).andExpect(status().isOk());
@@ -173,6 +196,7 @@ class AdminParcelTrackingTest extends IntegrationTest {
         body.put("lengthCm", 30);
         body.put("widthCm", 20);
         body.put("heightCm", 10);
+        body.put("paymentMethod", "AT_PICKUP");
         String response = postJson("/api/v1/deliveries", body, customer)
                 .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();

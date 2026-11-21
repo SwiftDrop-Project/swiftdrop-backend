@@ -38,7 +38,9 @@ public interface DeliveryApi {
      * with the same {@code merchantOrderRef}, that parcel is returned and nothing new is created, so a merchant can
      * safely retry. Errors from pricing are passed on unchanged.
      *
-     * @throws com.swiftdrop.shared.error.FieldValidationException field {@code lengthCm} when the command has no
+     * @throws com.swiftdrop.shared.error.FieldValidationException field {@code paymentMethod} when the command has no
+     *                                                             {@link CreateDeliveryCommand#paymentMethod()}, or
+     *                                                             field {@code lengthCm} when it has no
      *                                                             {@link CreateDeliveryCommand#size()}
      * @throws com.swiftdrop.shared.error.BusinessRuleException    PARCEL_NEEDS_MANUAL_QUOTE when no vehicle carries
      *                                                             or fits the parcel
@@ -158,20 +160,36 @@ public interface DeliveryApi {
      *                                                               parcel's current status
      * @throws com.swiftdrop.shared.error.ForbiddenException         FORBIDDEN when {@code actorRole} is neither
      *                                                               COURIER nor ADMIN
-     * @throws com.swiftdrop.shared.error.FieldValidationException   field {@code proofPhotoId} when the photo was not
-     *                                                               stored for this parcel
+     * @throws com.swiftdrop.shared.error.FieldValidationException   field {@code proofPhotoId}: missing for DELIVERED
+     *                                                               (a proof photo is required, whoever makes the
+     *                                                               change), given for another status, or not a photo
+     *                                                               stored for this parcel and not attached yet (for a
+     *                                                               courier: stored by the same courier)
      */
     DeliverySnapshot changeStatus(ChangeStatusCommand command);
 
     /**
-     * Stores a proof-of-delivery photo for the parcel. It is not attached until a DELIVERED change names it in
-     * {@link ChangeStatusCommand#proofPhotoId()}. The caller has already checked the image type and size.
+     * Stores a proof-of-delivery photo for the parcel (a photo of the delivery slip the recipient signed) in private
+     * file storage, with a durable reference linked to the parcel id. It is not attached until a DELIVERED change names
+     * it in {@link ChangeStatusCommand#proofPhotoId()}; once attached it can never be replaced. Photos that are never
+     * attached are removed after a while. The caller has already checked the image (JPEG, PNG or WebP, up to 5 MB)
+     * and that this user may upload it; delivery checks the type and size again.
      *
-     * @throws com.swiftdrop.shared.error.NotFoundException NOT_FOUND for an unknown parcel
+     * @throws com.swiftdrop.shared.error.NotFoundException        NOT_FOUND for an unknown parcel
+     * @throws com.swiftdrop.shared.error.FieldValidationException field {@code file}: empty, too large or another type
+     * @throws com.swiftdrop.shared.error.BusinessRuleException    TASK_STEP_NOT_ALLOWED when the parcel is already
+     *                                                             DELIVERED
+     * @throws com.swiftdrop.shared.error.ApiException             SERVICE_UNAVAILABLE when the storage can't be reached
      */
     ProofPhotoRef storeProofPhoto(UUID parcelId, UUID uploadedBy, String contentType, byte[] content);
 
-    /** The photo attached to the parcel's proof of delivery, or empty when there is none. */
+    /**
+     * The photo attached to the parcel's proof of delivery, or empty when there is none (not delivered, or an unknown
+     * parcel). {@link DeliverySnapshot#hasProofPhoto()} says whether there is one without reading the image. Callers
+     * check who may see it (a signed slip is personal data) and serve it themselves; there is no public URL.
+     *
+     * @throws com.swiftdrop.shared.error.ApiException SERVICE_UNAVAILABLE when the storage can't be reached
+     */
     Optional<ProofPhoto> findProofPhoto(UUID parcelId);
 
     // ---- Reports (for WP4) ----

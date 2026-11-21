@@ -19,9 +19,12 @@ public final class CourierViews {
     /** Today's parcels, already in display order. */
     public record CourierToday(LocalDate date, List<CourierParcel> parcels) {
 
-        /** Parcels whose step the courier finished (delivered, handed over at a branch, returned). */
+        /**
+         * Parcels the courier completed (handed over, not collected, delivered, returned, not taken out), each on its
+         * own, whatever the other parcels of its task are doing.
+         */
         public long done() {
-            return parcels.stream().filter(parcel -> parcel.task().closed()).count();
+            return parcels.stream().filter(parcel -> parcel.task().completed()).count();
         }
 
         public long toDo() {

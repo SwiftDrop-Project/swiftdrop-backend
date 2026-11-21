@@ -21,6 +21,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.contains;
+import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.everyItem;
 import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.is;
@@ -52,7 +53,8 @@ class WebhookDeliveryApiTest extends IntegrationTest {
     void withoutLoginEveryEndpointAnswers401() throws Exception {
         UUID id = UUID.randomUUID();
         for (MockHttpServletRequestBuilder request : List.of(post(PATH + "/" + id + "/test"),
-                get(PATH + "/" + id + "/deliveries"), post(PATH + "/deliveries/" + id + "/retry"), get(ADMIN_PATH),
+                get(PATH + "/" + id + "/deliveries"), get(PATH + "/deliveries"),
+                post(PATH + "/deliveries/" + id + "/retry"), get(ADMIN_PATH),
                 post(ADMIN_PATH + "/" + id + "/retry"))) {
             mvc.perform(request).andExpect(status().isUnauthorized())
                     .andExpect(jsonPath("$.code").value("UNAUTHENTICATED"));
@@ -65,7 +67,8 @@ class WebhookDeliveryApiTest extends IntegrationTest {
         UUID id = UUID.randomUUID();
 
         for (MockHttpServletRequestBuilder request : List.of(post(PATH + "/" + id + "/test"),
-                get(PATH + "/" + id + "/deliveries"), post(PATH + "/deliveries/" + id + "/retry"))) {
+                get(PATH + "/" + id + "/deliveries"), get(PATH + "/deliveries"),
+                post(PATH + "/deliveries/" + id + "/retry"))) {
             mvc.perform(request.cookie(customer)).andExpect(status().isForbidden())
                     .andExpect(jsonPath("$.code").value("FORBIDDEN"));
         }
@@ -92,6 +95,77 @@ class WebhookDeliveryApiTest extends IntegrationTest {
                 .andExpect(status().isForbidden());
         mvc.perform(get(PATH + "/" + subscription + "/deliveries").header("X-Api-Key", rawKey))
                 .andExpect(status().isForbidden());
+        mvc.perform(get(PATH + "/deliveries").header("X-Api-Key", rawKey))
+                .andExpect(status().isForbidden());
+    }
+
+    // ---------- all of a merchant's deliveries (GET /merchant/webhooks/deliveries) ----------
+
+    @Test
+    void allDeliveriesListsEveryWebhookOfTheMerchantNewestFirst() throws Exception {
+        Cookie merchant = approvedMerchant();
+        String shop = subscribe(merchant, URL);
+        String billing = subscribe(merchant, URL + "/billing");
+        Instant now = Instant.now();
+        UUID older = delivery(shop, now.minusSeconds(120));
+        UUID newer = delivery(billing, now.minusSeconds(60));
+        Cookie other = approvedMerchant();
+        delivery(subscribe(other), now); // another merchant's: never listed
+
+        mvc.perform(get(PATH + "/deliveries").cookie(merchant))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(2))
+                .andExpect(jsonPath("$.content[*].id", contains(newer.toString(), older.toString())))
+                .andExpect(jsonPath("$.content[*].subscriptionId", contains(billing, shop)))
+                .andExpect(jsonPath("$.content[0].payload").doesNotExist());
+    }
+
+    @Test
+    void searchingAParcelIdFindsEveryMessageAboutThatParcel() throws Exception {
+        Cookie merchant = approvedMerchant();
+        String shop = subscribe(merchant, URL);
+        String billing = subscribe(merchant, URL + "/billing");
+        UUID parcel = UUID.randomUUID();
+        Instant now = Instant.now();
+        UUID pickedUp = parcelDelivery(shop, WebhookEventType.PARCEL_PICKED_UP, now.minusSeconds(90), parcel,
+                "SD2611004817", "TECH-ORD-1001");
+        UUID deliveredToShop = parcelDelivery(shop, WebhookEventType.PARCEL_DELIVERED, now.minusSeconds(30), parcel,
+                "SD2611004817", "TECH-ORD-1001");
+        UUID deliveredToBilling = parcelDelivery(billing, WebhookEventType.PARCEL_DELIVERED, now.minusSeconds(30),
+                parcel, "SD2611004817", "TECH-ORD-1001");
+        parcelDelivery(shop, WebhookEventType.PARCEL_DELIVERED, now, UUID.randomUUID(), "SD2611009999", "OTHER-1");
+
+        mvc.perform(get(PATH + "/deliveries").param("search", parcel.toString()).cookie(merchant))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(3))
+                .andExpect(jsonPath("$.content[*].id", containsInAnyOrder(pickedUp.toString(),
+                        deliveredToShop.toString(), deliveredToBilling.toString())))
+                .andExpect(jsonPath("$.content[2].id").value(pickedUp.toString()));
+
+        // another merchant who knows the parcel id finds nothing
+        mvc.perform(get(PATH + "/deliveries").param("search", parcel.toString()).cookie(approvedMerchant()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalElements").value(0));
+    }
+
+    @Test
+    void allDeliveriesTakesTheSameFiltersAndRejectsBadOnes() throws Exception {
+        Cookie merchant = approvedMerchant();
+        String shop = subscribe(merchant, URL);
+        UUID failed = delivery(shop, Instant.now().minusSeconds(60));
+        markFailed(failed);
+        delivery(shop, Instant.now());
+
+        mvc.perform(get(PATH + "/deliveries?status=FAILED").cookie(merchant))
+                .andExpect(jsonPath("$.content[*].id", contains(failed.toString())));
+        mvc.perform(get(PATH + "/deliveries?size=1&page=1").cookie(merchant))
+                .andExpect(jsonPath("$.totalElements").value(2))
+                .andExpect(jsonPath("$.content", hasSize(1)));
+        mvc.perform(get(PATH + "/deliveries?size=101").cookie(merchant)).andExpect(status().isBadRequest());
+        mvc.perform(get(PATH + "/deliveries?status=LOST").cookie(merchant)).andExpect(status().isBadRequest());
+        mvc.perform(get(PATH + "/deliveries?eventType=parcel.lost").cookie(merchant))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.fieldErrors.eventType").value("'parcel.lost' isn't a webhook event"));
     }
 
     // ---------- test ping ----------
@@ -129,10 +203,53 @@ class WebhookDeliveryApiTest extends IntegrationTest {
         assertThat(jdbc.queryForObject("select count(*) from webhooks.deliveries where subscription_id = ?::uuid",
                 Long.class, subscription)).isEqualTo(1);
 
-        // once that one is finished, a new ping is queued again
+        // once that one is finished (and the 10-second wait between tests is over), a new ping is queued again
         markSucceeded(UUID.fromString(first));
+        backdate(UUID.fromString(first), 11);
         String third = readJson(ping(merchant, subscription).andExpect(status().isAccepted())).get("id").asString();
         assertThat(third).isNotEqualTo(first);
+    }
+
+    @Test
+    void sendTestRightAfterAFinishedPingAnswers429WithRetryAfter() throws Exception {
+        Cookie merchant = approvedMerchant();
+        String subscription = subscribe(merchant);
+        UUID first = UUID.fromString(readJson(ping(merchant, subscription).andExpect(status().isAccepted()))
+                .get("id").asString());
+        markFailed(first);
+
+        String retryAfter = ping(merchant, subscription)
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.code").value("TOO_MANY_REQUESTS"))
+                .andExpect(jsonPath("$.message").value("Too many attempts. Please wait a moment and try again."))
+                .andReturn().getResponse().getHeader("Retry-After");
+        assertThat(retryAfter).isNotNull();
+        assertThat(Integer.parseInt(retryAfter)).isBetween(1, 10);
+
+        backdate(first, 11);
+        ping(merchant, subscription).andExpect(status().isAccepted());
+    }
+
+    @Test
+    void aMerchantCanAskForAtMost30TestsAndRetriesAMinute() throws Exception {
+        Cookie merchant = approvedMerchant();
+        String subscription = subscribe(merchant);
+        for (int i = 0; i < 30; i++) {
+            ping(merchant, subscription).andExpect(status().isAccepted()); // the same waiting ping each time
+        }
+
+        String retryAfter = ping(merchant, subscription)
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.code").value("TOO_MANY_REQUESTS"))
+                .andReturn().getResponse().getHeader("Retry-After");
+        assertThat(Integer.parseInt(retryAfter)).isBetween(1, 60);
+        UUID failed = delivery(subscription, Instant.now().minusSeconds(60));
+        markFailed(failed);
+        retry(merchant, failed).andExpect(status().isTooManyRequests()); // retries count too
+
+        // another merchant isn't affected
+        Cookie other = approvedMerchant();
+        ping(other, subscribe(other)).andExpect(status().isAccepted());
     }
 
     @Test
@@ -513,6 +630,34 @@ class WebhookDeliveryApiTest extends IntegrationTest {
     }
 
     @Test
+    void aDeliveryThatJustFailedCanBeRetriedAfterTenSecondsButAdminsNeedNotWait() throws Exception {
+        Cookie merchant = approvedMerchant();
+        String subscription = subscribe(merchant);
+        UUID delivery = delivery(subscription, Instant.now());
+        markFailed(delivery); // its last attempt was just now
+
+        String retryAfter = retry(merchant, delivery)
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.code").value("TOO_MANY_REQUESTS"))
+                .andReturn().getResponse().getHeader("Retry-After");
+        assertThat(Integer.parseInt(retryAfter)).isBetween(1, 10);
+        assertThat(statusOf(delivery)).isEqualTo("FAILED");
+
+        mvc.perform(post(ADMIN_PATH + "/" + delivery + "/retry").cookie(loginAsAdmin()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PENDING"));
+    }
+
+    @Test
+    void theCooldownNeverHidesThatADeliveryIsntFailed() throws Exception {
+        Cookie merchant = approvedMerchant();
+        UUID pending = delivery(subscribe(merchant), Instant.now()); // updated just now, but not FAILED
+
+        retry(merchant, pending).andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("WEBHOOK_DELIVERY_NOT_RETRYABLE"));
+    }
+
+    @Test
     void onlyFailedDeliveriesCanBeRetried() throws Exception {
         Cookie merchant = approvedMerchant();
         String subscription = subscribe(merchant);
@@ -618,7 +763,12 @@ class WebhookDeliveryApiTest extends IntegrationTest {
 
     /** A subscription made through the API; returns its id. */
     private String subscribe(Cookie merchant) throws Exception {
-        return readJson(postJson(PATH, Map.of("url", URL, "eventTypes", List.of("parcel.delivered")), merchant)
+        return subscribe(merchant, URL);
+    }
+
+    /** A subscription for {@code url} (a merchant can't have two active ones for the same URL). */
+    private String subscribe(Cookie merchant, String url) throws Exception {
+        return readJson(postJson(PATH, Map.of("url", url, "eventTypes", List.of("parcel.delivered")), merchant)
                 .andExpect(status().isCreated())).get("id").asString();
     }
 
@@ -658,6 +808,12 @@ class WebhookDeliveryApiTest extends IntegrationTest {
     private void markFailed(UUID id) {
         jdbc.update("update webhooks.deliveries set status = 'FAILED', attempts = 6, last_status_code = 503,"
                 + " last_error = 'HTTP_503', next_attempt_at = null where id = ?", id);
+    }
+
+    /** Moves a delivery's creation and last change {@code seconds} into the past (past the cooldown). */
+    private void backdate(UUID id, int seconds) {
+        jdbc.update("update webhooks.deliveries set created_at = created_at - make_interval(secs => ?),"
+                + " updated_at = updated_at - make_interval(secs => ?) where id = ?", seconds, seconds, id);
     }
 
     private void markSucceeded(UUID id) {

@@ -2,6 +2,7 @@ package com.swiftdrop.merchants.internal.dto;
 
 import com.swiftdrop.delivery.CreateDeliveryCommand;
 import com.swiftdrop.delivery.ParcelSize;
+import com.swiftdrop.delivery.PaymentMethod;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMax;
@@ -19,7 +20,8 @@ import java.util.UUID;
  * Body of POST /merchant/orders. The merchant id comes from the login (cookie or API key), never from the request,
  * and the server sets the fee with pricing. Measurements are required: pricing needs them to pick the vehicle.
  * {@code merchantOrderRef} is the merchant's own order id; resending the same ref returns the existing parcel
- * (idempotent retry).
+ * (idempotent retry). The payment method is required: the courier needs it to know whether to collect the delivery
+ * fee, and from whom.
  */
 public record CreateMerchantOrderRequest(
         @Schema(example = "TECH-ORD-1001", nullable = true,
@@ -47,22 +49,25 @@ public record CreateMerchantOrderRequest(
         @Schema(example = "12")
         @NotNull(message = "Enter the height.")
         @Min(value = 1, message = MEASUREMENT) @Max(value = 300, message = MEASUREMENT) Integer heightCm,
-        @Schema(defaultValue = "false", nullable = true) Boolean keepUpright) {
+        @Schema(defaultValue = "false", nullable = true) Boolean keepUpright,
+        @Schema(example = "AT_PICKUP", description = "How the delivery fee is paid")
+        @NotNull(message = PAYMENT_METHOD_REQUIRED) PaymentMethod paymentMethod) {
 
     static final String MEASUREMENT = "Use whole centimetres from 1 to 300.";
+    static final String PAYMENT_METHOD_REQUIRED = "Choose how the delivery fee will be paid.";
 
     public CreateDeliveryCommand toCommand(UUID merchantId) {
         String ref = merchantOrderRef == null || merchantOrderRef.isBlank() ? null : merchantOrderRef.strip();
         String cleanInstructions = instructions == null || instructions.isBlank() ? null : instructions.strip();
         return new CreateDeliveryCommand(null, merchantId, ref, pickup.toContact(), recipient.toContact(), weightKg,
                 codAmount, cleanInstructions,
-                new ParcelSize(lengthCm, widthCm, heightCm, Boolean.TRUE.equals(keepUpright)));
+                new ParcelSize(lengthCm, widthCm, heightCm, Boolean.TRUE.equals(keepUpright)), paymentMethod);
     }
 
     @Override
     public String toString() {
         return "CreateMerchantOrderRequest[merchantOrderRef=" + merchantOrderRef + ", weightKg=" + weightKg
                 + ", lengthCm=" + lengthCm + ", widthCm=" + widthCm + ", heightCm=" + heightCm
-                + ", keepUpright=" + keepUpright + "]";
+                + ", keepUpright=" + keepUpright + ", paymentMethod=" + paymentMethod + "]";
     }
 }

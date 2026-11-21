@@ -1,0 +1,10 @@
+SwiftDrop
+
+Hi {{name}},
+
+We reviewed the SwiftDrop merchant application for {{businessName}}, and we couldn't approve it.
+
+You can't log in to SwiftDrop with this account. If you think this is a mistake, or your business details have changed, please contact SwiftDrop support.
+
+--
+SwiftDrop parcel delivery. This is an automatic message about your account; replies are not read.
