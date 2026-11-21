@@ -127,6 +127,7 @@ abstract class RealWorkflowTest extends IntegrationTest {
         body.put("lengthCm", 40);
         body.put("widthCm", 30);
         body.put("heightCm", 12);
+        body.put("paymentMethod", "AT_PICKUP");
         body.put("codAmount", new BigDecimal("2500.00"));
         String response = postJson("/api/v1/deliveries", body, customer)
                 .andExpect(status().isCreated())

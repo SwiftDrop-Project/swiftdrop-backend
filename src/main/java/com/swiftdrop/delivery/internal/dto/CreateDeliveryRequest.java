@@ -2,6 +2,7 @@ package com.swiftdrop.delivery.internal.dto;
 
 import com.swiftdrop.delivery.CreateDeliveryCommand;
 import com.swiftdrop.delivery.ParcelSize;
+import com.swiftdrop.delivery.PaymentMethod;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMax;
@@ -18,7 +19,8 @@ import java.util.UUID;
 /**
  * Body of POST /deliveries: a customer's booking. There is no customer id (it comes from the login) and no fee (the
  * server sets it with pricing), so nobody can book for someone else or choose their own price. The packed
- * measurements are required: pricing needs them to choose the vehicle.
+ * measurements are required: pricing needs them to choose the vehicle. So is the payment method: the courier needs it
+ * to know whether to collect the fee, and from whom.
  */
 public record CreateDeliveryRequest(
         @NotNull(message = "Enter the pickup details.") @Valid ContactRequest pickup,
@@ -44,22 +46,25 @@ public record CreateDeliveryRequest(
         @NotNull(message = "Enter the height.")
         @Min(value = 1, message = MEASUREMENT) @Max(value = 300, message = MEASUREMENT) Integer heightCm,
         // Boolean, not boolean: Jackson 3 refuses a missing value for a primitive, and this one is optional.
-        @Schema(defaultValue = "false", nullable = true) Boolean keepUpright) {
+        @Schema(defaultValue = "false", nullable = true) Boolean keepUpright,
+        @Schema(example = "AT_PICKUP", description = "How the delivery fee is paid")
+        @NotNull(message = PAYMENT_METHOD_REQUIRED) PaymentMethod paymentMethod) {
 
     static final String MEASUREMENT = "Use whole centimetres from 1 to 300.";
+    static final String PAYMENT_METHOD_REQUIRED = "Choose how the delivery fee will be paid.";
 
     /** The command for DeliveryApi.create: the customer from the login, the phones in their stored form. */
     public CreateDeliveryCommand toCommand(UUID customerId) {
         String cleanInstructions = instructions == null || instructions.isBlank() ? null : instructions.strip();
         return new CreateDeliveryCommand(customerId, null, null, pickup.toContact(), recipient.toContact(), weightKg,
                 codAmount, cleanInstructions,
-                new ParcelSize(lengthCm, widthCm, heightCm, Boolean.TRUE.equals(keepUpright)));
+                new ParcelSize(lengthCm, widthCm, heightCm, Boolean.TRUE.equals(keepUpright)), paymentMethod);
     }
 
-    /** The contacts and the instructions are personal data: only the weight and the size. */
+    /** The contacts and the instructions are personal data: only the weight, the size and the payment method. */
     @Override
     public String toString() {
         return "CreateDeliveryRequest[weightKg=" + weightKg + ", lengthCm=" + lengthCm + ", widthCm=" + widthCm
-                + ", heightCm=" + heightCm + ", keepUpright=" + keepUpright + "]";
+                + ", heightCm=" + heightCm + ", keepUpright=" + keepUpright + ", paymentMethod=" + paymentMethod + "]";
     }
 }

@@ -5,6 +5,7 @@ import com.swiftdrop.delivery.DeliverySnapshot;
 import com.swiftdrop.delivery.FailureReason;
 import com.swiftdrop.delivery.ParcelSize;
 import com.swiftdrop.delivery.ParcelStatus;
+import com.swiftdrop.delivery.PaymentMethod;
 import com.swiftdrop.shared.reference.District;
 
 import java.math.BigDecimal;
@@ -15,6 +16,7 @@ import java.util.UUID;
  * A merchant order as the merchant sees it: the response of POST /merchant/orders and the item of "My orders".
  * Same shape as the customer Delivery response plus {@code merchantOrderRef}. {@code currentBranch} is set only while
  * AT_BRANCH, {@code failureReason} only while FAILED, {@code proof} only once DELIVERED; otherwise they are null.
+ * {@code paymentMethod} says how the delivery fee is paid (null for orders made before payment methods).
  */
 public record MerchantOrderResponse(
         UUID id,
@@ -35,7 +37,8 @@ public record MerchantOrderResponse(
         Proof proof,
         ParcelSize size,
         String vehicle,
-        Integer billableWeightKg) {
+        Integer billableWeightKg,
+        PaymentMethod paymentMethod) {
 
     public record Proof(String recipientName, boolean hasPhoto) {
 
@@ -53,7 +56,7 @@ public record MerchantOrderResponse(
                 parcel.merchantOrderRef(), parcel.pickup(), parcel.recipient(), parcel.weightKg(), parcel.codAmount(),
                 parcel.instructions(), parcel.feeAmount(), parcel.currency(), parcel.createdAt(), parcel.updatedAt(),
                 parcel.currentBranch(), parcel.failureReason(), proof, parcel.size(), parcel.vehicle(),
-                parcel.billableWeightKg());
+                parcel.billableWeightKg(), parcel.paymentMethod());
     }
 
     @Override

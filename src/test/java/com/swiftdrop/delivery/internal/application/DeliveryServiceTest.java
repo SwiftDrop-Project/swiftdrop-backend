@@ -10,6 +10,7 @@ import com.swiftdrop.delivery.ParcelSize;
 import com.swiftdrop.delivery.ParcelStatus;
 import com.swiftdrop.delivery.ParcelStatusChanged;
 import com.swiftdrop.delivery.ParcelStatusEntry;
+import com.swiftdrop.delivery.PaymentMethod;
 import com.swiftdrop.delivery.internal.domain.Parcel;
 import com.swiftdrop.delivery.internal.domain.ParcelPrice;
 import com.swiftdrop.delivery.internal.domain.ParcelStatusHistory;
@@ -55,6 +56,7 @@ import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.entry;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
@@ -127,7 +129,7 @@ class DeliveryServiceTest {
         when(feeQuoter.quote(any())).thenReturn(new ParcelPrice(new BigDecimal("1295.20"), "LKR", "BIKE", 3, 2,
                 "[{\"component\":\"BASE\",\"amount\":350.00}]"));
         var booking = new CreateDeliveryCommand(UUID.randomUUID(), null, null, PICKUP, RECIPIENT,
-                new BigDecimal("1.80"), null, null, new ParcelSize(40, 30, 12, false));
+                new BigDecimal("1.80"), null, null, new ParcelSize(40, 30, 12, false), PaymentMethod.AT_PICKUP);
 
         DeliverySnapshot snapshot = service.create(booking);
 
@@ -139,6 +141,50 @@ class DeliveryServiceTest {
         ArgumentCaptor<Parcel> parcel = ArgumentCaptor.forClass(Parcel.class);
         verify(parcels).save(parcel.capture());
         assertThat(parcel.getValue().getFeeBreakdown()).contains("\"BASE\"");
+    }
+
+    @Test
+    void theParcelKeepsHowTheFeeIsPaid() {
+        var booking = new CreateDeliveryCommand(UUID.randomUUID(), null, null, PICKUP, RECIPIENT,
+                new BigDecimal("1.80"), null, null, new ParcelSize(40, 30, 12, false), PaymentMethod.AT_DROP_OFF);
+
+        DeliverySnapshot snapshot = service.create(booking);
+
+        assertThat(snapshot.paymentMethod()).isEqualTo(PaymentMethod.AT_DROP_OFF);
+        ArgumentCaptor<Parcel> parcel = ArgumentCaptor.forClass(Parcel.class);
+        verify(parcels).save(parcel.capture());
+        assertThat(parcel.getValue().getPaymentMethod()).isEqualTo(PaymentMethod.AT_DROP_OFF);
+    }
+
+    @Test
+    void aNewParcelNeedsAPaymentMethod() {
+        var noPaymentMethod = new CreateDeliveryCommand(UUID.randomUUID(), null, null, PICKUP, RECIPIENT,
+                new BigDecimal("1.80"), null, null, new ParcelSize(40, 30, 12, false));
+
+        assertThatThrownBy(() -> service.create(noPaymentMethod))
+                .isInstanceOfSatisfying(FieldValidationException.class, e -> assertThat(e.fieldErrors())
+                        .containsExactly(entry("paymentMethod", "Choose how the delivery fee will be paid.")));
+
+        verifyNoInteractions(feeQuoter, trackingNumbers);
+        verify(parcels, never()).save(any());
+        verify(statusHistory, never()).save(any());
+        verify(outbox, never()).write(any());
+    }
+
+    @Test
+    void aMerchantRetryReturnsTheFirstParcelBeforeTheCheck() {
+        // A retry creates nothing, so it is answered like before, even from a client that leaves the method out.
+        UUID merchantId = UUID.randomUUID();
+        Parcel first = Parcel.create(UUID.randomUUID(), "SD2611000778", merchantOrder(merchantId, "ORDER-2002"),
+                new BigDecimal("450.00"), "LKR", NOW.minusSeconds(60));
+        when(parcels.findByMerchantIdAndMerchantOrderRef(merchantId, "ORDER-2002")).thenReturn(Optional.of(first));
+        var retryWithout = new CreateDeliveryCommand(null, merchantId, "ORDER-2002", PICKUP, RECIPIENT,
+                new BigDecimal("1.50"), null, null);
+
+        DeliverySnapshot snapshot = service.create(retryWithout);
+
+        assertThat(snapshot.id()).isEqualTo(first.getId());
+        verify(parcels, never()).save(any());
     }
 
     @Test
@@ -682,13 +728,14 @@ class DeliveryServiceTest {
                 new BigDecimal("450.00"), "LKR", NOW);
     }
 
+    /** No size: the fee quoter is a mock here, so it doesn't need one. */
     private static CreateDeliveryCommand customerBooking(UUID customerId) {
         return new CreateDeliveryCommand(customerId, null, null, PICKUP, RECIPIENT, new BigDecimal("2.00"), null,
-                null);
+                null, null, PaymentMethod.AT_PICKUP);
     }
 
     private static CreateDeliveryCommand merchantOrder(UUID merchantId, String orderRef) {
         return new CreateDeliveryCommand(null, merchantId, orderRef, PICKUP, RECIPIENT, new BigDecimal("1.50"),
-                new BigDecimal("2500.00"), null);
+                new BigDecimal("2500.00"), null, null, PaymentMethod.AT_DROP_OFF);
     }
 }

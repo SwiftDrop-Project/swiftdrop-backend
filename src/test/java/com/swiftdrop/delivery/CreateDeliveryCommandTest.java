@@ -44,6 +44,24 @@ class CreateDeliveryCommandTest {
     }
 
     @Test
+    void theCommandKeepsHowTheFeeIsPaidAndShowsItInTheLogs() {
+        var command = new CreateDeliveryCommand(UUID.randomUUID(), null, null, PICKUP, RECIPIENT, TWO_KG, null, null,
+                new ParcelSize(40, 30, 12, false), PaymentMethod.AT_PICKUP);
+
+        assertThat(command.paymentMethod()).isEqualTo(PaymentMethod.AT_PICKUP);
+        assertThat(command.toString()).contains("paymentMethod=AT_PICKUP");
+    }
+
+    @Test
+    void aCommandWrittenBeforePaymentMethodsHasNone() {
+        var command = new CreateDeliveryCommand(UUID.randomUUID(), null, null, PICKUP, RECIPIENT, TWO_KG, null, null,
+                new ParcelSize(40, 30, 12, false));
+
+        assertThat(command.paymentMethod()).isNull();
+        assertThat(command.size()).isEqualTo(new ParcelSize(40, 30, 12, false));
+    }
+
+    @Test
     void rejectsADeliveryWithBothACustomerAndAMerchant() {
         assertThatIllegalArgumentException().isThrownBy(() -> new CreateDeliveryCommand(
                 UUID.randomUUID(), UUID.randomUUID(), null, PICKUP, RECIPIENT, TWO_KG, null, null));

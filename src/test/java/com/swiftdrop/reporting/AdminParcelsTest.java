@@ -229,6 +229,7 @@ class AdminParcelsTest extends IntegrationTest {
         body.put("lengthCm", 30);
         body.put("widthCm", 20);
         body.put("heightCm", 10);
+        body.put("paymentMethod", "AT_PICKUP");
         if (codAmount != null) {
             body.put("codAmount", codAmount);
         }
