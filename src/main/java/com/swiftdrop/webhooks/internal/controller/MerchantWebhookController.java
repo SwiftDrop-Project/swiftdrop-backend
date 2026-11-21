@@ -1,5 +1,6 @@
 package com.swiftdrop.webhooks.internal.controller;
 
+import com.swiftdrop.shared.error.ConflictException;
 import com.swiftdrop.shared.error.ErrorCode;
 import com.swiftdrop.shared.error.ForbiddenException;
 import com.swiftdrop.shared.web.CurrentUser;
@@ -13,9 +14,11 @@ import com.swiftdrop.webhooks.internal.dto.UpdateWebhookRequest;
 import com.swiftdrop.webhooks.internal.dto.WebhookDeliveryResponse;
 import com.swiftdrop.webhooks.internal.dto.WebhookResponse;
 import com.swiftdrop.webhooks.internal.dto.WebhookWithSecretResponse;
+import com.swiftdrop.webhooks.internal.security.WebhookActionLimiter;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -33,6 +36,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Supplier;
 
 /**
  * Merchant webhook subscriptions (API.md "Webhooks"). Logged-in merchants only (the SD_TOKEN cookie): a request
@@ -46,10 +50,13 @@ public class MerchantWebhookController {
 
     private final WebhookSubscriptionService service;
     private final WebhookDeliveryService deliveries;
+    private final WebhookActionLimiter limiter;
 
-    public MerchantWebhookController(WebhookSubscriptionService service, WebhookDeliveryService deliveries) {
+    public MerchantWebhookController(WebhookSubscriptionService service, WebhookDeliveryService deliveries,
+                                     WebhookActionLimiter limiter) {
         this.service = service;
         this.deliveries = deliveries;
+        this.limiter = limiter;
     }
 
     @PostMapping
@@ -69,26 +76,57 @@ public class MerchantWebhookController {
     @Operation(summary = "Change a webhook subscription (only the fields sent)")
     public WebhookResponse update(Authentication authentication, @PathVariable UUID id,
                            @Valid @RequestBody UpdateWebhookRequest request) {
-        return service.update(merchantId(authentication), id, request);
+        UUID merchantId = merchantId(authentication);
+        return inOneStep(() -> service.update(merchantId, id, request));
     }
 
+    /**
+     * Idempotent, also when two requests turn it off at the same moment: the one that loses the race answers 204 too,
+     * as long as the subscription ended up off. Only if someone turned it back on meanwhile is it 409.
+     */
     @DeleteMapping("/{id}")
     @Operation(summary = "Turn a webhook subscription off (its history is kept)")
     public ResponseEntity<Void> deactivate(Authentication authentication, @PathVariable UUID id) {
-        service.deactivate(merchantId(authentication), id);
+        UUID merchantId = merchantId(authentication);
+        try {
+            service.deactivate(merchantId, id);
+        } catch (OptimisticLockingFailureException ex) {
+            if (service.isActive(merchantId, id)) {
+                throw new ConflictException(ErrorCode.WEBHOOK_CHANGED);
+            }
+        }
         return ResponseEntity.noContent().build();
     }
 
     @PostMapping("/{id}/rotate-secret")
     @Operation(summary = "Replace the signing secret (the new secret is shown once; the old one stops working)")
     public WebhookWithSecretResponse rotateSecret(Authentication authentication, @PathVariable UUID id) {
-        return service.rotateSecret(merchantId(authentication), id);
+        UUID merchantId = merchantId(authentication);
+        return inOneStep(() -> service.rotateSecret(merchantId, id));
     }
 
     @PostMapping("/{id}/test")
     @Operation(summary = "Send a test ping to this subscription within seconds (also while it is turned off)")
     public ResponseEntity<WebhookDeliveryResponse> test(Authentication authentication, @PathVariable UUID id) {
-        return ResponseEntity.status(HttpStatus.ACCEPTED).body(deliveries.queuePing(merchantId(authentication), id));
+        UUID merchantId = merchantId(authentication);
+        limiter.check(merchantId);
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(deliveries.queuePing(merchantId, id));
+    }
+
+    @GetMapping("/deliveries")
+    @Operation(summary = "All your webhook deliveries, from every subscription, newest first. Optional filters: "
+            + "status, eventType, search (a parcel id, tracking number, order number or another id), from/to (days, "
+            + "Sri Lankan time, included). search=<parcel id> gives every message sent about that parcel")
+    public PageResponse<WebhookDeliveryResponse> allDeliveries(Authentication authentication,
+                                                               @RequestParam(required = false) DeliveryStatus status,
+                                                               @RequestParam(required = false) String eventType,
+                                                               @RequestParam(required = false) String search,
+                                                               @RequestParam(required = false) String from,
+                                                               @RequestParam(required = false) String to,
+                                                               @RequestParam(defaultValue = "0") int page,
+                                                               @RequestParam(defaultValue = "20") int size) {
+        return deliveries.merchantList(merchantId(authentication),
+                new DeliveryFilters(status, eventType, search, from, to), page, size);
     }
 
     @GetMapping("/{id}/deliveries")
@@ -110,7 +148,22 @@ public class MerchantWebhookController {
     @PostMapping("/deliveries/{deliveryId}/retry")
     @Operation(summary = "Send a FAILED delivery again, with a new set of attempts")
     public WebhookDeliveryResponse retry(Authentication authentication, @PathVariable UUID deliveryId) {
-        return deliveries.retry(merchantId(authentication), deliveryId);
+        UUID merchantId = merchantId(authentication);
+        limiter.check(merchantId);
+        return deliveries.retry(merchantId, deliveryId);
+    }
+
+    /**
+     * Runs one change to a subscription. Someone else changed the same subscription at the same moment (optimistic
+     * lock, possibly only at commit, after the service returned): 409 WEBHOOK_CHANGED instead of a 500, so the
+     * merchant refreshes. Nothing was saved; a rotated secret that lost the race is never shown.
+     */
+    static <T> T inOneStep(Supplier<T> change) {
+        try {
+            return change.get();
+        } catch (OptimisticLockingFailureException ex) {
+            throw new ConflictException(ErrorCode.WEBHOOK_CHANGED);
+        }
     }
 
     /** Cookie (JWT) logins only; API-key requests are refused. */

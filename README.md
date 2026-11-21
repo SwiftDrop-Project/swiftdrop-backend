@@ -16,7 +16,7 @@ It is one Spring Boot application (a modular monolith, with boundaries checked b
 | Language and framework | Java 21, Spring Boot 4.1 (Spring MVC, Spring Security 7, Jackson 3) |
 | Database | PostgreSQL 17 on Neon (one schema per module), Spring Data JPA (Hibernate), Flyway migrations |
 | Security | JWT (HS256) in an httpOnly cookie, via Spring Security's OAuth2 resource server; Google sign-in via OAuth2 client (OpenID Connect); BCrypt passwords |
-| Messaging and mail | RabbitMQ (Spring AMQP): exchange `parcel.events`, queues `notifications.q` and `webhooks.q` (declared, no feature uses them yet); Spring Mail |
+| Messaging and mail | RabbitMQ (Spring AMQP): exchange `parcel.events`, queues `notifications.q` (declared, not used yet) and `webhooks.q` (read by webhooks); Spring Mail |
 | Architecture | Spring Modulith 2.1 (`ModuleArchitectureTest` checks the module boundaries) |
 | API docs | springdoc-openapi (Swagger UI) |
 | Build | Maven (wrapper included: `mvnw`, `mvnw.cmd`), Lombok |
@@ -39,7 +39,7 @@ architecture diagram). `SwiftdropBackendApplication` stays at the root.
 | `reporting` | Delivery and cash-on-delivery reports | - | TBD | Placeholder |
 | `tracking` | Parcel tracking by tracking number, live updates (SSE) | - | TBD | Placeholder |
 | `notifications` | Emails (and later SMS) to users | `notifications` | TBD | Placeholder |
-| `webhooks` | Merchant webhook subscriptions and signed, retried delivery of parcel events (API.md "Webhooks") | `webhooks` | chanuka (WP6) | Contract ready (implementation next) |
+| `webhooks` | Merchant webhook subscriptions and signed, retried delivery of parcel events (API.md "Webhooks") | `webhooks` | chanuka (WP6) | Built: subscriptions, signed delivery with retries, test pings, history and retry for merchants, admin delivery logs |
 | `outbox` | Relays delivery's outbox events to RabbitMQ | - | TBD | Placeholder |
 | `assistant` | AI delivery assistant: a chatbot answering "Where is my parcel?" and "How much to send 2 kg to Kandy?" only from the data of the tracking and pricing APIs, and daily, weekly and monthly service reports for admins (delivery, tracking and identity data); Google Gemini only rewrites those answers clearly. The same data tools are an MCP server at `/api/v1/mcp` (API.md "Assistant") | - | D.M.A.I. Disanayaka | Built |
 | `courier` | The courier's parcels, one card each (a dispatcher may group several in one task): today's pickups and deliveries, status updates with branch handover and return, Unable to Collect, completed-parcel history; tasks complete by themselves (through `AssignmentApi` and `DeliveryApi`) | - | Kalpani | Built (on the real `AssignmentApi` and `DeliveryApi`) |
@@ -121,6 +121,11 @@ Use the same `RABBITMQ_PASSWORD` and `JWT_SECRET` as in `swiftdrop-deploy/.env`.
 
 - Git Bash: `openssl rand -base64 48`
 - PowerShell: `$b = New-Object byte[] 48; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b)`
+
+Parcel events (parcel webhooks, live tracking, the dispatch pickup queue) are only published while
+`SWIFTDROP_OUTBOX_RELAY_ENABLED=true`. It is `false` by default, and then only webhook test pings are sent, with no
+error anywhere (the console says "Outbox relay is off" at startup). On the shared Neon database turn it on in **one**
+backend only: the relay has no row locking, so each event goes to whichever laptop's RabbitMQ publishes it first.
 
 **3. Start the backend.**
 
