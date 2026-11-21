@@ -113,6 +113,22 @@ public class MerchantWebhookController {
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(deliveries.queuePing(merchantId, id));
     }
 
+    @GetMapping("/deliveries")
+    @Operation(summary = "All your webhook deliveries, from every subscription, newest first. Optional filters: "
+            + "status, eventType, search (a parcel id, tracking number, order number or another id), from/to (days, "
+            + "Sri Lankan time, included). search=<parcel id> gives every message sent about that parcel")
+    public PageResponse<WebhookDeliveryResponse> allDeliveries(Authentication authentication,
+                                                               @RequestParam(required = false) DeliveryStatus status,
+                                                               @RequestParam(required = false) String eventType,
+                                                               @RequestParam(required = false) String search,
+                                                               @RequestParam(required = false) String from,
+                                                               @RequestParam(required = false) String to,
+                                                               @RequestParam(defaultValue = "0") int page,
+                                                               @RequestParam(defaultValue = "20") int size) {
+        return deliveries.merchantList(merchantId(authentication),
+                new DeliveryFilters(status, eventType, search, from, to), page, size);
+    }
+
     @GetMapping("/{id}/deliveries")
     @Operation(summary = "Delivery history of one subscription, newest first. Optional filters: status, eventType "
             + "(e.g. parcel.delivered or webhook.ping), search (tracking number, order number or an id), from/to "

@@ -140,6 +140,21 @@ public class WebhookDeliveryService {
         }
     }
 
+    /**
+     * All of one merchant's deliveries, from every subscription (active or turned off), newest first, with the same
+     * optional filters as {@link #history}. Used to show every message about one parcel ({@code search=<parcel id>}).
+     * Only the merchant's own rows are ever looked at, so another merchant's parcel id finds nothing.
+     */
+    @Transactional(readOnly = true)
+    public PageResponse<WebhookDeliveryResponse> merchantList(UUID merchantId, DeliveryFilters filters, int page,
+                                                              int size) {
+        requireValidPage(page, size);
+        DeliveryCriteria criteria = DeliveryCriteria.parse(filters);
+        return PageResponse.from(
+                deliveries.findAll(criteria.toSpecification(null, merchantId), PageRequest.of(page, size, NEWEST_FIRST)),
+                WebhookDeliveryResponse::from);
+    }
+
     /** Every merchant's deliveries, newest first; {@code merchantId} and every filter are optional. */
     @Transactional(readOnly = true)
     public PageResponse<AdminWebhookDeliveryResponse> adminList(UUID merchantId, DeliveryFilters filters, int page,
