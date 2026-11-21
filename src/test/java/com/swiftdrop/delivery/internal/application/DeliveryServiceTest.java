@@ -78,8 +78,9 @@ class DeliveryServiceTest {
     private final OutboxWriter outbox = mock(OutboxWriter.class);
     private final FeeQuoter feeQuoter = mock(FeeQuoter.class);
     private final TrackingNumberGenerator trackingNumbers = mock(TrackingNumberGenerator.class);
+    private final ProofPhotos proofPhotos = mock(ProofPhotos.class);
     private final DeliveryService service = new DeliveryService(parcels, statusHistory, outbox, feeQuoter,
-            trackingNumbers, Clock.fixed(NOW, ZoneOffset.UTC));
+            trackingNumbers, proofPhotos, Clock.fixed(NOW, ZoneOffset.UTC));
 
     @BeforeEach
     void aFeeAndAFreeTrackingNumber() {
@@ -457,15 +458,45 @@ class DeliveryServiceTest {
     }
 
     @Test
-    void aDeliveryKeepsTheRecipientName() {
+    void aDeliveryKeepsTheRecipientNameAndAttachesTheProofPhotoInTheSameChange() {
         Parcel parcel = stored(aParcelMovedTo(PICKED_UP, AT_BRANCH, OUT_FOR_DELIVERY));
+        UUID photoId = UUID.randomUUID();
 
         DeliverySnapshot snapshot = service.changeStatus(new ChangeStatusCommand(parcel.getId(), DELIVERED,
-                COURIER_ID, "COURIER", null, null, "Kamala Silva", null));
+                COURIER_ID, "COURIER", null, null, "Kamala Silva", photoId));
 
         assertThat(snapshot.status()).isEqualTo(DELIVERED);
         assertThat(snapshot.proofRecipientName()).isEqualTo("Kamala Silva");
-        assertThat(snapshot.hasProofPhoto()).isFalse();
+        assertThat(snapshot.hasProofPhoto()).isTrue();
+        verify(proofPhotos).attach(parcel.getId(), photoId, COURIER_ID, "COURIER", NOW);
+        assertThat(writtenEvent().toStatus()).isEqualTo(DELIVERED);
+    }
+
+    @Test
+    void deliveredNeedsAProofPhotoWhoeverMakesTheChange() {
+        for (String role : List.of("COURIER", "ADMIN")) {
+            Parcel parcel = stored(aParcelMovedTo(PICKED_UP, AT_BRANCH, OUT_FOR_DELIVERY));
+
+            assertThatThrownBy(() -> service.changeStatus(new ChangeStatusCommand(parcel.getId(), DELIVERED,
+                    COURIER_ID, role, null, null, "Kamala Silva", null)))
+                    .isInstanceOfSatisfying(FieldValidationException.class,
+                            e -> assertThat(e.fieldErrors()).containsOnlyKeys("proofPhotoId"));
+        }
+
+        verifyNothingSaved();
+        verifyNoInteractions(proofPhotos);
+    }
+
+    @Test
+    void aProofPhotoIsOnlyForDelivered() {
+        Parcel parcel = stored(aParcelMovedTo(PICKED_UP, AT_BRANCH, OUT_FOR_DELIVERY));
+
+        assertThatThrownBy(() -> service.changeStatus(new ChangeStatusCommand(parcel.getId(), FAILED,
+                COURIER_ID, "COURIER", null, FailureReason.RECIPIENT_UNAVAILABLE, null, UUID.randomUUID())))
+                .isInstanceOfSatisfying(FieldValidationException.class,
+                        e -> assertThat(e.fieldErrors()).containsOnlyKeys("proofPhotoId"));
+
+        verifyNothingSaved();
     }
 
     @Test
@@ -514,15 +545,34 @@ class DeliveryServiceTest {
     }
 
     @Test
-    void aProofPhotoIsRefusedUntilPhotosCanBeStored() {
+    void aPhotoThatCantBeAttachedLeavesTheParcelUndelivered() {
         Parcel parcel = stored(aParcelMovedTo(PICKED_UP, AT_BRANCH, OUT_FOR_DELIVERY));
+        UUID someoneElsesPhoto = UUID.randomUUID();
+        org.mockito.Mockito.doThrow(new FieldValidationException("proofPhotoId", "Add the photo again."))
+                .when(proofPhotos).attach(any(), any(), any(), any(), any());
 
         assertThatThrownBy(() -> service.changeStatus(new ChangeStatusCommand(parcel.getId(), DELIVERED,
-                COURIER_ID, "COURIER", null, null, "Kamala Silva", UUID.randomUUID())))
+                COURIER_ID, "COURIER", null, null, "Kamala Silva", someoneElsesPhoto)))
                 .isInstanceOfSatisfying(FieldValidationException.class,
                         e -> assertThat(e.fieldErrors()).containsOnlyKeys("proofPhotoId"));
 
+        // The exception rolls the transaction back in the real service: here nothing reached the repositories.
         verifyNothingSaved();
+    }
+
+    @Test
+    void proofPhotosAreStoredAndReadThroughProofPhotos() {
+        UUID parcelId = UUID.randomUUID();
+        byte[] image = {1, 2, 3};
+        com.swiftdrop.delivery.ProofPhotoRef ref =
+                new com.swiftdrop.delivery.ProofPhotoRef(UUID.randomUUID(), "image/jpeg", 3, NOW);
+        when(proofPhotos.store(parcelId, COURIER_ID, "image/jpeg", image)).thenReturn(ref);
+        when(proofPhotos.findAttached(parcelId))
+                .thenReturn(java.util.Optional.of(new com.swiftdrop.delivery.ProofPhoto("image/jpeg", image)));
+
+        assertThat(service.storeProofPhoto(parcelId, COURIER_ID, "image/jpeg", image)).isEqualTo(ref);
+        assertThat(service.findProofPhoto(parcelId)).get()
+                .extracting(com.swiftdrop.delivery.ProofPhoto::contentType).isEqualTo("image/jpeg");
     }
 
     @Test
