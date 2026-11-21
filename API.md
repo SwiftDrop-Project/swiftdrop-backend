@@ -85,6 +85,7 @@ Change it in the same PR as the code, and tell the frontend team.
 | 409 | `WEBHOOK_LIMIT_REACHED` | Webhooks: creating or turning on a 6th active subscription |
 | 409 | `WEBHOOK_DELIVERY_NOT_RETRYABLE` | Webhooks: retrying a delivery that is not `FAILED` |
 | 409 | `WEBHOOK_URL_IN_USE` | Webhooks: another of your active subscriptions already uses this callback URL |
+| 409 | `WEBHOOK_CHANGED` | Webhooks: someone else changed the same subscription at the same moment (e.g. two tabs); nothing was saved |
 | 409 | `ACCOUNT_REMOVED` | An admin action or password action on a removed account |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | Request body is not `application/json` |
 | 429 | `TOO_MANY_REQUESTS` | Too many requests from this IP address; the `Retry-After` header says how many seconds to wait |
@@ -114,6 +115,7 @@ Messages of the new codes (show them as-is):
 | `WEBHOOK_LIMIT_REACHED` | You can have up to 5 active webhooks. Turn one off before adding another. |
 | `WEBHOOK_DELIVERY_NOT_RETRYABLE` | Only failed deliveries can be sent again. |
 | `WEBHOOK_URL_IN_USE` | You already have a webhook for this address. Add the events to it instead. |
+| `WEBHOOK_CHANGED` | This webhook was just changed somewhere else. Refresh and try again. |
 | `CANNOT_CHANGE_OWN_ACCOUNT` (409) | You can't block your own account. |
 | `ACCOUNT_NOT_ACTIVE` (409) | Only active accounts can be blocked. Refresh to see the account's latest status. |
 | `ACCOUNT_NOT_BLOCKED` (409) | Only blocked accounts can be unblocked. Refresh to see the account's latest status. |
@@ -776,12 +778,12 @@ The secret is never in this shape. The create and rotate responses add it once:
 |---|---|---|
 | `POST /merchant/webhooks` `{"url", "eventTypes": [...]}` | Create an active subscription (201, subscription + `secret`) | 400 `url`, `eventTypes`; 403 `MERCHANT_NOT_APPROVED`; 409 `WEBHOOK_LIMIT_REACHED`, `WEBHOOK_URL_IN_USE` |
 | `GET /merchant/webhooks` | Your subscriptions, active and turned off, newest first (array of subscriptions) | — |
-| `PATCH /merchant/webhooks/{id}` `{"url"?, "eventTypes"?, "active"?}` | Change only the fields sent (subscription) | 400; 404; 409 `WEBHOOK_LIMIT_REACHED` (turning one on), `WEBHOOK_URL_IN_USE` (new URL or turning one on) |
-| `DELETE /merchant/webhooks/{id}` | Turn off (`active: false`; history is kept). 204. Idempotent | 404 |
-| `POST /merchant/webhooks/{id}/rotate-secret` | New secret; the old one stops working at once, also for retries (200, subscription + `secret`) | 404 |
-| `POST /merchant/webhooks/{id}/test` | Queue a `webhook.ping` for this subscription, sent within seconds (202, delivery). Also works while it is turned off, so a URL can be checked before turning it on. If a ping for it is still waiting to be sent, that one is returned (202) instead of queuing another | 404 |
+| `PATCH /merchant/webhooks/{id}` `{"url"?, "eventTypes"?, "active"?}` | Change only the fields sent (subscription) | 400; 404; 409 `WEBHOOK_LIMIT_REACHED` (turning one on), `WEBHOOK_URL_IN_USE` (new URL or turning one on), `WEBHOOK_CHANGED` |
+| `DELETE /merchant/webhooks/{id}` | Turn off (`active: false`; history is kept). 204. Idempotent, also when two requests turn it off at once | 404; 409 `WEBHOOK_CHANGED` (someone turned it back on at that moment) |
+| `POST /merchant/webhooks/{id}/rotate-secret` | New secret; the old one stops working at once, also for retries (200, subscription + `secret`). If two rotations clash, the loser gets 409 and no secret | 404; 409 `WEBHOOK_CHANGED` |
+| `POST /merchant/webhooks/{id}/test` | Queue a `webhook.ping` for this subscription, sent within seconds and tried once (202, delivery). Also works while it is turned off, so a URL can be checked before turning it on. If a ping for it is still waiting to be sent, that one is returned (202) instead of queuing another | 404 |
 | `GET /merchant/webhooks/{id}/deliveries?status=&eventType=&search=&from=&to=&page=0&size=20` | Delivery history of one subscription, newest first (page of deliveries). Optional filters: `status`, `eventType`, `search`, `from`, `to` (see "Searching deliveries") | 400 `status`, `eventType`, `search`, `from`, `to`, `page`, `size` (1-100); 404 |
-| `POST /merchant/webhooks/deliveries/{id}/retry` | Send a `FAILED` delivery again, with a new set of attempts: `PENDING`, `attempts: 0`, due now; `lastStatusCode`/`lastError` keep the old values until the next attempt (delivery). A parcel delivery of a turned-off subscription fails again with `SUBSCRIPTION_INACTIVE`: turn the subscription on first | 404; 409 `WEBHOOK_DELIVERY_NOT_RETRYABLE` |
+| `POST /merchant/webhooks/deliveries/{id}/retry` | Send a `FAILED` delivery again, with a new set of attempts (one for a test ping): `PENDING`, `attempts: 0`, due now; `lastStatusCode`/`lastError` keep the old values until the next attempt (delivery). A parcel delivery of a turned-off subscription fails again with `SUBSCRIPTION_INACTIVE`: turn the subscription on first | 404; 409 `WEBHOOK_DELIVERY_NOT_RETRYABLE` |
 | `GET /admin/webhooks/deliveries?status=FAILED&merchantId=&eventType=&search=&from=&to=&page=0&size=20` | ADMIN: every merchant's deliveries, newest first (page of deliveries, each with `merchantId`). Optional filters: `status`, `merchantId`, `eventType`, `search`, `from`, `to` | 400 `status`, `eventType`, `search`, `from`, `to`, `page`, `size` |
 | `POST /admin/webhooks/deliveries/{id}/retry` | ADMIN: same as the merchant retry | 404; 409 `WEBHOOK_DELIVERY_NOT_RETRYABLE` |
 
@@ -853,6 +855,8 @@ parsing), compare it with the signature in constant time, and reject timestamps 
   15 min, 1 h and 6 h (6 attempts in all).
 - Any other 4xx or a 3xx, or the 6th failed attempt, makes the delivery `FAILED`. The merchant or an admin can retry
   it.
+- A test ping (`webhook.ping`) is tried once: if that attempt fails for any reason, it is `FAILED` at once with its
+  `lastStatusCode`/`lastError` (no automatic retries). Send another test, or retry it (one more attempt).
 - Delivery is at-least-once and not ordered: use `id` and `sequence`, as above.
 - A change to a subscription (URL, event types, turned off) applies to new events. A turned-off subscription gets no
   new parcel events, and its `PENDING` parcel deliveries are not sent: they become `FAILED` with `lastError`

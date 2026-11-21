@@ -225,6 +225,72 @@ class WebhookDispatcherTest extends IntegrationTest {
     }
 
     @Test
+    void aTestPingThatFailsIsNotTriedAgain() throws Exception {
+        answer.set(503); // retryable for a parcel event
+        WebhookDelivery ping = due(subscribe(hookUrl, SECRET), WebhookEventType.WEBHOOK_PING);
+
+        assertThat(dispatcher.dispatchDue()).isEqualTo(1);
+
+        assertThat(received.poll(5, TimeUnit.SECONDS)).isNotNull();
+        assertThat(row(ping)).containsEntry("status", "FAILED").containsEntry("attempts", 1)
+                .containsEntry("last_status_code", 503).containsEntry("last_error", "HTTP_503")
+                .containsEntry("next_attempt_at", null);
+        clock.advance(Duration.ofDays(1));
+        assertThat(dispatcher.dispatchDue()).as("no automatic attempt for a ping").isZero();
+        assertThat(received).isEmpty();
+    }
+
+    @Test
+    void aTestPingToAServerThatDoesntAnswerFailsAtOnce() throws IOException {
+        int closedPort;
+        try (var socket = new java.net.ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+            closedPort = socket.getLocalPort(); // nothing listens here once it's closed: a connection error
+        }
+        WebhookDelivery ping = due(subscribe("http://127.0.0.1:" + closedPort + "/hook", SECRET),
+                WebhookEventType.WEBHOOK_PING);
+
+        dispatcher.dispatchDue();
+
+        assertThat(row(ping)).containsEntry("status", "FAILED").containsEntry("attempts", 1)
+                .containsEntry("last_status_code", null).containsEntry("last_error", "CONNECTION_FAILED")
+                .containsEntry("next_attempt_at", null);
+    }
+
+    @Test
+    void afterAFailedTestPingSendTestQueuesANewOne() throws Exception {
+        answer.set(500);
+        WebhookSubscription subscription = subscribe(hookUrl, SECRET);
+        WebhookDeliveryService service = new WebhookDeliveryService(deliveries, subscriptions, payloads, clock);
+        UUID first = inTransaction().execute(tx -> service.queuePing(merchant, subscription.getId())).id();
+        dispatcher.dispatchDue();
+        assertThat(received.poll(5, TimeUnit.SECONDS)).isNotNull();
+
+        UUID second = inTransaction().execute(tx -> service.queuePing(merchant, subscription.getId())).id();
+
+        assertThat(second).as("the failed ping isn't waiting any more, so a new one is queued").isNotEqualTo(first);
+        answer.set(200);
+        assertThat(dispatcher.dispatchDue()).isEqualTo(1);
+        assertThat(jdbc.queryForMap("select status from webhooks.deliveries where id = ?", second))
+                .containsEntry("status", "SUCCEEDED");
+    }
+
+    @Test
+    void aRetriedTestPingGetsOneMoreAttempt() throws Exception {
+        answer.set(503);
+        WebhookDelivery ping = due(subscribe(hookUrl, SECRET), WebhookEventType.WEBHOOK_PING);
+        dispatcher.dispatchDue();
+        assertThat(row(ping)).containsEntry("status", "FAILED");
+        WebhookDeliveryService service = new WebhookDeliveryService(deliveries, subscriptions, payloads, clock);
+
+        inTransaction().executeWithoutResult(tx -> service.retry(merchant, ping.getId()));
+        assertThat(dispatcher.dispatchDue()).isEqualTo(1);
+
+        assertThat(row(ping)).containsEntry("status", "FAILED").containsEntry("attempts", 1)
+                .containsEntry("next_attempt_at", null);
+        assertThat(received).hasSize(2);
+    }
+
+    @Test
     void aHostThatNowResolvesToAPrivateAddressIsNeverCalled() throws Exception {
         WebhookDelivery delivery = due(subscribe("https://hooks.private.test/swiftdrop", SECRET),
                 WebhookEventType.PARCEL_DELIVERED);
