@@ -27,6 +27,8 @@ import java.util.UUID;
  *                               delivered, returned or not taken out for a delivery), whatever the other parcels of
  *                               the task are doing
  * @param completedAt            when it was completed; null while it is active
+ * @param proof                  once DELIVERED: who received it and whether the signed-slip photo is attached;
+ *                               otherwise null
  */
 public record CourierDeliveryResponse(
         UUID parcelId,
@@ -46,6 +48,7 @@ public record CourierDeliveryResponse(
         boolean canMarkUnableToCollect,
         boolean completed,
         Instant completedAt,
+        ProofResponse proof,
         TaskResponse task) {
 
     public static CourierDeliveryResponse from(DeliverySnapshot parcel, CourierTask task) {
@@ -54,7 +57,7 @@ public record CourierDeliveryResponse(
                 PlaceResponse.from(parcel.pickup()), PlaceResponse.from(parcel.recipient()),
                 parcel.weightKg(), parcel.codAmount(), parcel.instructions(), task.assignedAt(), parcel.updatedAt(),
                 task.nextStatuses(parcel.status(), parcel.currentBranch()), task.canMarkUnableToCollect(),
-                task.completed(), task.completedAt(), TaskResponse.from(task));
+                task.completed(), task.completedAt(), ProofResponse.of(parcel, task), TaskResponse.from(task));
     }
 
     /** The sender, only in an open pickup step. */

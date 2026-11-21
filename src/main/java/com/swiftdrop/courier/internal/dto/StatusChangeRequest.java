@@ -5,13 +5,17 @@ import com.swiftdrop.delivery.ParcelStatus;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
+import java.util.UUID;
+
 /**
  * Body of {@code POST /courier/deliveries/{parcelId}/status}. Only the simple rules are annotations; the rules that
- * depend on the target status (recipient name for DELIVERED, reason for FAILED, who received it for AT_BRANCH, note
- * for OTHER) are checked by the service.
+ * depend on the target status (recipient name and proof photo for DELIVERED, reason for FAILED, who received it for
+ * AT_BRANCH, note for OTHER) are checked by the service.
  *
- * @param receivedBy the person at the branch who took the parcel; required for AT_BRANCH (handover or return), not
- *                   allowed otherwise
+ * @param receivedBy   the person at the branch who took the parcel; required for AT_BRANCH (handover or return), not
+ *                     allowed otherwise
+ * @param proofPhotoId the photo of the signed delivery slip from {@code POST .../{parcelId}/proof}; required for
+ *                     DELIVERED, not allowed otherwise
  */
 public record StatusChangeRequest(
         @NotNull(message = "Select the new status.")
@@ -26,5 +30,6 @@ public record StatusChangeRequest(
         String recipientName,
 
         @Size(max = 100, message = "Enter the name of the person at the branch who received the parcel.")
-        String receivedBy) {
+        String receivedBy,
+        UUID proofPhotoId) {
 }

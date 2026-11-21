@@ -26,9 +26,15 @@ import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.ResultActions;
 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -44,6 +50,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -59,6 +66,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 abstract class CourierApiTest extends IntegrationTest {
 
     protected static final String BASE = "/api/v1/courier/deliveries";
+
+    /** A proof photo id for DELIVERED requests: delivery is a mock here, so any stored photo id will do. */
+    protected static final String PROOF_ID = "0b6c7c1e-5d0f-4a51-9d2e-3a4f5b6c7d8e";
 
     private static final AtomicInteger TRACKING_SEQUENCE = new AtomicInteger(1);
 
@@ -126,7 +136,8 @@ abstract class CourierApiTest extends IntegrationTest {
         return new DeliverySnapshot(p.id(), p.trackingNumber(), status, p.customerId(), p.merchantId(), p.pickup(),
                 p.recipient(), p.weightKg(), p.codAmount(), p.instructions(), p.assignedCourierId(), p.assignedAt(),
                 p.createdAt(), Instant.now(),
-                status == ParcelStatus.DELIVERED ? command.recipientName() : null, false,
+                status == ParcelStatus.DELIVERED ? command.recipientName() : null,
+                status == ParcelStatus.DELIVERED && command.proofPhotoId() != null,
                 status == ParcelStatus.FAILED ? command.failureReason() : null,
                 p.merchantOrderRef(), p.feeAmount(), p.currency(), p.version() + 1,
                 status == ParcelStatus.AT_BRANCH ? command.branch() : null,
@@ -336,5 +347,30 @@ abstract class CourierApiTest extends IntegrationTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(body)
                 .cookie(cookie));
+    }
+
+    /** POST .../{parcelId}/proof with {@code content} as the multipart field "file". */
+    protected ResultActions postProof(UUID parcelId, byte[] content, Cookie cookie) throws Exception {
+        return mvc.perform(multipart(BASE + "/{id}/proof", parcelId)
+                .file(new MockMultipartFile("file", "slip.jpg", "image/jpeg", content))
+                .cookie(cookie));
+    }
+
+    /** A small, real JPEG (a photo of a slip, as far as the checks can tell). */
+    protected static byte[] jpeg() {
+        return image("jpg");
+    }
+
+    protected static byte[] image(String format) {
+        try {
+            BufferedImage picture = new BufferedImage(40, 30, BufferedImage.TYPE_INT_RGB);
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            if (!ImageIO.write(picture, format, out)) {
+                throw new IllegalStateException("No writer for " + format);
+            }
+            return out.toByteArray();
+        } catch (IOException ex) {
+            throw new UncheckedIOException(ex);
+        }
     }
 }

@@ -20,6 +20,7 @@ import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -73,20 +74,37 @@ class CourierStatusUpdateTest extends CourierApiTest {
     }
 
     @Test
-    void deliveredSendsTheRecipientNameAndShowsTheProof() throws Exception {
+    void deliveredSendsTheRecipientNameAndTheProofPhotoAndShowsTheProof() throws Exception {
         Courier courier = registerCourier();
         DeliverySnapshot parcel = given(parcel(courier.id(), ParcelStatus.OUT_FOR_DELIVERY));
-        when(delivery.changeStatus(any())).thenReturn(withStatus(parcel, ParcelStatus.DELIVERED));
+        deliveryAppliesChanges();
 
-        postStatus(parcel.id(), Map.of("status", "DELIVERED", "recipientName", " Nimal Perera "), courier.cookie())
+        postStatus(parcel.id(), Map.of("status", "DELIVERED", "recipientName", " Nimal Perera ",
+                "proofPhotoId", PROOF_ID), courier.cookie())
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("DELIVERED"))
                 .andExpect(jsonPath("$.nextStatuses").isEmpty())
                 .andExpect(jsonPath("$.proof.recipientName").value("Nimal Perera"))
-                .andExpect(jsonPath("$.proof.hasPhoto").value(false))
+                .andExpect(jsonPath("$.proof.hasPhoto").value(true))
                 .andExpect(jsonPath("$.failureReason").isEmpty());
 
         assertThat(sentCommand().recipientName()).isEqualTo("Nimal Perera");
+        assertThat(sentCommand().proofPhotoId()).isEqualTo(UUID.fromString(PROOF_ID));
+    }
+
+    @Test
+    void deliveredWithoutAProofPhotoIs400AndNothingChanges() throws Exception {
+        expectFieldError(ParcelStatus.OUT_FOR_DELIVERY, Map.of("status", "DELIVERED", "recipientName", "Nimal Perera"),
+                "proofPhotoId", "Add a photo of the signed delivery slip.");
+    }
+
+    @Test
+    void aProofPhotoIsOnlyForDelivered() throws Exception {
+        expectFieldError(ParcelStatus.OUT_FOR_DELIVERY, Map.of("status", "FAILED",
+                "failureReason", "WRONG_ADDRESS", "proofPhotoId", PROOF_ID),
+                "proofPhotoId", "Only for delivered parcels.");
+        expectFieldError(ParcelStatus.PICKED_UP, Map.of("status", "AT_BRANCH", "receivedBy", "S. Silva",
+                "proofPhotoId", PROOF_ID), "proofPhotoId", "Only for delivered parcels.");
     }
 
     @Test
@@ -126,7 +144,8 @@ class CourierStatusUpdateTest extends CourierApiTest {
         Courier courier = registerCourier();
         DeliverySnapshot parcel = given(parcel(courier.id(), ParcelStatus.CREATED));
 
-        postStatus(parcel.id(), Map.of("status", "DELIVERED", "recipientName", "Nimal Perera"), courier.cookie())
+        postStatus(parcel.id(), Map.of("status", "DELIVERED", "recipientName", "Nimal Perera",
+                "proofPhotoId", PROOF_ID), courier.cookie())
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("TASK_STEP_NOT_ALLOWED"));
         verify(delivery, never()).changeStatus(any());
