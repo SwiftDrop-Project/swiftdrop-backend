@@ -30,6 +30,10 @@ public interface WebhookDeliveryRepository extends JpaRepository<WebhookDelivery
     Optional<WebhookDelivery> findFirstBySubscriptionIdAndEventTypeAndStatus(UUID subscriptionId, String eventType,
                                                                              DeliveryStatus status);
 
+    /** The subscription's newest test ping, for the cooldown between two "Send test" clicks. */
+    Optional<WebhookDelivery> findFirstBySubscriptionIdAndEventTypeOrderByCreatedAtDesc(UUID subscriptionId,
+                                                                                        String eventType);
+
     /**
      * Retry: a FAILED delivery becomes PENDING, due {@code now}, with a new set of attempts. The check and the change
      * are one statement, so two clicks can't both succeed. The last status code and error stay until the next attempt

@@ -53,7 +53,7 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
   pricing -> shared; infrastructure -> shared; webhooks -> delivery, merchants, shared;
   assistant -> tracking, pricing, delivery, identity, shared. Nothing depends on courier, assistant or
   webhooks.
-- webhooks (contract in API.md "Webhooks", being built): reads `ParcelStatusChanged` from `webhooks.q` (declared by
+- webhooks (contract in API.md "Webhooks", built): reads `ParcelStatusChanged` from `webhooks.q` (declared by
   infrastructure; never declare it again with other arguments), stores one delivery row per event and subscription,
   and a scheduled worker sends them. Retries live in the database (`webhooks.deliveries`), not in RabbitMQ queues.
   Signing secrets are stored encrypted (AES-GCM), never hashed and never logged. Merchants get a public payload,
@@ -63,7 +63,10 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
   (callback URL + signing secret + one or more event types), never one per event: merchants select several events on
   one subscription and use more subscriptions only for different systems (at most 5 active per merchant). A callback
   URL may be used by only one active subscription per merchant (`WEBHOOK_URL_IN_USE`, compared with
-  `CallbackDestination`; other merchants may use the same URL).
+  `CallbackDestination`; other merchants may use the same URL). A test ping is tried once. Merchants' "Send test" and
+  "Retry" are limited (`swiftdrop.webhooks.limits`): a 10 s cooldown per subscription / per delivery, kept in the
+  database, and 30 per merchant per minute in memory (`WebhookActionLimiter`); over it: 429 with `Retry-After`
+  (`shared.error.TooManyRequestsException`). Admin retries are not limited.
 - dispatch: `AssignmentApi` is implemented; dispatcher endpoints are under `/dispatch` (DISPATCHER and ADMIN, API.md
   "Dispatch"). Delivery has no "waiting for pickup" query, so dispatch keeps `dispatch.pickup_queue` from
   `ParcelStatusChanged` (RabbitMQ queue `dispatch.q`); it fills only while the outbox relay runs

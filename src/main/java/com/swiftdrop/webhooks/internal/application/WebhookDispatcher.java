@@ -39,6 +39,8 @@ import java.util.concurrent.Executors;
  * </ol>
  * Each attempt uses the subscription as it is now: its current URL and secret (a rotated secret applies to retries
  * too). Before each send the URL is checked again, so a host that now resolves to a private address is never called.
+ * A test ping is tried once: the merchant pressed "Send test" and wants the answer now, not a retry hours later, so a
+ * failed ping is FAILED at once (they can send another test or retry it).
  *
  * <p>The schedule is {@link WebhookDispatchSchedule}; tests call {@link #dispatchDue()} directly.
  */
@@ -156,7 +158,11 @@ public class WebhookDispatcher {
             recorded = attempts.succeeded(id, leaseUntil, outcome.statusCode(), now);
             result = "SUCCEEDED";
         } else {
-            Optional<Instant> next = outcome.retryable() ? RetryPolicy.nextAttemptAt(attempt, now) : Optional.empty();
+            // a test ping gets one attempt; parcel events follow the retry policy
+            boolean ping = delivery.eventType() == WebhookEventType.WEBHOOK_PING;
+            Optional<Instant> next = outcome.retryable() && !ping
+                    ? RetryPolicy.nextAttemptAt(attempt, now)
+                    : Optional.empty();
             if (next.isPresent()) {
                 recorded = attempts.retryLater(id, leaseUntil, outcome.statusCode(), outcome.error(), next.get(), now);
                 result = outcome.error() + ", next attempt at " + next.get();

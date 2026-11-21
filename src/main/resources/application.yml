@@ -134,6 +134,13 @@ swiftdrop:
       enabled: ${SWIFTDROP_WEBHOOKS_DISPATCHER_ENABLED:true}
       interval-ms: ${SWIFTDROP_WEBHOOKS_DISPATCHER_INTERVAL_MS:2000}
       batch-size: 10
+    # What a merchant can make SwiftDrop send (API.md "Webhooks", "Limits"): cooldown-seconds between two test pings
+    # of one subscription, and after a delivery's last attempt before the merchant can retry it (0: no cooldown);
+    # actions-per-minute: test pings and retries per merchant per minute, all subscriptions together (in memory,
+    # per instance). Admin retries are not limited.
+    limits:
+      cooldown-seconds: ${SWIFTDROP_WEBHOOKS_COOLDOWN_SECONDS:10}
+      actions-per-minute: ${SWIFTDROP_WEBHOOKS_ACTIONS_PER_MINUTE:30}
   # AI delivery assistant. ASSISTANT_PROVIDER=gemini with GEMINI_API_KEY (free key from Google AI Studio) uses Gemini;
   # otherwise, and whenever Gemini fails, the built-in rules provider answers. The key is never logged.
   assistant:

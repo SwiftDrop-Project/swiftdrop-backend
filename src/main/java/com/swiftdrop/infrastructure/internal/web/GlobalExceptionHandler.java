@@ -4,10 +4,12 @@ import com.swiftdrop.shared.error.ApiError;
 import com.swiftdrop.shared.error.ApiException;
 import com.swiftdrop.shared.error.ErrorCode;
 import com.swiftdrop.shared.error.FieldValidationException;
+import com.swiftdrop.shared.error.TooManyRequestsException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
@@ -49,6 +51,15 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(ApiException.class)
     ResponseEntity<ApiError> handleApi(ApiException ex) {
         return respond(ApiError.of(ex.code(), ex.getMessage()));
+    }
+
+    /** 429 from a service: the same body, plus how long to wait in {@code Retry-After} (seconds). */
+    @ExceptionHandler(TooManyRequestsException.class)
+    ResponseEntity<ApiError> handleTooManyRequests(TooManyRequestsException ex) {
+        ApiError body = ApiError.of(ex.code(), ex.getMessage());
+        return ResponseEntity.status(body.status())
+                .header(HttpHeaders.RETRY_AFTER, Long.toString(ex.retryAfterSeconds()))
+                .body(body);
     }
 
     /** A rule checked in the service layer, reported like an invalid request body. */
