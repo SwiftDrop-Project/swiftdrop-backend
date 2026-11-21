@@ -139,6 +139,12 @@ public class WebhookSubscriptionService {
         owned(merchantId, id).deactivate(now());
     }
 
+    /** Whether the merchant's subscription is on now (404 for another merchant's or an unknown one). */
+    @Transactional(readOnly = true)
+    public boolean isActive(UUID merchantId, UUID id) {
+        return owned(merchantId, id).isActive();
+    }
+
     @Transactional
     public WebhookWithSecretResponse rotateSecret(UUID merchantId, UUID id) {
         WebhookSubscription subscription = owned(merchantId, id);
