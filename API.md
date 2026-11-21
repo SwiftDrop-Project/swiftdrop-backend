@@ -915,7 +915,8 @@ Request:
   "lengthCm": 40,
   "widthCm": 30,
   "heightCm": 12,
-  "keepUpright": false
+  "keepUpright": false,
+  "paymentMethod": "AT_PICKUP"
 }
 ```
 There is no customer id and no fee: the customer comes from the login, and the server sets the fee (with pricing,
@@ -934,6 +935,11 @@ the same quote as `POST /pricing/estimate`) and the tracking number.
 | `instructions` | Optional, up to 500 characters (blank = none) | "Use 500 characters or fewer." |
 | `lengthCm`, `widthCm`, `heightCm` | Required: packed outside measurements, whole cm 1–300 | "Enter the length." / "Enter the width." / "Enter the height." / "Use whole centimetres from 1 to 300." |
 | `keepUpright` | Optional, default `false`: the parcel may not lie on its side | |
+| `paymentMethod` | Required: how the delivery fee is paid. `ONLINE` (paid online), `AT_PICKUP` (the sender pays the courier in cash at pickup) or `AT_DROP_OFF` (the recipient pays the courier in cash at delivery, with any cash on delivery). Fixed once booked | "Choose how the delivery fee will be paid." (missing or an unknown value) |
+
+The payment method only says how the fee will be paid, so the courier knows whether to collect it and from whom. It
+is not the cash on delivery (`codAmount`, the price of the goods), and taking an online payment is not part of this
+endpoint.
 
 Response `201`: a Delivery.
 ```json
@@ -957,15 +963,17 @@ Response `201`: a Delivery.
   "proof": null,
   "size": { "lengthCm": 40, "widthCm": 30, "heightCm": 12, "keepUpright": false },
   "vehicle": "BIKE",
-  "billableWeightKg": 3
+  "billableWeightKg": 3,
+  "paymentMethod": "AT_PICKUP"
 }
 ```
 - `feeAmount` is pricing's quote for the route, weight, size and cash on delivery (see "Pricing (WP4)"). The parcel
   keeps the vehicle, billable weight, rate card version and fee lines. `size`, `vehicle` and `billableWeightKg` are
   `null` for parcels booked before sizes.
+- `paymentMethod`: how the fee is paid, as booked; `null` for parcels booked before payment methods.
 - `currentBranch`: set only while `AT_BRANCH` (a district, e.g. `GAMPAHA`). `failureReason`: only while `FAILED`.
   `proof`: `{ "recipientName": "Kamala Silva", "hasPhoto": false }` once `DELIVERED`. Otherwise all three are `null`.
-- `400` `VALIDATION_FAILED` (keys like `pickup.phone`, `weightKg`, `lengthCm`) · `401` `UNAUTHENTICATED` · `403`
+- `400` `VALIDATION_FAILED` (keys like `pickup.phone`, `weightKg`, `lengthCm`, `paymentMethod`) · `401` `UNAUTHENTICATED` · `403`
   `FORBIDDEN` (logged in, but not a `CUSTOMER`) · `409` `PARCEL_NEEDS_MANUAL_QUOTE` (no vehicle carries or fits it)
 
 ### My deliveries

@@ -196,6 +196,7 @@ class AdminParcelTrackingTest extends IntegrationTest {
         body.put("lengthCm", 30);
         body.put("widthCm", 20);
         body.put("heightCm", 10);
+        body.put("paymentMethod", "AT_PICKUP");
         String response = postJson("/api/v1/deliveries", body, customer)
                 .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();

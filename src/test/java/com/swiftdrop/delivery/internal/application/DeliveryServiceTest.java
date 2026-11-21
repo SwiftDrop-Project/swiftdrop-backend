@@ -10,6 +10,7 @@ import com.swiftdrop.delivery.ParcelSize;
 import com.swiftdrop.delivery.ParcelStatus;
 import com.swiftdrop.delivery.ParcelStatusChanged;
 import com.swiftdrop.delivery.ParcelStatusEntry;
+import com.swiftdrop.delivery.PaymentMethod;
 import com.swiftdrop.delivery.internal.domain.Parcel;
 import com.swiftdrop.delivery.internal.domain.ParcelPrice;
 import com.swiftdrop.delivery.internal.domain.ParcelStatusHistory;
@@ -139,6 +140,19 @@ class DeliveryServiceTest {
         ArgumentCaptor<Parcel> parcel = ArgumentCaptor.forClass(Parcel.class);
         verify(parcels).save(parcel.capture());
         assertThat(parcel.getValue().getFeeBreakdown()).contains("\"BASE\"");
+    }
+
+    @Test
+    void theParcelKeepsHowTheFeeIsPaid() {
+        var booking = new CreateDeliveryCommand(UUID.randomUUID(), null, null, PICKUP, RECIPIENT,
+                new BigDecimal("1.80"), null, null, new ParcelSize(40, 30, 12, false), PaymentMethod.AT_DROP_OFF);
+
+        DeliverySnapshot snapshot = service.create(booking);
+
+        assertThat(snapshot.paymentMethod()).isEqualTo(PaymentMethod.AT_DROP_OFF);
+        ArgumentCaptor<Parcel> parcel = ArgumentCaptor.forClass(Parcel.class);
+        verify(parcels).save(parcel.capture());
+        assertThat(parcel.getValue().getPaymentMethod()).isEqualTo(PaymentMethod.AT_DROP_OFF);
     }
 
     @Test

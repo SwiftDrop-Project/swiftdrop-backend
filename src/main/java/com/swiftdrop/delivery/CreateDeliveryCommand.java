@@ -13,8 +13,11 @@ import java.util.UUID;
  *
  * <p>There is no fee here: the delivery module asks pricing for it, so a caller can never choose its own price.
  *
- * @param size the packed measurements, needed to book: {@link DeliveryApi#create} refuses a command without them
- *             (400 VALIDATION_FAILED on {@code lengthCm}), because without them pricing can't choose the vehicle
+ * @param size          the packed measurements, needed to book: {@link DeliveryApi#create} refuses a command without
+ *                      them (400 VALIDATION_FAILED on {@code lengthCm}), because without them pricing can't choose the
+ *                      vehicle
+ * @param paymentMethod how the delivery fee is paid, so the courier knows whether to collect it and from whom.
+ *                      Customer bookings (POST /deliveries) always have one; merchant orders don't send it yet
  */
 public record CreateDeliveryCommand(
         UUID customerId,
@@ -25,7 +28,8 @@ public record CreateDeliveryCommand(
         BigDecimal weightKg,
         BigDecimal codAmount,
         String instructions,
-        ParcelSize size) {
+        ParcelSize size,
+        PaymentMethod paymentMethod) {
 
     public CreateDeliveryCommand {
         if ((customerId == null) == (merchantId == null)) {
@@ -36,6 +40,14 @@ public record CreateDeliveryCommand(
         Objects.requireNonNull(weightKg, "weightKg");
     }
 
+    /** A command without a payment method. Kept so code written before payment methods still compiles. */
+    public CreateDeliveryCommand(UUID customerId, UUID merchantId, String merchantOrderRef, DeliveryContact pickup,
+                                 DeliveryContact recipient, BigDecimal weightKg, BigDecimal codAmount,
+                                 String instructions, ParcelSize size) {
+        this(customerId, merchantId, merchantOrderRef, pickup, recipient, weightKg, codAmount, instructions, size,
+                null);
+    }
+
     /**
      * A command without measurements. Kept so code written before parcel sizes still compiles, but
      * {@link DeliveryApi#create} refuses it: pass a {@link ParcelSize} to book.
@@ -43,7 +55,8 @@ public record CreateDeliveryCommand(
     public CreateDeliveryCommand(UUID customerId, UUID merchantId, String merchantOrderRef, DeliveryContact pickup,
                                  DeliveryContact recipient, BigDecimal weightKg, BigDecimal codAmount,
                                  String instructions) {
-        this(customerId, merchantId, merchantOrderRef, pickup, recipient, weightKg, codAmount, instructions, null);
+        this(customerId, merchantId, merchantOrderRef, pickup, recipient, weightKg, codAmount, instructions, null,
+                null);
     }
 
     /** Leaves out the instructions: free text that may hold personal data. The contacts show only city and district. */
@@ -51,6 +64,7 @@ public record CreateDeliveryCommand(
     public String toString() {
         return "CreateDeliveryCommand[customerId=" + customerId + ", merchantId=" + merchantId
                 + ", merchantOrderRef=" + merchantOrderRef + ", pickup=" + pickup + ", recipient=" + recipient
-                + ", weightKg=" + weightKg + ", codAmount=" + codAmount + ", size=" + size + "]";
+                + ", weightKg=" + weightKg + ", codAmount=" + codAmount + ", size=" + size
+                + ", paymentMethod=" + paymentMethod + "]";
     }
 }

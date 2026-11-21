@@ -49,6 +49,7 @@ public class GlobalExceptionHandler {
             Map.entry("vehicleType", "Select a vehicle type."),
             Map.entry("courierId", "Select a courier."),
             Map.entry("parcelsPerMonth", "Select a range."),
+            Map.entry("paymentMethod", "Choose how the delivery fee will be paid."),
             Map.entry("acceptTerms", "Accept the terms to continue."));
 
     @ExceptionHandler(ApiException.class)

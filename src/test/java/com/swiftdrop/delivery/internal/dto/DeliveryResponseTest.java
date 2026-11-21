@@ -5,6 +5,7 @@ import com.swiftdrop.delivery.DeliverySnapshot;
 import com.swiftdrop.delivery.FailureReason;
 import com.swiftdrop.delivery.ParcelStatus;
 import com.swiftdrop.delivery.ParcelStatusEntry;
+import com.swiftdrop.delivery.PaymentMethod;
 import com.swiftdrop.shared.reference.District;
 import org.junit.jupiter.api.Test;
 
@@ -61,6 +62,18 @@ class DeliveryResponseTest {
         assertThat(entry.failureReason()).isEqualTo(FailureReason.RECIPIENT_UNAVAILABLE);
         assertThat(entry.note()).isEqualTo("No answer, called twice");
         assertThat(entry.branch()).isNull();
+    }
+
+    @Test
+    void theResponseSaysHowTheFeeIsPaid() {
+        DeliverySnapshot booked = new DeliverySnapshot(UUID.randomUUID(), "SD2611004817", CREATED, UUID.randomUUID(),
+                null, PICKUP, RECIPIENT, new BigDecimal("2.50"), null, null, null, null, BOOKED_AT, BOOKED_AT, null,
+                false, null, null, new BigDecimal("450.00"), "LKR", 0L, null, null, null, null, null,
+                PaymentMethod.AT_DROP_OFF);
+
+        assertThat(DeliveryResponse.from(booked).paymentMethod()).isEqualTo(PaymentMethod.AT_DROP_OFF);
+        // parcels booked before payment methods have none
+        assertThat(DeliveryResponse.from(parcel(CREATED, null, null, null, false)).paymentMethod()).isNull();
     }
 
     @Test
