@@ -1254,6 +1254,7 @@ The **task** becomes `COMPLETED` by itself, in the same transaction, when its la
   "canMarkUnableToCollect": false,
   "completed": false,
   "completedAt": null,
+  "proof": null,
   "task": { "assignmentId": "uuid", "type": "DELIVERY", "status": "IN_PROGRESS", "outcome": "LOADED",
             "branch": "COLOMBO", "problem": null, "receivedBy": null }
 }
@@ -1267,6 +1268,11 @@ The **task** becomes `COMPLETED` by itself, in the same transaction, when its la
 - `codAmount`: cash to collect in rupees; `null` when already paid. `instructions` may be `null`.
 - `completed`: the courier is done with this parcel (table above), whatever the other parcels of its task are doing.
   `completedAt`: when; `null` while it is active.
+- `proof`: `{ "recipientName": "Nimal Perera", "hasPhoto": true }` (who received it, and whether the photo of the
+  signed delivery slip is attached; see "Proof of delivery" below) **only on the entry of the `DELIVERY` step that
+  delivered the parcel** (`task.outcome` `DELIVERED`); `null` on every other entry, also for a parcel delivered later:
+  a pickup, a failed or returned delivery, Unable to Collect, a cancelled task. A courier who only collected or
+  returned the parcel never gets the recipient's name or learns that a signed slip exists.
 - `canMarkUnableToCollect`: "Unable to Collect" is possible now (the parcel's step is `PENDING` in an open task).
 - `task`: the courier's task for this parcel. `status` is the whole task's status. `outcome` is the dispatch item
   outcome. `branch` is where the parcel is handed over (a pickup's or transfer's destination branch; a delivery's
@@ -1304,7 +1310,7 @@ completed today. A parcel in two of their tasks today shows once, with the open 
 `toDo` = active parcels, `done` = parcels completed today. Cancelled tasks are left out.
 - `200` · `401` · `403`
 
-### `GET /courier/deliveries/history?page=0&size=20&trackingNumber=SD2611004817`
+### `GET /courier/deliveries/history?page=0&size=20&trackingNumber=SD2611004817&type=PICKUP&outcome=HANDED_OVER&completedFrom=2026-11-01&completedTo=2026-11-21`
 The parcels this courier completed, pickups and deliveries (`HANDED_OVER`, `NOT_COLLECTED`, `DELIVERED`, `RETURNED`,
 `NOT_LOADED`), newest completion first, as a page of Courier delivery (`completed: true`, `nextStatuses` empty, no
 contacts). A parcel is listed as soon as it is completed, even while the rest of its task is still in progress;
@@ -1315,7 +1321,20 @@ two tasks (e.g. a failed delivery, then a new delivery) has one entry per comple
 ```
 `page` from 0 (default 0); `size` 1-100 (default 20); `trackingNumber` optional, spaces and case ignored; an unknown
 number gives an empty page.
-- `200` · `400` `VALIDATION_FAILED` (`fieldErrors.page` / `fieldErrors.size`) · `401` · `403`
+
+Optional filters, combined with each other and with `trackingNumber`, applied to all of the courier's entries
+**before** paging (`totalElements` / `totalPages` count only matching entries); blank means no filter:
+
+| Filter | Values |
+|---|---|
+| `type` | `PICKUP`, `DELIVERY` (case ignored) |
+| `outcome` | `HANDED_OVER`, `DELIVERED`, `RETURNED`, `NOT_COLLECTED`, `NOT_LOADED` (the outcomes a history entry can have) |
+| `completedFrom`, `completedTo` | Days `yyyy-MM-dd` in Sri Lankan time (Asia/Colombo), both included, compared with when that parcel's own step was completed |
+
+Dispatcher-cancelled tasks are not history entries (only completed steps are), so there is no "cancelled" outcome here.
+- `200` · `400` `VALIDATION_FAILED` (`fieldErrors.page` / `size` / `type` / `outcome` / `completedFrom` / `completedTo`:
+  "Choose pickups or deliveries.", "Choose one of the listed outcomes.", "Use a date like 2026-11-21.", "Choose an end
+  date on or after the start date.") · `401` · `403`
 
 ### `GET /courier/deliveries/{parcelId}`
 All Courier delivery fields (for the open step if the parcel is in one of the courier's open tasks, else the most
@@ -1332,9 +1351,26 @@ recent one), plus:
 ```
 - `history`: newest first, without notes (they are written by other people for their own work). `branch` only for
   `AT_BRANCH`, `failureReason` only for `FAILED`.
-- `proof`: `{ "recipientName": "Nimal Perera", "hasPhoto": false }` once `DELIVERED`, otherwise `null`.
-  `failureReason`: only once `FAILED`.
+- `proof`: as above, only on the entry of the delivery that delivered it, otherwise `null`.
+  `failureReason`: only on a delivery that failed and is waiting to be returned (`task.outcome` `FAILED`, the parcel is
+  `FAILED`); `null` on any other entry. A returned delivery shows the reason in its `history`.
 - `200` · `400` (non-UUID id) · `401` · `403` · `404` `NOT_FOUND`
+
+### `GET /courier/deliveries/{parcelId}/history/{assignmentId}`
+One finished entry of the courier's history (one item of `GET /courier/deliveries/history`) exactly as it was: the
+parcel's step in **that** task, not its latest one, so a parcel's entries (e.g. its pickup and later its delivery) are
+each opened on their own. Same fields as `GET /courier/deliveries/{parcelId}`, read-only:
+- `task`, `completed`, `completedAt`, `proof`: that entry's (e.g. a pickup entry: `HANDED_OVER`, `receivedBy`,
+  `proof: null`).
+- `nextStatuses: []`, `canMarkUnableToCollect: false`, `pickup` / `recipient`: `null` (contacts are only for open steps).
+- `history`: the parcel's events **until that entry finished**: its item's close time (not the task's: other parcels of
+  the task may finish later), or, for a parcel left open when the dispatcher closed the task, when the task was
+  closed. Nothing that happened afterwards is included. Delivery's status events carry no task, so this is the
+  parcel's timeline up to that moment; that entry's own step is its newest event.
+- `status`: the parcel's status **now** (it may have moved on since the entry), not the entry's outcome.
+- `200` · `400` (non-UUID id) · `401` · `403` · `404` `NOT_FOUND`: the task is unknown or not yours, the parcel isn't in
+  it, or its step isn't finished yet (an open step is live work: use `GET /courier/deliveries/{parcelId}`). The same
+  404 for all of these, with no parcel data.
 
 ### `POST /courier/deliveries/{parcelId}/status`
 ```json
@@ -1347,16 +1383,19 @@ recent one), plus:
 { "status": "OUT_FOR_DELIVERY" }
 ```
 ```json
-{ "status": "DELIVERED", "recipientName": "Nimal Perera", "note": "Left with the guard" }
+{ "status": "DELIVERED", "recipientName": "Nimal Perera", "proofPhotoId": "3f1d…", "note": "Left with the guard" }
 ```
 ```json
 { "status": "FAILED", "failureReason": "RECIPIENT_UNAVAILABLE", "note": "No answer, called twice" }
 ```
 - `AT_BRANCH` hands the parcel over at `task.branch` (pickup, transfer) or returns a failed delivery there; the request
   has no branch field. It needs `receivedBy`: the person at the branch who took the parcel.
-- `DELIVERED` needs `recipientName`. `FAILED` needs `failureReason`; `OTHER` also needs a `note`.
-- `recipientName` only with `DELIVERED`; `failureReason` only with `FAILED`; `receivedBy` only with `AT_BRANCH`.
-  `note` is optional otherwise.
+- `DELIVERED` needs `recipientName` and `proofPhotoId`: the photo of the signed delivery slip, uploaded first with
+  `POST /courier/deliveries/{parcelId}/proof` by the same courier for the same parcel. It is attached in the same
+  transaction as the status change and can never be replaced. `FAILED` needs `failureReason`; `OTHER` also needs a
+  `note`. Pickups, `FAILED`, the return to the branch (`AT_BRANCH`) and Unable to Collect take no photo.
+- `recipientName` and `proofPhotoId` only with `DELIVERED`; `failureReason` only with `FAILED`; `receivedBy` only with
+  `AT_BRANCH`. `note` is optional otherwise.
 - `200`: the updated parcel (same shape as `GET /courier/deliveries/{parcelId}`), with `completed` and `task.status`
   as they are after the step (`COMPLETED` when this was the task's last open parcel). Customers, merchants and the
   tracking page are told through the delivery module's `ParcelStatusChanged` event (`actorRole: COURIER`).
@@ -1382,7 +1421,37 @@ recent one), plus:
 - `409` `ASSIGNMENT_CLOSED` · `409` `TASK_STEP_NOT_ALLOWED` (already collected or out for delivery) · `409`
   `ASSIGNMENT_CHANGED`
 
-Proof-of-delivery photos (upload and download) come in a later version.
+### Proof of delivery
+
+When handing over a parcel, the courier photographs the delivery slip the recipient signed (or picks the photo from
+the device), uploads it, then marks the parcel `DELIVERED` with the returned `proofPhotoId`. The image is kept in
+private file storage (Cloudinary `authenticated` assets in production; there is no public URL), with a durable
+reference in `delivery.proof_photos` linked to the parcel id; `delivery.parcels.proof_photo_id` points to it once the
+parcel is `DELIVERED`. Uploads that are never attached are removed after 24 hours; an attached proof is never removed
+or replaced.
+
+#### `POST /courier/deliveries/{parcelId}/proof`
+`multipart/form-data` with one field `file`: a JPEG, PNG or WebP photo up to 5 MB. The type comes from the file's
+content, not its name. EXIF (camera, time, GPS), XMP and comments are removed before storing, without re-encoding.
+Only for a parcel this courier is delivering now (an open `DELIVERY` step, `OUT_FOR_DELIVERY`). Until the parcel is
+`DELIVERED`, uploading again gives a new id (the unused one is cleaned up later).
+```json
+{ "proofPhotoId": "3f1d2c4b-…", "contentType": "image/jpeg", "sizeBytes": 412345, "uploadedAt": "2026-11-20T10:15:00Z" }
+```
+- `201` · `400` `VALIDATION_FAILED` `fieldErrors.file`: "Add a photo of the signed delivery slip." (missing), "Use a
+  photo up to 5 MB.", "Use a JPEG, PNG or WebP photo.", "This photo can't be read. Take it again.", "This file is too
+  large." (over 6 MB, refused before it is read) · `401` · `403` · `404` `NOT_FOUND` (not your parcel)
+- `409` `ASSIGNMENT_CLOSED` · `409` `TASK_STEP_NOT_ALLOWED` (a pickup, not out for delivery yet, or already delivered:
+  a proof can't be replaced) · `409` `INVALID_STATUS_TRANSITION` · `503` `SERVICE_UNAVAILABLE` (the image storage
+  can't be reached; nothing was kept)
+
+#### `GET /courier/deliveries/{parcelId}/proof`
+The proof photo of a parcel this courier delivered, as the image itself (`Content-Type: image/jpeg|png|webp`,
+`Cache-Control: no-store, private`). Another courier, including the one who picked the parcel up, gets `404`.
+- `200` · `401` · `403` · `404` `NOT_FOUND` (not delivered by you, or no proof) · `503` `SERVICE_UNAVAILABLE`
+
+Other modules read the proof through `DeliveryApi.findProofPhoto(parcelId)` (content type and bytes) and check
+`DeliverySnapshot.hasProofPhoto()` first; they decide who may see it and serve it themselves.
 
 ### Validation rules (courier)
 
@@ -1393,6 +1462,9 @@ Proof-of-delivery photos (upload and download) come in a later version.
 | `note` (`failureReason` or `problem` `OTHER`) | Required, 3-500 chars | Describe what went wrong. |
 | `recipientName` (`DELIVERED`) | Required, 2-100 chars | Enter the name of the person who received the parcel. |
 | `recipientName` with another status | Not allowed | Only for delivered parcels. |
+| `proofPhotoId` (`DELIVERED`) | Required: a photo uploaded for this parcel by you, not attached yet | Add a photo of the signed delivery slip. / Add the photo again. |
+| `proofPhotoId` with another status | Not allowed | Only for delivered parcels. |
+| `file` (proof upload) | Required: JPEG, PNG or WebP, up to 5 MB, a readable image | See "Proof of delivery". |
 | `failureReason` (`FAILED`) | Required, one of the values above | Select why the delivery failed. |
 | `failureReason` with another status | Not allowed | Only for failed deliveries. |
 | `receivedBy` (`AT_BRANCH`) | Required, 2-100 chars | Enter the name of the person at the branch who received the parcel. |

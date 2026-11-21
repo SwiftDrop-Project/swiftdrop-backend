@@ -9,9 +9,10 @@ import java.util.UUID;
  * Input for moving a parcel to another status ({@link DeliveryApi#changeStatus}).
  *
  * <p>The caller has already checked which fields are present for the target status: {@code failureReason} only
- * for FAILED (and a {@code note} when it is OTHER); {@code recipientName} and {@code proofPhotoId} only for
- * DELIVERED, at least one of them. Delivery checks the transition itself and that {@code proofPhotoId} belongs to
- * this parcel. The branch rule is checked here, because a wrong branch would break the parcel's location.
+ * for FAILED (and a {@code note} when it is OTHER); {@code recipientName} only for DELIVERED. Delivery checks the
+ * transition itself, and that DELIVERED names a {@code proofPhotoId} stored for this parcel (required for DELIVERED,
+ * refused for any other status). The branch rule is checked here, because a wrong branch would break the parcel's
+ * location.
  *
  * <p>Contract owned by delivery; agreed with WP9 (courier).
  *
@@ -23,7 +24,8 @@ import java.util.UUID;
  * @param note           optional free text, max 500 characters
  * @param failureReason  only for FAILED
  * @param recipientName  only for DELIVERED: who received the parcel
- * @param proofPhotoId   only for DELIVERED: a photo returned by {@link DeliveryApi#storeProofPhoto} for this parcel
+ * @param proofPhotoId   required for DELIVERED, null otherwise: a photo returned by {@link DeliveryApi#storeProofPhoto}
+ *                       for this parcel
  * @param branch         the branch the parcel arrives at: required for AT_BRANCH, null for every other status
  */
 public record ChangeStatusCommand(

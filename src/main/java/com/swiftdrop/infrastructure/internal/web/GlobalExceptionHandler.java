@@ -19,6 +19,9 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 import tools.jackson.core.JacksonException;
 
@@ -122,6 +125,18 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
     ResponseEntity<ApiError> handleUnsupportedMediaType(HttpMediaTypeNotSupportedException ex) {
         return respond(ApiError.of(ErrorCode.UNSUPPORTED_MEDIA_TYPE));
+    }
+
+    /** An uploaded file over spring.servlet.multipart.max-file-size (e.g. a proof-of-delivery photo). */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    ResponseEntity<ApiError> handleUploadTooLarge(MaxUploadSizeExceededException ex) {
+        return respond(ApiError.validation(Map.of("file", "This file is too large.")));
+    }
+
+    /** A broken multipart body, or a required part missing. */
+    @ExceptionHandler({MultipartException.class, MissingServletRequestPartException.class})
+    ResponseEntity<ApiError> handleBadMultipart(Exception ex) {
+        return respond(ApiError.validation(Map.of()));
     }
 
     @ExceptionHandler(Exception.class)

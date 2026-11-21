@@ -94,22 +94,25 @@ class DeliveryService implements DeliveryApi {
     private final OutboxWriter outbox;
     private final FeeQuoter feeQuoter;
     private final TrackingNumberGenerator trackingNumbers;
+    private final ProofPhotos proofPhotos;
     private final Clock clock;
 
     @Autowired
     DeliveryService(ParcelRepository parcels, ParcelStatusHistoryRepository statusHistory, OutboxWriter outbox,
-                    FeeQuoter feeQuoter, TrackingNumberGenerator trackingNumbers) {
-        this(parcels, statusHistory, outbox, feeQuoter, trackingNumbers, DATABASE_CLOCK);
+                    FeeQuoter feeQuoter, TrackingNumberGenerator trackingNumbers, ProofPhotos proofPhotos) {
+        this(parcels, statusHistory, outbox, feeQuoter, trackingNumbers, proofPhotos, DATABASE_CLOCK);
     }
 
     /** For tests: a fixed clock. */
     DeliveryService(ParcelRepository parcels, ParcelStatusHistoryRepository statusHistory, OutboxWriter outbox,
-                    FeeQuoter feeQuoter, TrackingNumberGenerator trackingNumbers, Clock clock) {
+                    FeeQuoter feeQuoter, TrackingNumberGenerator trackingNumbers, ProofPhotos proofPhotos,
+                    Clock clock) {
         this.parcels = parcels;
         this.statusHistory = statusHistory;
         this.outbox = outbox;
         this.feeQuoter = feeQuoter;
         this.trackingNumbers = trackingNumbers;
+        this.proofPhotos = proofPhotos;
         this.clock = clock;
     }
 
@@ -288,6 +291,10 @@ class DeliveryService implements DeliveryApi {
      * Moves the parcel to the new status, in one transaction with its history row and the event in the outbox.
      * Checks in this order: the parcel exists (404), the role may change status (403), the current status may move
      * there (409), the proof photo (400). Which courier may change this parcel is checked by the caller.
+     *
+     * <p>DELIVERED always needs a proof photo stored for this parcel ({@link #storeProofPhoto}), whoever makes the
+     * change: it is attached in this same transaction, so the photo, the status, the history row and the event are
+     * kept together or not at all. Any other status takes no photo.
      */
     @Override
     @Transactional
@@ -299,10 +306,14 @@ class DeliveryService implements DeliveryApi {
         }
         Instant now = clock.instant();
         ParcelStatus from = parcel.changeStatus(command, now);
-        if (command.proofPhotoId() != null) {
-            // storeProofPhoto is not built yet, so no photo belongs to this parcel. The exception rolls the
-            // transaction back: the change above is never saved.
-            throw new FieldValidationException("proofPhotoId", "Add the photo again.");
+        // A failed check below throws, which rolls the transaction back: the change above is never saved.
+        if (command.toStatus() == ParcelStatus.DELIVERED) {
+            if (command.proofPhotoId() == null) {
+                throw new FieldValidationException("proofPhotoId", ProofPhotos.PHOTO_REQUIRED);
+            }
+            proofPhotos.attach(parcel.getId(), command.proofPhotoId(), command.actorId(), command.actorRole(), now);
+        } else if (command.proofPhotoId() != null) {
+            throw new FieldValidationException("proofPhotoId", ProofPhotos.PHOTO_ONLY_FOR_DELIVERED);
         }
         try {
             // Flush now: the version goes up here, and the event must carry the new one.
@@ -360,6 +371,18 @@ class DeliveryService implements DeliveryApi {
         return rows.stream().collect(Collectors.toMap(row -> LocalDate.parse(row.getDay()), DailyTotal::getTotal));
     }
 
+    // ---- Proof of delivery (agreed with WP9; see ProofPhotos) ----
+
+    @Override
+    public ProofPhotoRef storeProofPhoto(UUID parcelId, UUID uploadedBy, String contentType, byte[] content) {
+        return proofPhotos.store(parcelId, uploadedBy, contentType, content);
+    }
+
+    @Override
+    public Optional<ProofPhoto> findProofPhoto(UUID parcelId) {
+        return proofPhotos.findAttached(parcelId);
+    }
+
     // ---- Not built yet: each feature replaces its methods below ----
 
     @Override
@@ -374,16 +397,6 @@ class DeliveryService implements DeliveryApi {
 
     @Override
     public Map<UUID, Long> countActiveByCourier() {
-        throw notBuiltYet();
-    }
-
-    @Override
-    public ProofPhotoRef storeProofPhoto(UUID parcelId, UUID uploadedBy, String contentType, byte[] content) {
-        throw notBuiltYet();
-    }
-
-    @Override
-    public Optional<ProofPhoto> findProofPhoto(UUID parcelId) {
         throw notBuiltYet();
     }
 
