@@ -26,6 +26,13 @@ spring:
     hibernate:
       ddl-auto: validate
 
+  # File uploads (proof-of-delivery photos, 5 MB max): a little headroom so the service answers a 5-6 MB photo with
+  # its own message; anything bigger is refused before it is read (400 "This file is too large.").
+  servlet:
+    multipart:
+      max-file-size: 6MB
+      max-request-size: 7MB
+
   # One folder per module under db/migration (identity/, merchants/, ...). Each module's tables live in its own
   # schema; the history table stays in public. Teammates on different branches share one database, so:
   # out-of-order applies an older-timestamp migration merged later, and "missing"/"future" migrations from
@@ -149,3 +156,15 @@ swiftdrop:
   outbox:
     relay:
       enabled: ${SWIFTDROP_OUTBOX_RELAY_ENABLED:false}
+
+  # Proof-of-delivery photos (delivery module, used by the courier's Mark as delivered). storage: cloudinary (private
+  # "authenticated" assets; needs CLOUDINARY_URL=cloudinary://<api key>:<api secret>@<cloud name>, backend only, never
+  # logged), memory (only when set explicitly: tests and local runs; images are lost on restart), or empty (no storage:
+  # uploads answer 503 and no parcel can be delivered, an error is logged; never a silent fallback to memory).
+  # Uploads that are never attached to a delivery are removed after orphan-max-age.
+  delivery:
+    proof-photos:
+      storage: ${PROOF_STORAGE_PROVIDER:}
+      cloudinary-url: ${CLOUDINARY_URL:}
+      folder: ${CLOUDINARY_PROOF_FOLDER:swiftdrop/proof-of-delivery}
+      orphan-max-age: ${PROOF_PHOTO_ORPHAN_MAX_AGE:24h}
