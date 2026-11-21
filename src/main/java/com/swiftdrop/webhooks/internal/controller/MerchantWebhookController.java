@@ -14,6 +14,7 @@ import com.swiftdrop.webhooks.internal.dto.UpdateWebhookRequest;
 import com.swiftdrop.webhooks.internal.dto.WebhookDeliveryResponse;
 import com.swiftdrop.webhooks.internal.dto.WebhookResponse;
 import com.swiftdrop.webhooks.internal.dto.WebhookWithSecretResponse;
+import com.swiftdrop.webhooks.internal.security.WebhookActionLimiter;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -49,10 +50,13 @@ public class MerchantWebhookController {
 
     private final WebhookSubscriptionService service;
     private final WebhookDeliveryService deliveries;
+    private final WebhookActionLimiter limiter;
 
-    public MerchantWebhookController(WebhookSubscriptionService service, WebhookDeliveryService deliveries) {
+    public MerchantWebhookController(WebhookSubscriptionService service, WebhookDeliveryService deliveries,
+                                     WebhookActionLimiter limiter) {
         this.service = service;
         this.deliveries = deliveries;
+        this.limiter = limiter;
     }
 
     @PostMapping
@@ -104,7 +108,9 @@ public class MerchantWebhookController {
     @PostMapping("/{id}/test")
     @Operation(summary = "Send a test ping to this subscription within seconds (also while it is turned off)")
     public ResponseEntity<WebhookDeliveryResponse> test(Authentication authentication, @PathVariable UUID id) {
-        return ResponseEntity.status(HttpStatus.ACCEPTED).body(deliveries.queuePing(merchantId(authentication), id));
+        UUID merchantId = merchantId(authentication);
+        limiter.check(merchantId);
+        return ResponseEntity.status(HttpStatus.ACCEPTED).body(deliveries.queuePing(merchantId, id));
     }
 
     @GetMapping("/{id}/deliveries")
@@ -126,7 +132,9 @@ public class MerchantWebhookController {
     @PostMapping("/deliveries/{deliveryId}/retry")
     @Operation(summary = "Send a FAILED delivery again, with a new set of attempts")
     public WebhookDeliveryResponse retry(Authentication authentication, @PathVariable UUID deliveryId) {
-        return deliveries.retry(merchantId(authentication), deliveryId);
+        UUID merchantId = merchantId(authentication);
+        limiter.check(merchantId);
+        return deliveries.retry(merchantId, deliveryId);
     }
 
     /**

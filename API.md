@@ -88,7 +88,7 @@ Change it in the same PR as the code, and tell the frontend team.
 | 409 | `WEBHOOK_CHANGED` | Webhooks: someone else changed the same subscription at the same moment (e.g. two tabs); nothing was saved |
 | 409 | `ACCOUNT_REMOVED` | An admin action or password action on a removed account |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | Request body is not `application/json` |
-| 429 | `TOO_MANY_REQUESTS` | Too many requests from this IP address; the `Retry-After` header says how many seconds to wait |
+| 429 | `TOO_MANY_REQUESTS` | Too many requests from this IP address (or, for webhook tests and retries, from this merchant); the `Retry-After` header says how many seconds to wait |
 | 500 | `INTERNAL_ERROR` | Anything unexpected (generic message only) |
 | 503 | `SERVICE_UNAVAILABLE` | A part of SwiftDrop isn't running yet (e.g. courier endpoints before parcels exist on the server) |
 
@@ -781,14 +781,24 @@ The secret is never in this shape. The create and rotate responses add it once:
 | `PATCH /merchant/webhooks/{id}` `{"url"?, "eventTypes"?, "active"?}` | Change only the fields sent (subscription) | 400; 404; 409 `WEBHOOK_LIMIT_REACHED` (turning one on), `WEBHOOK_URL_IN_USE` (new URL or turning one on), `WEBHOOK_CHANGED` |
 | `DELETE /merchant/webhooks/{id}` | Turn off (`active: false`; history is kept). 204. Idempotent, also when two requests turn it off at once | 404; 409 `WEBHOOK_CHANGED` (someone turned it back on at that moment) |
 | `POST /merchant/webhooks/{id}/rotate-secret` | New secret; the old one stops working at once, also for retries (200, subscription + `secret`). If two rotations clash, the loser gets 409 and no secret | 404; 409 `WEBHOOK_CHANGED` |
-| `POST /merchant/webhooks/{id}/test` | Queue a `webhook.ping` for this subscription, sent within seconds and tried once (202, delivery). Also works while it is turned off, so a URL can be checked before turning it on. If a ping for it is still waiting to be sent, that one is returned (202) instead of queuing another | 404 |
+| `POST /merchant/webhooks/{id}/test` | Queue a `webhook.ping` for this subscription, sent within seconds and tried once (202, delivery). Also works while it is turned off, so a URL can be checked before turning it on. If a ping for it is still waiting to be sent, that one is returned (202) instead of queuing another. A new ping only 10 seconds after the previous one (see "Limits") | 404; 429 `TOO_MANY_REQUESTS` |
 | `GET /merchant/webhooks/{id}/deliveries?status=&eventType=&search=&from=&to=&page=0&size=20` | Delivery history of one subscription, newest first (page of deliveries). Optional filters: `status`, `eventType`, `search`, `from`, `to` (see "Searching deliveries") | 400 `status`, `eventType`, `search`, `from`, `to`, `page`, `size` (1-100); 404 |
-| `POST /merchant/webhooks/deliveries/{id}/retry` | Send a `FAILED` delivery again, with a new set of attempts (one for a test ping): `PENDING`, `attempts: 0`, due now; `lastStatusCode`/`lastError` keep the old values until the next attempt (delivery). A parcel delivery of a turned-off subscription fails again with `SUBSCRIPTION_INACTIVE`: turn the subscription on first | 404; 409 `WEBHOOK_DELIVERY_NOT_RETRYABLE` |
+| `POST /merchant/webhooks/deliveries/{id}/retry` | Send a `FAILED` delivery again, with a new set of attempts (one for a test ping): `PENDING`, `attempts: 0`, due now; `lastStatusCode`/`lastError` keep the old values until the next attempt (delivery). A parcel delivery of a turned-off subscription fails again with `SUBSCRIPTION_INACTIVE`: turn the subscription on first. Only 10 seconds after the delivery's last attempt (see "Limits") | 404; 409 `WEBHOOK_DELIVERY_NOT_RETRYABLE`; 429 `TOO_MANY_REQUESTS` |
 | `GET /admin/webhooks/deliveries?status=FAILED&merchantId=&eventType=&search=&from=&to=&page=0&size=20` | ADMIN: every merchant's deliveries, newest first (page of deliveries, each with `merchantId`). Optional filters: `status`, `merchantId`, `eventType`, `search`, `from`, `to` | 400 `status`, `eventType`, `search`, `from`, `to`, `page`, `size` |
 | `POST /admin/webhooks/deliveries/{id}/retry` | ADMIN: same as the merchant retry | 404; 409 `WEBHOOK_DELIVERY_NOT_RETRYABLE` |
 
 Another merchant's subscription or delivery answers 404, never 403. A merchant has at most 5 active subscriptions.
 Delivery lists are newest first (`createdAt`, then `id`, both descending) and never include the payload.
+
+**Limits.** "Send test" and "Retry" make SwiftDrop send a real request to the merchant's URL, so they are limited
+(over a limit: `429 TOO_MANY_REQUESTS`, with `Retry-After: <seconds>`; show "Try again in N seconds"):
+- **Send test:** a new ping for a subscription only 10 seconds after its previous ping was queued. While a ping is
+  still waiting, the same one is returned (202), as above.
+- **Retry:** a `FAILED` delivery only 10 seconds after its last attempt. An older failure can be retried at once. A
+  delivery that isn't `FAILED` is still `409 WEBHOOK_DELIVERY_NOT_RETRYABLE`.
+- **Per merchant:** at most 30 tests and retries a minute, all subscriptions together.
+- Admin retries are not limited. The numbers are settings: `SWIFTDROP_WEBHOOKS_COOLDOWN_SECONDS` (default 10, 0 turns
+  the cooldown off) and `SWIFTDROP_WEBHOOKS_ACTIONS_PER_MINUTE` (default 30).
 
 **Searching deliveries.** All filters are optional and combine (AND).
 - `search`: a delivery id, event id or parcel id (exact; a test ping is found only by its own id), or else a tracking

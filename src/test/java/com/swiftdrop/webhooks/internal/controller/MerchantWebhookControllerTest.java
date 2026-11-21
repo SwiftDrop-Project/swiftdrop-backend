@@ -6,6 +6,7 @@ import com.swiftdrop.webhooks.internal.application.WebhookDeliveryService;
 import com.swiftdrop.webhooks.internal.application.WebhookSubscriptionService;
 import com.swiftdrop.webhooks.internal.domain.WebhookSubscription;
 import com.swiftdrop.webhooks.internal.dto.UpdateWebhookRequest;
+import com.swiftdrop.webhooks.internal.security.WebhookActionLimiter;
 import org.junit.jupiter.api.Test;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -33,7 +34,8 @@ class MerchantWebhookControllerTest {
     private final UUID id = UUID.randomUUID();
     private final WebhookSubscriptionService service = mock(WebhookSubscriptionService.class);
     private final MerchantWebhookController controller =
-            new MerchantWebhookController(service, mock(WebhookDeliveryService.class));
+            new MerchantWebhookController(service, mock(WebhookDeliveryService.class),
+                    mock(WebhookActionLimiter.class));
     private final JwtAuthenticationToken merchant = new JwtAuthenticationToken(Jwt.withTokenValue("token")
             .header("alg", "HS256").subject(merchantId.toString()).build());
 

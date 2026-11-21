@@ -129,10 +129,53 @@ class WebhookDeliveryApiTest extends IntegrationTest {
         assertThat(jdbc.queryForObject("select count(*) from webhooks.deliveries where subscription_id = ?::uuid",
                 Long.class, subscription)).isEqualTo(1);
 
-        // once that one is finished, a new ping is queued again
+        // once that one is finished (and the 10-second wait between tests is over), a new ping is queued again
         markSucceeded(UUID.fromString(first));
+        backdate(UUID.fromString(first), 11);
         String third = readJson(ping(merchant, subscription).andExpect(status().isAccepted())).get("id").asString();
         assertThat(third).isNotEqualTo(first);
+    }
+
+    @Test
+    void sendTestRightAfterAFinishedPingAnswers429WithRetryAfter() throws Exception {
+        Cookie merchant = approvedMerchant();
+        String subscription = subscribe(merchant);
+        UUID first = UUID.fromString(readJson(ping(merchant, subscription).andExpect(status().isAccepted()))
+                .get("id").asString());
+        markFailed(first);
+
+        String retryAfter = ping(merchant, subscription)
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.code").value("TOO_MANY_REQUESTS"))
+                .andExpect(jsonPath("$.message").value("Too many attempts. Please wait a moment and try again."))
+                .andReturn().getResponse().getHeader("Retry-After");
+        assertThat(retryAfter).isNotNull();
+        assertThat(Integer.parseInt(retryAfter)).isBetween(1, 10);
+
+        backdate(first, 11);
+        ping(merchant, subscription).andExpect(status().isAccepted());
+    }
+
+    @Test
+    void aMerchantCanAskForAtMost30TestsAndRetriesAMinute() throws Exception {
+        Cookie merchant = approvedMerchant();
+        String subscription = subscribe(merchant);
+        for (int i = 0; i < 30; i++) {
+            ping(merchant, subscription).andExpect(status().isAccepted()); // the same waiting ping each time
+        }
+
+        String retryAfter = ping(merchant, subscription)
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.code").value("TOO_MANY_REQUESTS"))
+                .andReturn().getResponse().getHeader("Retry-After");
+        assertThat(Integer.parseInt(retryAfter)).isBetween(1, 60);
+        UUID failed = delivery(subscription, Instant.now().minusSeconds(60));
+        markFailed(failed);
+        retry(merchant, failed).andExpect(status().isTooManyRequests()); // retries count too
+
+        // another merchant isn't affected
+        Cookie other = approvedMerchant();
+        ping(other, subscribe(other)).andExpect(status().isAccepted());
     }
 
     @Test
@@ -513,6 +556,34 @@ class WebhookDeliveryApiTest extends IntegrationTest {
     }
 
     @Test
+    void aDeliveryThatJustFailedCanBeRetriedAfterTenSecondsButAdminsNeedNotWait() throws Exception {
+        Cookie merchant = approvedMerchant();
+        String subscription = subscribe(merchant);
+        UUID delivery = delivery(subscription, Instant.now());
+        markFailed(delivery); // its last attempt was just now
+
+        String retryAfter = retry(merchant, delivery)
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.code").value("TOO_MANY_REQUESTS"))
+                .andReturn().getResponse().getHeader("Retry-After");
+        assertThat(Integer.parseInt(retryAfter)).isBetween(1, 10);
+        assertThat(statusOf(delivery)).isEqualTo("FAILED");
+
+        mvc.perform(post(ADMIN_PATH + "/" + delivery + "/retry").cookie(loginAsAdmin()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("PENDING"));
+    }
+
+    @Test
+    void theCooldownNeverHidesThatADeliveryIsntFailed() throws Exception {
+        Cookie merchant = approvedMerchant();
+        UUID pending = delivery(subscribe(merchant), Instant.now()); // updated just now, but not FAILED
+
+        retry(merchant, pending).andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("WEBHOOK_DELIVERY_NOT_RETRYABLE"));
+    }
+
+    @Test
     void onlyFailedDeliveriesCanBeRetried() throws Exception {
         Cookie merchant = approvedMerchant();
         String subscription = subscribe(merchant);
@@ -658,6 +729,12 @@ class WebhookDeliveryApiTest extends IntegrationTest {
     private void markFailed(UUID id) {
         jdbc.update("update webhooks.deliveries set status = 'FAILED', attempts = 6, last_status_code = 503,"
                 + " last_error = 'HTTP_503', next_attempt_at = null where id = ?", id);
+    }
+
+    /** Moves a delivery's creation and last change {@code seconds} into the past (past the cooldown). */
+    private void backdate(UUID id, int seconds) {
+        jdbc.update("update webhooks.deliveries set created_at = created_at - make_interval(secs => ?),"
+                + " updated_at = updated_at - make_interval(secs => ?) where id = ?", seconds, seconds, id);
     }
 
     private void markSucceeded(UUID id) {
