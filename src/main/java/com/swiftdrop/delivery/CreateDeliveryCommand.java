@@ -17,7 +17,7 @@ import java.util.UUID;
  *                      them (400 VALIDATION_FAILED on {@code lengthCm}), because without them pricing can't choose the
  *                      vehicle
  * @param paymentMethod how the delivery fee is paid, so the courier knows whether to collect it and from whom.
- *                      Customer bookings (POST /deliveries) always have one; merchant orders don't send it yet
+ *                      Customer bookings (POST /deliveries) and merchant orders (POST /merchant/orders) always have one
  */
 public record CreateDeliveryCommand(
         UUID customerId,

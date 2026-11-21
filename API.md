@@ -1175,7 +1175,8 @@ Request:
   "lengthCm": 30,
   "widthCm": 20,
   "heightCm": 10,
-  "keepUpright": false
+  "keepUpright": false,
+  "paymentMethod": "AT_PICKUP"
 }
 ```
 
@@ -1193,6 +1194,7 @@ Request:
 | `instructions` | Optional, up to 500 characters | "Use 500 characters or fewer." |
 | `lengthCm`, `widthCm`, `heightCm` | Required; whole cm 1–300 | "Enter the length." / "Enter the width." / "Enter the height." / "Use whole centimetres from 1 to 300." |
 | `keepUpright` | Optional, default `false` | |
+| `paymentMethod` | Required: how the delivery fee is paid. `ONLINE` (paid online), `AT_PICKUP` (your shop pays the courier in cash at pickup) or `AT_DROP_OFF` (the recipient pays the courier in cash at delivery, with any cash on delivery). Fixed once created | "Choose how the delivery fee will be paid." (missing or an unknown value) |
 
 Response `201`: a Merchant Order.
 ```json
@@ -1217,13 +1219,15 @@ Response `201`: a Merchant Order.
   "proof": null,
   "size": { "lengthCm": 30, "widthCm": 20, "heightCm": 10, "keepUpright": false },
   "vehicle": "BIKE",
-  "billableWeightKg": 1
+  "billableWeightKg": 1,
+  "paymentMethod": "AT_PICKUP"
 }
 ```
 - `merchantOrderRef`: the value you supplied; `null` when omitted. Resending the same ref returns the original parcel unchanged (idempotent retry).
+- `paymentMethod`: how the fee is paid, as created; `null` for orders made before payment methods.
 - `feeAmount` / `currency`: set by pricing at creation time (same quote as `POST /pricing/estimate`).
 - `currentBranch`: set only while `AT_BRANCH`. `failureReason`: only while `FAILED`. `proof`: `{ "recipientName": "Nimal Perera", "hasPhoto": false }` once `DELIVERED`.
-- `400` `VALIDATION_FAILED` · `401` `UNAUTHENTICATED` · `403` `MERCHANT_NOT_APPROVED` (account not yet approved) · `403` `FORBIDDEN` (not a `MERCHANT`) · `409` `PARCEL_NEEDS_MANUAL_QUOTE` (no vehicle carries or fits it)
+- `400` `VALIDATION_FAILED` (keys like `weightKg`, `lengthCm`, `paymentMethod`) · `401` `UNAUTHENTICATED` · `403` `MERCHANT_NOT_APPROVED` (account not yet approved) · `403` `FORBIDDEN` (not a `MERCHANT`) · `409` `PARCEL_NEEDS_MANUAL_QUOTE` (no vehicle carries or fits it)
 
 ### List orders
 `GET /merchant/orders?page=0&size=20&status=CREATED`
