@@ -16,8 +16,9 @@ import java.util.UUID;
  * @param size          the packed measurements, needed to book: {@link DeliveryApi#create} refuses a command without
  *                      them (400 VALIDATION_FAILED on {@code lengthCm}), because without them pricing can't choose the
  *                      vehicle
- * @param paymentMethod how the delivery fee is paid, so the courier knows whether to collect it and from whom.
- *                      Customer bookings (POST /deliveries) and merchant orders (POST /merchant/orders) always have one
+ * @param paymentMethod how the delivery fee is paid, so the courier knows whether to collect it and from whom; needed
+ *                      to book: {@link DeliveryApi#create} refuses a command without it (400 VALIDATION_FAILED on
+ *                      {@code paymentMethod})
  */
 public record CreateDeliveryCommand(
         UUID customerId,
@@ -40,7 +41,10 @@ public record CreateDeliveryCommand(
         Objects.requireNonNull(weightKg, "weightKg");
     }
 
-    /** A command without a payment method. Kept so code written before payment methods still compiles. */
+    /**
+     * A command without a payment method. Kept so code written before payment methods still compiles, but
+     * {@link DeliveryApi#create} refuses it: pass a {@link PaymentMethod} to book.
+     */
     public CreateDeliveryCommand(UUID customerId, UUID merchantId, String merchantOrderRef, DeliveryContact pickup,
                                  DeliveryContact recipient, BigDecimal weightKg, BigDecimal codAmount,
                                  String instructions, ParcelSize size) {

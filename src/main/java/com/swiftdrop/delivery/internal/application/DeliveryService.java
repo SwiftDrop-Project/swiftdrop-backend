@@ -89,6 +89,9 @@ class DeliveryService implements DeliveryApi {
     /** Report days are Sri Lanka days. */
     static final ZoneId SRI_LANKA = ZoneId.of("Asia/Colombo");
 
+    /** The same words as the request bodies use, so the client shows one message for it. */
+    static final String PAYMENT_METHOD_REQUIRED = "Choose how the delivery fee will be paid.";
+
     private final ParcelRepository parcels;
     private final ParcelStatusHistoryRepository statusHistory;
     private final OutboxWriter outbox;
@@ -117,8 +120,8 @@ class DeliveryService implements DeliveryApi {
     }
 
     /**
-     * All in one transaction: a merchant's retry returns the first parcel; otherwise the fee, a free tracking number,
-     * then the parcel, its first history row and the CREATED event in the outbox.
+     * All in one transaction: a merchant's retry returns the first parcel; otherwise the payment method check, the fee,
+     * a free tracking number, then the parcel, its first history row and the CREATED event in the outbox.
      */
     @Override
     @Transactional
@@ -129,6 +132,10 @@ class DeliveryService implements DeliveryApi {
             if (earlier.isPresent()) {
                 return earlier.get().toSnapshot();
             }
+        }
+        // Checked here too, not only in the request bodies, so no caller of DeliveryApi.create can leave it out.
+        if (command.paymentMethod() == null) {
+            throw new FieldValidationException("paymentMethod", PAYMENT_METHOD_REQUIRED);
         }
         Instant now = clock.instant();
         ParcelPrice price = feeQuoter.quote(command);
