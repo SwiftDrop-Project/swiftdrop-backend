@@ -1,0 +1,10 @@
+SwiftDrop
+
+Hi {{name}},
+
+Good news: an admin approved the SwiftDrop merchant account for {{businessName}}.
+
+You can now log in with your email and password and start sending orders.
+
+--
+SwiftDrop parcel delivery. This is an automatic message about your account; replies are not read.
