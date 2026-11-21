@@ -169,3 +169,46 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
 
 ## Git
 - Work on `feature/*` branches; PRs into `dev`. Commit style: `feat(identity): add login endpoint`.
+## Admin Settings Module
+
+**Package:** `com.swiftdrop.settings`
+
+The Admin Settings module manages company details, delivery operations, notification preferences and system information.
+
+### Architecture
+
+- `internal.controller.AdminSettingsController` — REST endpoints under `/admin/settings`, restricted to the `ADMIN` role.
+- `internal.application.CompanySettingsService` — company information retrieval and updates.
+- `internal.application.DeliverySettingsService` — pickup hours, operating days, parcel limits and failed-attempt validation.
+- `internal.application.NotificationSettingsService` — notification preference storage and sender-name validation.
+- `internal.application.SystemInformationService` — application metadata and read-only infrastructure health status.
+- `internal.dto` — request and response records.
+- `internal.domain` — settings persistence entities.
+- `internal.persistence` — Spring Data repositories.
+
+### Persistence and Validation
+
+Company, delivery and notification settings are each represented by a singleton record with ID `1`.
+
+Controllers use Jakarta Bean Validation on PUT request bodies. Delivery Settings also performs business-rule validation for pickup hours, cutoff times, operating days and failed attempts.
+
+Use the shared error-handling conventions for validation failures. PR #46 replaces delivery business-rule `ResponseStatusException` usage with `FieldValidationException` to return HTTP `400 VALIDATION_FAILED` with field-specific errors.
+
+### Security
+
+All Admin Settings endpoints require `ADMIN` authorization. Unauthenticated requests return HTTP 401, and authenticated users without the ADMIN role receive HTTP 403.
+
+### Tests
+
+Admin Settings automated tests cover company, delivery, notification and system information services, as well as controller validation and authorization.
+
+PR #46 contains 45 passing Admin Settings tests using Mockito and an isolated Spring MVC test configuration. These tests do not require shared PostgreSQL, RabbitMQ, SMTP or Docker services.
+
+### Operational Safety
+
+- Do not run multiple outbox relay instances against the shared database without team coordination.
+- Do not enable notification consumers or email workers against shared infrastructure without approval.
+- Do not modify already-applied Flyway migrations on the shared Neon database.
+- Notification settings persistence does not automatically guarantee that all notification producers and workers enforce the stored preferences.
+
+For the HTTP contract and JSON examples, see the Admin Settings section in `API.md`.
