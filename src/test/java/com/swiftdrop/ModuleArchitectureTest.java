@@ -21,7 +21,7 @@ class ModuleArchitectureTest {
         assertThat(MODULES.stream().map(ApplicationModule::getIdentifier).map(Object::toString))
                 .containsExactlyInAnyOrder("shared", "infrastructure", "identity", "merchants", "pricing", "delivery",
                         "dispatch", "reporting", "tracking", "notifications", "webhooks", "outbox", "courier",
-                        "settings", "assistant");
+                        "settings", "assistant", "customer");
     }
 
     @Test
