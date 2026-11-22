@@ -24,6 +24,12 @@ public interface IdentityApi {
     UserSummary changeStatus(UUID id, UserStatus status);
 
     /**
+     * Updates a user's full name and/or normalized phone (+947XXXXXXXX).
+     * Throws 404 NOT_FOUND if user is missing, 409 PHONE_ALREADY_REGISTERED if phone is taken by another account.
+     */
+    UserSummary updateContact(UUID id, String fullName, String normalizedPhone);
+
+    /**
      * Creates a password account. {@code normalizedPhone} must already be in +947XXXXXXXX form; the password is hashed
      * here. 409 EMAIL_ALREADY_REGISTERED / PHONE_ALREADY_REGISTERED on duplicates. Used for seeding demo accounts;
      * public sign-up goes through POST /auth/register.

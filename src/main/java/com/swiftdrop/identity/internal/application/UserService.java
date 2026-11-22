@@ -247,6 +247,19 @@ public class UserService implements IdentityApi {
         return toView(users.saveAndFlush(user));
     }
 
+    @Override
+    @Transactional
+    public UserSummary updateContact(UUID id, String fullName, String normalizedPhone) {
+        User user = users.findByIdForUpdate(id).orElseThrow(() -> new NotFoundException(ErrorCode.NOT_FOUND));
+        if (normalizedPhone != null && !normalizedPhone.equals(user.getPhone())) {
+            if (users.existsByPhone(normalizedPhone)) {
+                throw new ConflictException(ErrorCode.PHONE_ALREADY_REGISTERED);
+            }
+        }
+        user.updateContact(fullName, normalizedPhone);
+        return toView(users.saveAndFlush(user));
+    }
+
     static String normalizeEmail(String email) {
         return email.trim().toLowerCase(Locale.ROOT);
     }

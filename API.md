@@ -552,6 +552,48 @@ The same range as CSV (`text/csv; charset=UTF-8`, download `swiftdrop-report-<fr
 `date,booked,delivered,failed`, one row per day (oldest first), then `total,...`. Same parameters and errors as the
 summary.
 
+### Customer (role `CUSTOMER` only)
+
+#### `GET /customer/profile`
+Returns customer account details, delivery preferences, and stats counters.
+- `200`:
+  ```json
+  {
+    "userId": "c7a8...",
+    "fullName": "Nimali Perera",
+    "email": "nimali.perera@example.com",
+    "phone": "+94771234567",
+    "customerSince": "2026-10-12T10:00:00Z",
+    "totalDeliveries": 4,
+    "savedAddressesCount": 3,
+    "defaultPickupAddressId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+    "preferredPaymentMethod": "CASH_ON_DELIVERY"
+  }
+  ```
+- `401` `UNAUTHENTICATED` · `403` `FORBIDDEN`
+
+#### `PATCH /customer/profile/personal-details`
+Updates the customer's full name and mobile number.
+```json
+{
+  "fullName": "Nimali Perera",
+  "phone": "077 123 4567"
+}
+```
+- `200`: Updated CustomerProfileResponse
+- `400` `VALIDATION_FAILED` · `401` `UNAUTHENTICATED` · `403` `FORBIDDEN` · `409` `PHONE_ALREADY_REGISTERED`
+
+#### `PATCH /customer/profile/preferences`
+Updates delivery preferences (default pickup address and preferred payment method).
+```json
+{
+  "defaultPickupAddressId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+  "preferredPaymentMethod": "MOCK_CARD"
+}
+```
+- `200`: Updated CustomerProfileResponse
+- `400` `VALIDATION_FAILED` · `401` `UNAUTHENTICATED` · `403` `FORBIDDEN`
+
 ---
 
 ## Cookie and token
