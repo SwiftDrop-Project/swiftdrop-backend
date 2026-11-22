@@ -86,6 +86,26 @@ class GeminiAnswerWriterTest {
     }
 
     @Test
+    void aDistrictThatIsNotInTheDataIsRejected() {
+        geminiSays("Sending 2 kg from Colombo to Kandy costs Rs. 472.60, the same as to Galle.");
+
+        assertThatThrownBy(() -> writer.write("How much to Kandy?", draft, price))
+                .isInstanceOf(ProviderUnavailableException.class)
+                .hasMessageContaining("district");
+    }
+
+    @Test
+    void geminiIsToldToSendQuestionsWithoutDataToTheTeam() {
+        geminiSays("It costs Rs. 472.60. For refunds, please contact our team at support@swiftdrop.lk.");
+
+        String text = writer.write("How much to Kandy, and can I get a refund?", draft, price);
+
+        assertThat(text).contains("support@swiftdrop.lk");
+        assertThat(requests.getFirst().at("/systemInstruction/parts/0/text").asString(""))
+                .contains("do not answer that part from your own knowledge", "support@swiftdrop.lk");
+    }
+
+    @Test
     void noAnswerIsAnError() {
         answer = "{\"promptFeedback\":{\"blockReason\":\"SAFETY\"}}";
 

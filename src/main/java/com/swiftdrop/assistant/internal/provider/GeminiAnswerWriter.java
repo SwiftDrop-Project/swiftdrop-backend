@@ -1,6 +1,8 @@
 package com.swiftdrop.assistant.internal.provider;
 
 import com.swiftdrop.assistant.internal.tools.AssistantCard;
+import com.swiftdrop.assistant.internal.tools.Words;
+import com.swiftdrop.shared.reference.District;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
@@ -20,8 +22,8 @@ import tools.jackson.databind.node.ObjectNode;
  * its APIs (tracking, pricing); Gemini gets the question, that data and a draft answer made from it, and rewrites the
  * answer in clear, friendly sentences. It has no tools and nothing else to go on.
  *
- * <p>The answer is checked before it is used: every number in it (amounts, counts, percentages, dates) and every
- * tracking number must appear in the data or the draft, otherwise the draft is used instead
+ * <p>The answer is checked before it is used: every number in it (amounts, counts, percentages, dates), every
+ * tracking number and every district must appear in the data or the draft, otherwise the draft is used instead
  * ({@link ProviderUnavailableException}).
  */
 @Component
@@ -86,7 +88,17 @@ public class GeminiAnswerWriter {
         if (!onlyKnownNumbers(answer, data + " " + draft) || !onlyKnown(TRACKING_NUMBER, answer, facts)) {
             throw new ProviderUnavailableException("Gemini's answer used a number that isn't in the data");
         }
+        if (!onlyKnownDistricts(answer, data + " " + draft)) {
+            throw new ProviderUnavailableException("Gemini's answer named a district that isn't in the data");
+        }
         return answer;
+    }
+
+    /** True when every district named in the answer is also named in the facts. */
+    private static boolean onlyKnownDistricts(String answer, String facts) {
+        java.util.Set<District> known = new java.util.HashSet<>();
+        Words.districtsIn(facts).forEach(mention -> known.add(mention.district()));
+        return Words.districtsIn(answer).stream().allMatch(mention -> known.contains(mention.district()));
     }
 
     /** True when every match of {@code pattern} in the answer also appears in the data. */

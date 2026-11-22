@@ -39,7 +39,8 @@ public class RulesChatProvider {
             "(\\d+(?:[.,]\\d+)?)\\s*(?:kg|kgs|kilo|kilos|kilogram|kilograms)\\b", Pattern.CASE_INSENSITIVE);
     private static final Pattern BARE_NUMBER = Pattern.compile("^\\s*(\\d+(?:[.,]\\d+)?)\\s*$");
     private static final Pattern SIZE = Pattern.compile(
-            "(\\d{1,3})\\s*(?:cm)?\\s*[x×*]\\s*(\\d{1,3})\\s*(?:cm)?\\s*[x×*]\\s*(\\d{1,3})", Pattern.CASE_INSENSITIVE);
+            "(\\d{1,3})\\s*(?:cm)?\\s*(?:[x×*]|by)\\s*(\\d{1,3})\\s*(?:cm)?\\s*(?:[x×*]|by)\\s*(\\d{1,3})",
+            Pattern.CASE_INSENSITIVE);
     private static final Pattern MY_PARCELS = Pattern.compile(
             "\\b(my|mine)\\b.*\\b(parcels?|deliver(?:y|ies)|orders?|bookings?|packages?|shipments?)\\b"
                     + "|\\bwhere(?:'s| is| are)\\s+my\\b", Pattern.CASE_INSENSITIVE);
@@ -49,8 +50,6 @@ public class RulesChatProvider {
 
     /** Price follow-ups start with this, so the next message is read as the answer. */
     static final String ASK_PRICE_DETAILS = "To estimate the price, tell me ";
-    /** A provisional price ends with this, so a size in the next message completes it. */
-    static final String ASK_SIZE = "for the full price.";
 
     private final AssistantTools tools;
     private final AdminAnswers admin;
@@ -106,7 +105,8 @@ public class RulesChatProvider {
                 answers.add(String.valueOf(data.get("error")));
             } else if (Boolean.FALSE.equals(data.get("found"))) {
                 answers.add("I couldn't find a parcel with the number " + number.toUpperCase(Locale.ROOT)
-                        + ". Check the number on your booking email and try again.");
+                        + ". Check the number on your booking email and try again. If it's right, "
+                        + Words.CONTACT_TEAM + ".");
             } else {
                 answers.add(data.get("trackingNumber") + " is " + data.get("statusText") + ". It's going from "
                         + data.get("from") + " to " + data.get("to") + ". Last update: " + data.get("lastUpdate")
@@ -131,7 +131,7 @@ public class RulesChatProvider {
         }
         String previous = previousAnswer(conversation);
         // Our own follow-ups, or any question (Gemini words its own, and rules answer when Gemini times out).
-        if (previous == null || !(previous.startsWith(ASK_PRICE_DETAILS) || previous.endsWith(ASK_SIZE)
+        if (previous == null || !(previous.startsWith(ASK_PRICE_DETAILS)
                 || previous.strip().endsWith("?"))) {
             return null;
         }
@@ -190,6 +190,18 @@ public class RulesChatProvider {
             }
         }
 
+        Matcher size = SIZE.matcher(text);
+        Integer[] dimensions = null;
+        while (size.find()) {
+            dimensions = new Integer[] {Integer.valueOf(size.group(1)), Integer.valueOf(size.group(2)),
+                    Integer.valueOf(size.group(3))};
+        }
+
+        if (weight != null && (new java.math.BigDecimal(weight).compareTo(new java.math.BigDecimal("0.01")) < 0
+                || new java.math.BigDecimal(weight).compareTo(new java.math.BigDecimal("50")) > 0)) {
+            return "SwiftDrop takes parcels from 0.01 kg to 50 kg.";
+        }
+
         List<String> missing = new ArrayList<>();
         if (pickup == null) {
             missing.add("the district we collect it from");
@@ -200,25 +212,22 @@ public class RulesChatProvider {
         if (weight == null) {
             missing.add("its weight in kg");
         }
+        if (dimensions == null) {
+            // The size and weight pick the vehicle, whose fee is added for the pickup and the delivery.
+            missing.add("its size (length x width x height in cm)");
+        }
         if (!missing.isEmpty()) {
-            return ASK_PRICE_DETAILS + joinWithAnd(missing) + ". For example: \"2 kg from Colombo to Kandy\".";
+            return ASK_PRICE_DETAILS + joinWithAnd(missing) + ". For example: \"2 kg from Colombo to Kandy, "
+                    + "30 x 20 x 10 cm\".";
         }
 
         Map<String, Object> request = new java.util.LinkedHashMap<>();
         request.put("pickupDistrict", pickup.name());
         request.put("dropOffDistrict", dropOff.name());
         request.put("weightKg", weight);
-        Matcher size = SIZE.matcher(text);
-        Integer[] dimensions = null;
-        while (size.find()) {
-            dimensions = new Integer[] {Integer.valueOf(size.group(1)), Integer.valueOf(size.group(2)),
-                    Integer.valueOf(size.group(3))};
-        }
-        if (dimensions != null) {
-            request.put("lengthCm", dimensions[0]);
-            request.put("widthCm", dimensions[1]);
-            request.put("heightCm", dimensions[2]);
-        }
+        request.put("lengthCm", dimensions[0]);
+        request.put("widthCm", dimensions[1]);
+        request.put("heightCm", dimensions[2]);
         ToolResult result = tools.run("estimate_price", args(request), caller);
         Map<String, Object> data = result.data();
         if (result.error()) {
@@ -228,14 +237,41 @@ public class RulesChatProvider {
         String kg = ((java.math.BigDecimal) data.get("weightKg")).stripTrailingZeros().toPlainString();
         String route = kg + " kg from " + data.get("pickupDistrict") + " to "
                 + data.get("dropOffDistrict");
-        return switch (String.valueOf(data.get("status"))) {
-            case "COMPLETE" -> "Sending " + route + " costs about " + data.get("totalText") + ".";
-            case "PROVISIONAL" -> "Sending " + route + " costs about " + data.get("totalText")
-                    + ", plus the pickup and delivery charges, which depend on the parcel's size. Tell me its size "
-                    + "(for example 30 x 20 x 10 cm) " + ASK_SIZE;
-            default -> "Sending " + route + " needs a manual quote: the parcel is too big or heavy for our bikes, "
-                    + "tuk-tuks and lorries. Please contact SwiftDrop support.";
-        };
+        if (!"COMPLETE".equals(data.get("status"))) {
+            return "Sending " + route + " needs a manual quote: the parcel is too big or heavy for our bikes, "
+                    + "tuk-tuks and lorries. For a quote, " + Words.CONTACT_TEAM + ".";
+        }
+        return "Sending " + route + " (" + data.get("sizeCm") + " cm) costs about " + data.get("totalText")
+                + ". It goes by " + data.get("vehicleText") + ": " + breakdown(data) + ".";
+    }
+
+    /** "pickup by bike Rs. 150.00, delivery by bike Rs. 150.00, weight Rs. 50.00 and ..." from the fee lines. */
+    private static String breakdown(Map<String, Object> data) {
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> lines = (List<Map<String, Object>>) data.get("lines");
+        List<String> parts = new ArrayList<>();
+        for (Map<String, Object> line : lines) {
+            String amount = Words.rupees((java.math.BigDecimal) line.get("amount"));
+            String label = switch (String.valueOf(line.get("component"))) {
+                case "PICKUP" -> "pickup by " + data.get("vehicleText");
+                case "DELIVERY" -> "delivery by " + data.get("vehicleText");
+                case "LINEHAUL" -> data.get("distanceKm") == null ? "transport between branches"
+                        : "transport between branches (" + number(data.get("distanceKm")) + " km)";
+                // The billable weight: the actual or the volumetric weight (L x W x H / 5000), rounded up.
+                case "WEIGHT" -> data.get("billableWeightKg") == null ? "weight"
+                        : "weight (billed as " + number(data.get("billableWeightKg")) + " kg)";
+                case "BASE" -> "base fee";
+                case "COD" -> "cash on delivery";
+                default -> String.valueOf(line.get("component")).toLowerCase(Locale.ROOT);
+            };
+            parts.add(label + " " + amount);
+        }
+        return joinWithAnd(parts);
+    }
+
+    /** "3" for 3.00, "122.6" for 122.60. */
+    private static String number(Object value) {
+        return value instanceof java.math.BigDecimal d ? d.stripTrailingZeros().toPlainString() : String.valueOf(value);
     }
 
     // ---- My parcels ----
@@ -341,9 +377,17 @@ public class RulesChatProvider {
                 + names + ".";
     }
 
+    /** The start of the answer to a question SwiftDrop has no data for. It is never sent to Gemini. */
+    static final String NO_DATA = "I don't have that information in SwiftDrop's system, so I can't answer it. For "
+            + "anything else, " + Words.CONTACT_TEAM + ". ";
+
+    /**
+     * A question no tool has data for: a fixed answer that says so and what the assistant can do. It has no cards,
+     * so it is never rewritten by Gemini, which would otherwise answer from what it knows itself.
+     */
     private static String help(Caller caller, String latest) {
         String greeting = latest.trim().matches("(?i)(hi|hello|hey|good (morning|afternoon|evening))\\W*")
-                ? "Hello! " : "I can only help with SwiftDrop deliveries. ";
+                ? "Hello! " : NO_DATA;
         if (isAdmin(caller)) {
             return greeting + "I can give you daily, weekly and monthly service reports, figures such as parcels "
                     + "delivered, the success rate, the busiest day, top districts and failure reasons, how many "
@@ -351,9 +395,13 @@ public class RulesChatProvider {
                     + "branch. I can also track a parcel and estimate a price. Try: \"How many parcels are out for "
                     + "delivery?\", \"Success rate this month\" or \"Show failed parcels going to Kandy\".";
         }
-        return greeting + "I can track a parcel from its tracking number, estimate a delivery price, list the "
-                + "districts we deliver to" + (caller.ownsParcels() ? ", and show your parcels" : "")
-                + ". Try: \"How much to send 2 kg from Colombo to Kandy?\"";
+        List<String> can = new ArrayList<>(List.of("track a parcel from its tracking number",
+                "estimate a delivery price", "list the districts we deliver to"));
+        if (caller.ownsParcels()) {
+            can.add("show your parcels");
+        }
+        return greeting + "I can " + joinWithAnd(can)
+                + ". Try: \"How much to send 2 kg from Colombo to Kandy, 30 x 20 x 10 cm?\"";
     }
 
     static String joinWithAnd(List<String> parts) {

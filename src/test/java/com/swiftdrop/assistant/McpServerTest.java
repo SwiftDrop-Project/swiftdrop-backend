@@ -71,12 +71,21 @@ class McpServerTest extends IntegrationTest {
     @Test
     void callsATool() throws Exception {
         rpc(3, "tools/call", Map.of("name", "estimate_price", "arguments", Map.of(
-                "pickupDistrict", "COLOMBO", "dropOffDistrict", "KANDY", "weightKg", 2)))
+                "pickupDistrict", "COLOMBO", "dropOffDistrict", "KANDY", "weightKg", 2,
+                "lengthCm", 30, "widthCm", 20, "heightCm", 10)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.result.isError").value(false))
                 .andExpect(jsonPath("$.result.content[0].type").value("text"))
-                .andExpect(jsonPath("$.result.structuredContent.status").value("PROVISIONAL"))
+                .andExpect(jsonPath("$.result.structuredContent.status").value("COMPLETE"))
+                .andExpect(jsonPath("$.result.structuredContent.vehicle").exists())
                 .andExpect(jsonPath("$.result.structuredContent.currency").value("LKR"));
+
+        // Without the size there is no vehicle fee, so the tool asks for it.
+        rpc(7, "tools/call", Map.of("name", "estimate_price", "arguments", Map.of(
+                "pickupDistrict", "COLOMBO", "dropOffDistrict", "KANDY", "weightKg", 2)))
+                .andExpect(jsonPath("$.result.isError").value(true))
+                .andExpect(jsonPath("$.result.structuredContent.error")
+                        .value(org.hamcrest.Matchers.containsString("size")));
 
         rpc(4, "tools/call", Map.of("name", "track_parcel", "arguments", Map.of("trackingNumber", "SD2611999999")))
                 .andExpect(jsonPath("$.result.isError").value(false))

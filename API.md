@@ -1757,7 +1757,7 @@ logged-in customer or merchant, their own parcels. It never sees names, phone nu
 | Step | Who | Needs | Uses |
 |---|---|---|---|
 | `track_parcel` | anyone | `trackingNumber` (spaces and case ignored) | `GET /track/{trackingNumber}` (counts against its 30/minute limit) |
-| `estimate_price` | anyone | `pickupDistrict`, `dropOffDistrict` (district codes), `weightKg` (0.01-50), optional `lengthCm`, `widthCm`, `heightCm` (1-300, all three or none) | `POST /pricing/estimate` |
+| `estimate_price` | anyone | `pickupDistrict`, `dropOffDistrict` (district codes), `weightKg` (0.01-50), `lengthCm`, `widthCm`, `heightCm` (1-300; the size picks the vehicle, whose fee is added for the pickup and the delivery, so the assistant asks for it) | `POST /pricing/estimate` |
 | `list_districts` | anyone | none | `GET /meta/districts` |
 | `my_parcels` | logged-in CUSTOMER or MERCHANT (`/assistant/chat/me`) | optional `status` | `GET /tracking/mine` (their latest 10) |
 | `service_report` | logged-in ADMIN (`/assistant/chat/me`); never on MCP | `period` (`DAILY`, `WEEKLY`, `MONTHLY`), optional `date` (yyyy-MM-dd, any day in the period; today when left out) | `DeliveryApi.stats` (booked, delivered, failed per day; the same figures as the admin dashboard), `DeliveryApi.countByStatus`, `TrackingApi.breakdown` (districts and failure reasons from `tracking.parcel_index`, like `/admin/tracking/parcels`), `IdentityApi.getUserRoleCounts` |
@@ -1834,7 +1834,7 @@ conversation and sends it each time, oldest first; the last message must be the 
 | `TRACKING` | `trackingNumber`, `status`, `statusText`, `from`, `to` (town, district), `currentBranch`, `lastUpdate` (text), `updatedAt` |
 | `PARCEL_LIST` | `parcels`: up to 10 rows shaped like `TRACKING`; an admin's search adds `total` (how many match) and `filters` (in words) |
 | `FACTS` | `title`, `subtitle` (the period, or null for figures of right now), `facts`: `label`, `value` (text) |
-| `PRICE` | as above; `status` is `COMPLETE`, `PROVISIONAL` (no size given: pickup and delivery charges not included) or `MANUAL_QUOTE` (`total` null) |
+| `PRICE` | as above, plus `vehicleText` ("bike", "tuk-tuk", "lorry") and `sizeCm` ("30 x 20 x 10"); `status` is `COMPLETE` (with the `PICKUP` and `DELIVERY` lines of the vehicle) or `MANUAL_QUOTE` (`total` null) |
 | `REPORT` | `period`, `title`, `from`, `to`, `countedTo`, `partial`, `rangeText`, `booked`, `delivered`, `failed`, `successRate` (delivered / (delivered + failed) in %, one decimal, null when none finished), `previous` (`from`, `to`, `text`, the same four figures), `changes` (`booked`, `delivered`, `failed`: `difference`, `percent` or null), `perDay` and `busiestDay` (weekly and monthly only), `topPickupDistricts` / `topDropOffDistricts` (top 5 `district`, `count`), `failureReasons` (`reason`, `count`; parcels that failed in the period and are still FAILED), `statusNow` (`status`, `label`, `count`, all parcels now), `accountsNow` (`total`, `customers`, `merchants`, `couriers`, `dispatchers`, `pendingMerchants`) |
 
 Rules and errors:
@@ -1868,3 +1868,176 @@ result with `isError: true`. `GET /mcp` is `405` (no server-sent events).
 { "jsonrpc": "2.0", "id": 3, "method": "tools/call",
   "params": { "name": "track_parcel", "arguments": { "trackingNumber": "SD2611004817" } } }
 ```
+## Admin Settings (ADMIN only)
+
+All Admin Settings endpoints require an authenticated user with the `ADMIN` role.
+
+**Base path:** `/api/v1/admin/settings`
+
+Requests that update settings use `Content-Type: application/json`. Successful PUT requests return the saved settings object. Settings are maintained as singleton records with ID `1`.
+
+### Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/company` | Retrieve company details |
+| PUT | `/company` | Update company details |
+| GET | `/delivery` | Retrieve delivery operations settings |
+| PUT | `/delivery` | Update delivery operations settings |
+| GET | `/notifications` | Retrieve notification preferences |
+| PUT | `/notifications` | Update notification preferences |
+| GET | `/system-info` | Retrieve system information and infrastructure status |
+
+### Company Details
+
+**GET `/admin/settings/company`**
+
+Returns HTTP `200` with company details when configured, or HTTP `404` when no settings record exists.
+
+**PUT `/admin/settings/company`**
+
+Example request:
+
+```json
+{
+  "companyName": "SwiftDrop",
+  "supportEmail": "support@example.com",
+  "supportPhone": "0771234567",
+  "headOfficeAddress": "Colombo, Sri Lanka",
+  "registrationNumber": "PV123456"
+}
+```
+
+Validation:
+- `companyName`, `supportEmail`, `supportPhone` and `headOfficeAddress` must not be blank.
+- `supportEmail` must be a valid email address.
+- `supportPhone` must match the Sri Lankan mobile-number pattern.
+- `registrationNumber` is optional.
+- All string fields are trimmed before saving, including the optional registration number when supplied.
+
+A successful PUT returns HTTP `200` with the saved company details.
+
+### Delivery Operations
+
+**GET `/admin/settings/delivery`**
+
+Returns HTTP `200` with delivery settings when configured, or HTTP `404` if no record exists.
+
+**PUT `/admin/settings/delivery`**
+
+Example request:
+
+```json
+{
+  "pickupStart": "08:00:00",
+  "pickupEnd": "18:00:00",
+  "sameDayCutoff": "14:00:00",
+  "operatingDays": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+  "maxWeightKg": 25.0,
+  "maxLengthCm": 100.0,
+  "maxWidthCm": 80.0,
+  "maxHeightCm": 80.0,
+  "failedAttempts": 3
+}
+```
+
+Validation:
+- Pickup start, pickup end, same-day cutoff and operating days are required.
+- Pickup end must be later than pickup start.
+- Same-day cutoff must be within the pickup hours, inclusive of the boundaries.
+- At least one operating day must be selected.
+- Operating days must use full English weekday names without duplicates.
+- Supplied weight and dimension limits must be at least `0.01`.
+- Failed attempts must be between `1` and `5`.
+
+Operating days are stored as comma-separated text and returned as a JSON array.
+
+A successful PUT returns HTTP `200` with the saved delivery settings.
+
+**Validation fix dependency:** The delivery service's business-rule errors are mapped to HTTP `400 VALIDATION_FAILED` by the changes proposed in PR #46. Until that PR is merged, some business-rule errors on `dev` may return HTTP `500`.
+
+### Notification Settings
+
+**GET `/admin/settings/notifications`**
+
+Returns HTTP `200` with notification settings when configured, or HTTP `404` when no record exists.
+
+**PUT `/admin/settings/notifications`**
+
+Example request:
+
+```json
+{
+  "parcelStatusEmails": true,
+  "merchantDecisionEmails": true,
+  "senderName": "SwiftDrop"
+}
+```
+
+Validation:
+- Both email preference fields are required Boolean values.
+- `senderName` must not be blank.
+- `senderName` must not exceed 100 characters.
+- The sender name is trimmed before saving.
+
+A successful PUT returns HTTP `200` with the saved notification settings.
+
+**Implementation note:** These endpoints store and retrieve preferences. Enforcement of the toggles by individual notification workers must be verified separately; saving a preference does not itself guarantee that every email sender honors it.
+
+### System Information
+
+**GET `/admin/settings/system-info`**
+
+Returns HTTP `200` with a read-only snapshot of application and infrastructure information.
+
+Example response (illustrative values):
+
+```json
+{
+  "applicationVersion": "0.0.1-SNAPSHOT",
+  "environment": "default",
+  "databaseStatus": "Connected",
+  "rabbitMqStatus": "Disconnected",
+  "outboxRelayStatus": "Disabled"
+}
+```
+
+Fields:
+- `applicationVersion`: configured application version, defaulting to `0.0.1-SNAPSHOT`.
+- `environment`: active Spring profiles joined by commas, or `default`.
+- `databaseStatus`: `Connected`, `Disconnected` or `Not available`.
+- `rabbitMqStatus`: `Connected`, `Disconnected` or `Not available`.
+- `outboxRelayStatus`: `Enabled` or `Disabled`, based on the relay configuration flag.
+
+Health status values depend on the registered Spring Boot health contributors. Missing contributors are reported as `Not available`; health-check failures are reported as `Disconnected`.
+
+This endpoint does not change application configuration or enable infrastructure components.
+
+### Authentication and Error Responses
+
+| HTTP | Code | Meaning |
+|---|---|---|
+| 400 | `VALIDATION_FAILED` | Invalid request data |
+| 401 | `UNAUTHENTICATED` | Missing, expired or invalid authentication session |
+| 403 | `FORBIDDEN` | Authenticated user does not have the ADMIN role |
+| 404 | See note below | Settings have not yet been configured |
+| 500 | `INTERNAL_ERROR` | Unexpected server error |
+
+Example validation error:
+
+```json
+{
+  "status": 400,
+  "code": "VALIDATION_FAILED",
+  "message": "Some fields need attention.",
+  "fieldErrors": {
+    "pickupEnd": "Pickup end time must be after start time."
+  }
+}
+```
+
+The field-specific example above depends on PR #46.
+
+**Known behavior:** The GET endpoints for company, delivery and notification settings use `ResponseEntity.of(Optional)`. If no record exists, they return HTTP `404` with an empty body rather than the standard API error JSON. Frontend clients should handle this case.
+
+For shared error conventions, refer to the Error section near the beginning of this document.

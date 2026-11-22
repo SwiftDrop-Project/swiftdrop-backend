@@ -42,9 +42,10 @@ class EstimatePriceTool implements AssistantTool {
     @Override
     public String description() {
         return "Estimate the SwiftDrop delivery fee in Sri Lankan rupees (LKR) for a parcel between two Sri Lankan "
-                + "districts. Needs the pickup district, the drop-off district and the weight in kg (0.01-50). The "
-                + "length, width and height in cm are optional: without them the estimate leaves out the pickup and "
-                + "delivery charges (status PROVISIONAL). Never guess a district the user hasn't given: ask.";
+                + "districts. Needs the pickup district, the drop-off district, the weight in kg (0.01-50) and the packed "
+                + "length, width and height in cm: the size and weight pick the vehicle (bike, tuk-tuk or lorry) "
+                + "whose fee is added for the pickup and the delivery. Never guess a district or a size the user "
+                + "hasn't given: ask.";
     }
 
     @Override
@@ -56,13 +57,13 @@ class EstimatePriceTool implements AssistantTool {
         properties.put("dropOffDistrict", withDescription(district, "District the parcel is delivered to"));
         properties.put("weightKg", Map.of("type", "number", "minimum", 0.01, "maximum", 50,
                 "description", "Weight in kg including packaging"));
-        properties.put("lengthCm", withDescription(centimetres, "Packed length in cm (optional)"));
-        properties.put("widthCm", withDescription(centimetres, "Packed width in cm (optional)"));
-        properties.put("heightCm", withDescription(centimetres, "Packed height in cm (optional)"));
+        properties.put("lengthCm", withDescription(centimetres, "Packed length in cm"));
+        properties.put("widthCm", withDescription(centimetres, "Packed width in cm"));
+        properties.put("heightCm", withDescription(centimetres, "Packed height in cm"));
         return Map.of(
                 "type", "object",
                 "properties", properties,
-                "required", List.of("pickupDistrict", "dropOffDistrict", "weightKg"));
+                "required", List.of("pickupDistrict", "dropOffDistrict", "weightKg", "lengthCm", "widthCm", "heightCm"));
     }
 
     private static Map<String, Object> withDescription(Map<String, Object> schema, String description) {
@@ -96,9 +97,9 @@ class EstimatePriceTool implements AssistantTool {
         Integer width = centimetres(arguments, "widthCm");
         Integer height = centimetres(arguments, "heightCm");
         long given = java.util.stream.Stream.of(length, width, height).filter(java.util.Objects::nonNull).count();
-        if (given != 0 && given != 3) {
-            return ToolResult.failed("Ask for all three measurements (length, width and height in whole cm), or "
-                    + "estimate without them.");
+        if (given != 3) {
+            // Without the size there is no vehicle, so the pickup and delivery fees would be missing.
+            return ToolResult.failed("Ask the user for the parcel's size: length, width and height in whole cm.");
         }
         if (Boolean.TRUE.equals(outOfRange(length, width, height))) {
             return ToolResult.failed("Measurements must be whole centimetres from 1 to 300.");
@@ -123,6 +124,8 @@ class EstimatePriceTool implements AssistantTool {
         data.put("totalText", quote.total() == null ? null : Words.rupees(quote.total()));
         data.put("billableWeightKg", quote.billableWeightKg());
         data.put("vehicle", quote.vehicle() == null ? null : quote.vehicle().name());
+        data.put("vehicleText", quote.vehicle() == null ? null : Words.vehicle(quote.vehicle()));
+        data.put("sizeCm", length + " x " + width + " x " + height);
         data.put("distanceKm", quote.distanceKm());
         data.put("lines", quote.lines().stream()
                 .map(line -> Map.of("component", line.component().name(), "amount", line.amount()))
