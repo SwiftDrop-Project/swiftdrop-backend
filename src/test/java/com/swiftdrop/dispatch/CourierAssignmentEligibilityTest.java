@@ -4,6 +4,7 @@ import com.swiftdrop.IntegrationTest;
 import com.swiftdrop.delivery.ChangeStatusCommand;
 import com.swiftdrop.delivery.DeliveryApi;
 import com.swiftdrop.delivery.ParcelStatus;
+import com.swiftdrop.delivery.ProofPhotoRef;
 import com.swiftdrop.identity.IdentityApi;
 import com.swiftdrop.shared.error.BusinessRuleException;
 import com.swiftdrop.shared.error.ErrorCode;
@@ -38,6 +39,14 @@ class CourierAssignmentEligibilityTest extends IntegrationTest {
 
     @Autowired
     DeliveryApi deliveries;
+
+    /** A small, real JPEG: the proof photo checks read the image. */
+    private static byte[] slipPhoto() throws java.io.IOException {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        javax.imageio.ImageIO.write(new java.awt.image.BufferedImage(40, 30,
+                java.awt.image.BufferedImage.TYPE_INT_RGB), "jpg", out);
+        return out.toByteArray();
+    }
 
     private String createCourier(Cookie admin, String branch, String vehicleType) throws Exception {
         String body = postJson("/api/v1/admin/couriers", Map.of(
@@ -175,8 +184,11 @@ class CourierAssignmentEligibilityTest extends IntegrationTest {
                 parcelUuid, ParcelStatus.AT_BRANCH, courierUuid, "COURIER", null, null, null, null, District.COLOMBO));
         deliveries.changeStatus(new ChangeStatusCommand(
                 parcelUuid, ParcelStatus.OUT_FOR_DELIVERY, courierUuid, "COURIER", null, null, null, null));
+        // DELIVERED needs a proof-of-delivery photo uploaded by the courier who delivers it.
+        ProofPhotoRef proof = deliveries.storeProofPhoto(parcelUuid, courierUuid, "image/jpeg", slipPhoto());
         deliveries.changeStatus(new ChangeStatusCommand(
-                parcelUuid, ParcelStatus.DELIVERED, courierUuid, "COURIER", null, null, "Kamal Perera", null));
+                parcelUuid, ParcelStatus.DELIVERED, courierUuid, "COURIER", null, null, "Kamal Perera",
+                proof.photoId()));
 
         // Finished (DELIVERED) parcel is rejected as 409 PARCEL_NOT_ASSIGNABLE even for an active courier
         postJson("/api/v1/dispatch/parcels/" + parcelId + "/assign",
