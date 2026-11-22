@@ -5,6 +5,7 @@ import com.swiftdrop.delivery.CreateDeliveryCommand;
 import com.swiftdrop.delivery.DeliveryContact;
 import com.swiftdrop.delivery.DeliverySnapshot;
 import com.swiftdrop.delivery.ParcelStatus;
+import com.swiftdrop.delivery.PaymentMethod;
 import com.swiftdrop.shared.error.BusinessRuleException;
 import com.swiftdrop.shared.error.ErrorCode;
 import com.swiftdrop.shared.reference.District;
@@ -232,6 +233,20 @@ class ParcelTest {
         assertThat(snapshot.currency()).isEqualTo("LKR");
         assertThat(snapshot.version()).isZero();
         assertThat(snapshot.currentBranch()).isNull();
+    }
+
+    @Test
+    void theParcelKeepsHowTheFeeIsPaid() {
+        var command = new CreateDeliveryCommand(CUSTOMER_ID, null, null, PICKUP, RECIPIENT, new BigDecimal("2.00"),
+                null, null, null, PaymentMethod.AT_PICKUP);
+
+        Parcel parcel = Parcel.create(UUID.randomUUID(), "SD2611004817", command, new BigDecimal("450.00"), "LKR",
+                BOOKED);
+
+        assertThat(parcel.getPaymentMethod()).isEqualTo(PaymentMethod.AT_PICKUP);
+        assertThat(parcel.toSnapshot().paymentMethod()).isEqualTo(PaymentMethod.AT_PICKUP);
+        // a parcel booked without one (before payment methods) has none
+        assertThat(customerParcel().toSnapshot().paymentMethod()).isNull();
     }
 
     private static Parcel customerParcel() {

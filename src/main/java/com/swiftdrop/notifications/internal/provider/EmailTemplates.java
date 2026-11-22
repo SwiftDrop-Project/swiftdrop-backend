@@ -28,7 +28,9 @@ public class EmailTemplates {
     private static final Map<AccountEmail.Type, String> SUBJECTS = Map.of(
             AccountEmail.Type.EMAIL_VERIFICATION, "Your SwiftDrop verification code",
             AccountEmail.Type.PASSWORD_RESET, "Your SwiftDrop password reset code",
-            AccountEmail.Type.PASSWORD_CHANGED, "Your SwiftDrop password was changed");
+            AccountEmail.Type.PASSWORD_CHANGED, "Your SwiftDrop password was changed",
+            AccountEmail.Type.MERCHANT_APPROVED, "Your SwiftDrop merchant account is approved",
+            AccountEmail.Type.MERCHANT_REJECTED, "Your SwiftDrop merchant application");
 
     private final Map<AccountEmail.Type, String> html = new EnumMap<>(AccountEmail.Type.class);
     private final Map<AccountEmail.Type, String> text = new EnumMap<>(AccountEmail.Type.class);

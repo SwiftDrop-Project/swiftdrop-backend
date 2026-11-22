@@ -9,6 +9,7 @@ import com.swiftdrop.dispatch.ItemOutcome;
 import com.swiftdrop.dispatch.TaskProblem;
 import com.swiftdrop.shared.reference.District;
 import java.time.Instant;
+import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 
@@ -153,5 +154,32 @@ public record CourierTask(
     /** The branch an AT_BRANCH change goes to; null for every other status. */
     District branchFor(ParcelStatus target) {
         return target == ParcelStatus.AT_BRANCH ? handOverBranch() : null;
+    }
+
+    /**
+     * Newest first among closed steps: by when the step was completed (the item's close time; for a step closed only
+     * because the dispatcher closed its task, its last update), then by when the task was assigned, then by task id,
+     * so the choice never depends on the order the tasks were read.
+     */
+    private static final Comparator<CourierTask> NEWEST = Comparator
+            .comparing(CourierTask::finishedAt, Comparator.nullsFirst(Comparator.naturalOrder()))
+            .thenComparing(CourierTask::assignedAt, Comparator.nullsFirst(Comparator.naturalOrder()))
+            .thenComparing(task -> task.assignmentId().toString());
+
+    private Instant finishedAt() {
+        return completedAt != null ? completedAt : updatedAt;
+    }
+
+    /**
+     * Which of two steps for the same parcel the courier's Today list shows (one card per parcel): the open step if
+     * exactly one is open (the courier still has work on it); otherwise the most recently finished one, e.g. the
+     * delivery rather than the pickup handover of a parcel the same courier collected and delivered today. The result
+     * is the same whichever step comes first.
+     */
+    static CourierTask forToday(CourierTask one, CourierTask other) {
+        if (one.closed() != other.closed()) {
+            return one.closed() ? other : one;
+        }
+        return NEWEST.compare(one, other) >= 0 ? one : other;
     }
 }

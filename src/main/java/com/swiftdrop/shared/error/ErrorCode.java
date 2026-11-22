@@ -74,6 +74,9 @@ public enum ErrorCode {
          */
         WEBHOOK_URL_IN_USE(HttpStatus.CONFLICT,
                         "You already have a webhook for this address. Add the events to it instead."),
+        /** Webhooks: someone else changed the subscription at the same moment. */
+        WEBHOOK_CHANGED(HttpStatus.CONFLICT,
+                        "This webhook was just changed somewhere else. Refresh and try again."),
         CANNOT_CHANGE_OWN_ACCOUNT(HttpStatus.CONFLICT, "You can't block your own account."),
         ACCOUNT_NOT_ACTIVE(HttpStatus.CONFLICT,
                         "Only active accounts can be blocked. Refresh to see the account's latest status."),

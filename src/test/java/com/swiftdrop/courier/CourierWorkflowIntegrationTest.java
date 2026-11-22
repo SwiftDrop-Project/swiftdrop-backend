@@ -116,7 +116,7 @@ class CourierWorkflowIntegrationTest extends RealWorkflowTest {
                 .andExpect(jsonPath("$.codAmount").value(2500.00))
                 .andExpect(jsonPath("$.canMarkUnableToCollect").value(false));
         assertThat(parcel(parcel).status()).isEqualTo(ParcelStatus.OUT_FOR_DELIVERY);
-        changeStatus(deliveryCourier, parcel, Map.of("status", "DELIVERED", "recipientName", "Kamala Silva"))
+        deliver(deliveryCourier, parcel, "Kamala Silva")
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.completed").value(true))
                 .andExpect(jsonPath("$.task.status").value("COMPLETED"))
@@ -239,7 +239,8 @@ class CourierWorkflowIntegrationTest extends RealWorkflowTest {
         assertThat(parcel(parcel).failureReason()).isEqualTo(FailureReason.RECIPIENT_UNAVAILABLE);
         // Not in the history as a delivery yet (only its earlier pickup, which is completed).
         assertThat(completedStepTypes(courier, parcel)).containsExactly("PICKUP");
-        changeStatus(courier, parcel, Map.of("status", "DELIVERED", "recipientName", "Kamala Silva"))
+        changeStatus(courier, parcel, Map.of("status", "DELIVERED", "recipientName", "Kamala Silva",
+                "proofPhotoId", UUID.randomUUID().toString()))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("TASK_STEP_NOT_ALLOWED"));
         // Returning needs who received it at the branch.
@@ -261,7 +262,7 @@ class CourierWorkflowIntegrationTest extends RealWorkflowTest {
         // Second attempt on a new task.
         deliveryTask(courier, "MATARA", parcel);
         moveTo(courier, parcel, "OUT_FOR_DELIVERY").andExpect(status().isOk());
-        changeStatus(courier, parcel, Map.of("status", "DELIVERED", "recipientName", "Kamala Silva"))
+        deliver(courier, parcel, "Kamala Silva")
                 .andExpect(status().isOk());
         assertThat(parcel(parcel).status()).isEqualTo(ParcelStatus.DELIVERED);
         assertThat(deliveries.history(parcel)).extracting(ParcelStatusEntry::status, ParcelStatusEntry::failureReason)
@@ -447,7 +448,8 @@ class CourierWorkflowIntegrationTest extends RealWorkflowTest {
         UUID task = pickupTask(courier, "GAMPAHA", collected, pending);
 
         // A step that doesn't follow (DELIVERED on a pickup).
-        changeStatus(courier, pending, Map.of("status", "DELIVERED", "recipientName", "Kamala Silva"))
+        changeStatus(courier, pending, Map.of("status", "DELIVERED", "recipientName", "Kamala Silva",
+                "proofPhotoId", UUID.randomUUID().toString()))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.code").value("TASK_STEP_NOT_ALLOWED"));
         assertThat(taskStatusRow(task)).isEqualTo("ASSIGNED");

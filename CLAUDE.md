@@ -16,7 +16,7 @@ Every direct sub-package of `com.swiftdrop` is a module. `SwiftdropBackendApplic
 | `identity` | IdentityApi, UserSummary, CourierSummary, UserRoleCounts, Role, UserStatus, MerchantProfiles (implemented by merchants) | `identity` | Viduranga |
 | `merchants` | MerchantApi, MerchantSummary, ApprovalStatus | `merchants` | Viduranga |
 | `pricing` | PricingApi, QuoteRequest, PriceQuote, Vehicle | `pricing` (rate_cards, vehicle_rates, district_locations) | TBD (fee estimate: Pasindu) |
-| `delivery` | DeliveryApi, DeliveryOutboxApi, OutboxMessage, DeliverySnapshot, DeliveryContact, CreateDeliveryCommand, ChangeStatusCommand, ParcelStatus (incl. `AT_BRANCH`; branch = `District`), ParcelStatusEntry, ParcelStatusChanged, FailureReason, ProofPhoto, ProofPhotoRef, DeliveryStats | `delivery` (incl. `outbox_events`) | Pasindu |
+| `delivery` | DeliveryApi, DeliveryOutboxApi, OutboxMessage, DeliverySnapshot, DeliveryContact, CreateDeliveryCommand, ChangeStatusCommand, ParcelStatus (incl. `AT_BRANCH`; branch = `District`), ParcelStatusEntry, ParcelStatusChanged, FailureReason, ProofPhoto, ProofPhotoRef, DeliveryStats, PaymentMethod (how the fee is paid; not the COD) | `delivery` (incl. `outbox_events`) | Pasindu |
 | `dispatch` | AssignmentApi (courier-facing), AssignmentView, AssignmentItemView, RecordOutcomeCommand, AssignmentType, AssignmentStatus, ItemOutcome, TaskProblem | `dispatch` (`courier_assignments`, `assignment_items`, `pickup_queue`) | D.M.A.I. Disanayaka (WP8) |
 | `reporting` | - | none | TBD |
 | `tracking` | TrackingApi, ParcelTracking, ParcelBreakdown (read-only lookups for the assistant; plus endpoints, WebSocket/STOMP and a RabbitMQ listener) | `tracking` (`parcel_index`) | D.M.A.I. Disanayaka (WP8) |
@@ -48,12 +48,12 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
 - Controllers never return entities. Map to DTOs in `internal/dto`.
 - A module's public URLs: implement `shared.web.PublicEndpoints` as a bean in the module. Never edit identity's SecurityConfig for that.
 - Unbuilt modules have placeholder contracts ("Contract owned by <module> - extend in Phase 0"); the owner extends them.
-- Current dependencies: identity -> notifications, shared; merchants -> identity, shared; delivery -> pricing, shared;
+- Current dependencies: identity -> notifications, shared; merchants -> identity, notifications, shared; delivery -> pricing, shared;
   dispatch -> delivery, identity, shared; tracking -> delivery, shared; courier -> delivery, dispatch, shared;
   pricing -> shared; infrastructure -> shared; webhooks -> delivery, merchants, shared;
   assistant -> tracking, pricing, delivery, identity, shared. Nothing depends on courier, assistant or
   webhooks.
-- webhooks (contract in API.md "Webhooks", being built): reads `ParcelStatusChanged` from `webhooks.q` (declared by
+- webhooks (contract in API.md "Webhooks", built): reads `ParcelStatusChanged` from `webhooks.q` (declared by
   infrastructure; never declare it again with other arguments), stores one delivery row per event and subscription,
   and a scheduled worker sends them. Retries live in the database (`webhooks.deliveries`), not in RabbitMQ queues.
   Signing secrets are stored encrypted (AES-GCM), never hashed and never logged. Merchants get a public payload,
@@ -63,7 +63,10 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
   (callback URL + signing secret + one or more event types), never one per event: merchants select several events on
   one subscription and use more subscriptions only for different systems (at most 5 active per merchant). A callback
   URL may be used by only one active subscription per merchant (`WEBHOOK_URL_IN_USE`, compared with
-  `CallbackDestination`; other merchants may use the same URL).
+  `CallbackDestination`; other merchants may use the same URL). A test ping is tried once. Merchants' "Send test" and
+  "Retry" are limited (`swiftdrop.webhooks.limits`): a 10 s cooldown per subscription / per delivery, kept in the
+  database, and 30 per merchant per minute in memory (`WebhookActionLimiter`); over it: 429 with `Retry-After`
+  (`shared.error.TooManyRequestsException`). Admin retries are not limited.
 - dispatch: `AssignmentApi` is implemented; dispatcher endpoints are under `/dispatch` (DISPATCHER and ADMIN, API.md
   "Dispatch"). Delivery has no "waiting for pickup" query, so dispatch keeps `dispatch.pickup_queue` from
   `ParcelStatusChanged` (RabbitMQ queue `dispatch.q`); it fills only while the outbox relay runs

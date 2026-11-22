@@ -10,6 +10,7 @@ import com.swiftdrop.delivery.ParcelSize;
 import com.swiftdrop.delivery.ParcelStatus;
 import com.swiftdrop.delivery.ParcelStatusChanged;
 import com.swiftdrop.delivery.ParcelStatusEntry;
+import com.swiftdrop.delivery.PaymentMethod;
 import com.swiftdrop.delivery.internal.domain.Parcel;
 import com.swiftdrop.delivery.internal.domain.ParcelPrice;
 import com.swiftdrop.delivery.internal.domain.ParcelStatusHistory;
@@ -55,6 +56,7 @@ import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException
 import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.entry;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
@@ -78,8 +80,9 @@ class DeliveryServiceTest {
     private final OutboxWriter outbox = mock(OutboxWriter.class);
     private final FeeQuoter feeQuoter = mock(FeeQuoter.class);
     private final TrackingNumberGenerator trackingNumbers = mock(TrackingNumberGenerator.class);
+    private final ProofPhotos proofPhotos = mock(ProofPhotos.class);
     private final DeliveryService service = new DeliveryService(parcels, statusHistory, outbox, feeQuoter,
-            trackingNumbers, Clock.fixed(NOW, ZoneOffset.UTC));
+            trackingNumbers, proofPhotos, Clock.fixed(NOW, ZoneOffset.UTC));
 
     @BeforeEach
     void aFeeAndAFreeTrackingNumber() {
@@ -126,7 +129,7 @@ class DeliveryServiceTest {
         when(feeQuoter.quote(any())).thenReturn(new ParcelPrice(new BigDecimal("1295.20"), "LKR", "BIKE", 3, 2,
                 "[{\"component\":\"BASE\",\"amount\":350.00}]"));
         var booking = new CreateDeliveryCommand(UUID.randomUUID(), null, null, PICKUP, RECIPIENT,
-                new BigDecimal("1.80"), null, null, new ParcelSize(40, 30, 12, false));
+                new BigDecimal("1.80"), null, null, new ParcelSize(40, 30, 12, false), PaymentMethod.AT_PICKUP);
 
         DeliverySnapshot snapshot = service.create(booking);
 
@@ -138,6 +141,50 @@ class DeliveryServiceTest {
         ArgumentCaptor<Parcel> parcel = ArgumentCaptor.forClass(Parcel.class);
         verify(parcels).save(parcel.capture());
         assertThat(parcel.getValue().getFeeBreakdown()).contains("\"BASE\"");
+    }
+
+    @Test
+    void theParcelKeepsHowTheFeeIsPaid() {
+        var booking = new CreateDeliveryCommand(UUID.randomUUID(), null, null, PICKUP, RECIPIENT,
+                new BigDecimal("1.80"), null, null, new ParcelSize(40, 30, 12, false), PaymentMethod.AT_DROP_OFF);
+
+        DeliverySnapshot snapshot = service.create(booking);
+
+        assertThat(snapshot.paymentMethod()).isEqualTo(PaymentMethod.AT_DROP_OFF);
+        ArgumentCaptor<Parcel> parcel = ArgumentCaptor.forClass(Parcel.class);
+        verify(parcels).save(parcel.capture());
+        assertThat(parcel.getValue().getPaymentMethod()).isEqualTo(PaymentMethod.AT_DROP_OFF);
+    }
+
+    @Test
+    void aNewParcelNeedsAPaymentMethod() {
+        var noPaymentMethod = new CreateDeliveryCommand(UUID.randomUUID(), null, null, PICKUP, RECIPIENT,
+                new BigDecimal("1.80"), null, null, new ParcelSize(40, 30, 12, false));
+
+        assertThatThrownBy(() -> service.create(noPaymentMethod))
+                .isInstanceOfSatisfying(FieldValidationException.class, e -> assertThat(e.fieldErrors())
+                        .containsExactly(entry("paymentMethod", "Choose how the delivery fee will be paid.")));
+
+        verifyNoInteractions(feeQuoter, trackingNumbers);
+        verify(parcels, never()).save(any());
+        verify(statusHistory, never()).save(any());
+        verify(outbox, never()).write(any());
+    }
+
+    @Test
+    void aMerchantRetryReturnsTheFirstParcelBeforeTheCheck() {
+        // A retry creates nothing, so it is answered like before, even from a client that leaves the method out.
+        UUID merchantId = UUID.randomUUID();
+        Parcel first = Parcel.create(UUID.randomUUID(), "SD2611000778", merchantOrder(merchantId, "ORDER-2002"),
+                new BigDecimal("450.00"), "LKR", NOW.minusSeconds(60));
+        when(parcels.findByMerchantIdAndMerchantOrderRef(merchantId, "ORDER-2002")).thenReturn(Optional.of(first));
+        var retryWithout = new CreateDeliveryCommand(null, merchantId, "ORDER-2002", PICKUP, RECIPIENT,
+                new BigDecimal("1.50"), null, null);
+
+        DeliverySnapshot snapshot = service.create(retryWithout);
+
+        assertThat(snapshot.id()).isEqualTo(first.getId());
+        verify(parcels, never()).save(any());
     }
 
     @Test
@@ -457,15 +504,45 @@ class DeliveryServiceTest {
     }
 
     @Test
-    void aDeliveryKeepsTheRecipientName() {
+    void aDeliveryKeepsTheRecipientNameAndAttachesTheProofPhotoInTheSameChange() {
         Parcel parcel = stored(aParcelMovedTo(PICKED_UP, AT_BRANCH, OUT_FOR_DELIVERY));
+        UUID photoId = UUID.randomUUID();
 
         DeliverySnapshot snapshot = service.changeStatus(new ChangeStatusCommand(parcel.getId(), DELIVERED,
-                COURIER_ID, "COURIER", null, null, "Kamala Silva", null));
+                COURIER_ID, "COURIER", null, null, "Kamala Silva", photoId));
 
         assertThat(snapshot.status()).isEqualTo(DELIVERED);
         assertThat(snapshot.proofRecipientName()).isEqualTo("Kamala Silva");
-        assertThat(snapshot.hasProofPhoto()).isFalse();
+        assertThat(snapshot.hasProofPhoto()).isTrue();
+        verify(proofPhotos).attach(parcel.getId(), photoId, COURIER_ID, "COURIER", NOW);
+        assertThat(writtenEvent().toStatus()).isEqualTo(DELIVERED);
+    }
+
+    @Test
+    void deliveredNeedsAProofPhotoWhoeverMakesTheChange() {
+        for (String role : List.of("COURIER", "ADMIN")) {
+            Parcel parcel = stored(aParcelMovedTo(PICKED_UP, AT_BRANCH, OUT_FOR_DELIVERY));
+
+            assertThatThrownBy(() -> service.changeStatus(new ChangeStatusCommand(parcel.getId(), DELIVERED,
+                    COURIER_ID, role, null, null, "Kamala Silva", null)))
+                    .isInstanceOfSatisfying(FieldValidationException.class,
+                            e -> assertThat(e.fieldErrors()).containsOnlyKeys("proofPhotoId"));
+        }
+
+        verifyNothingSaved();
+        verifyNoInteractions(proofPhotos);
+    }
+
+    @Test
+    void aProofPhotoIsOnlyForDelivered() {
+        Parcel parcel = stored(aParcelMovedTo(PICKED_UP, AT_BRANCH, OUT_FOR_DELIVERY));
+
+        assertThatThrownBy(() -> service.changeStatus(new ChangeStatusCommand(parcel.getId(), FAILED,
+                COURIER_ID, "COURIER", null, FailureReason.RECIPIENT_UNAVAILABLE, null, UUID.randomUUID())))
+                .isInstanceOfSatisfying(FieldValidationException.class,
+                        e -> assertThat(e.fieldErrors()).containsOnlyKeys("proofPhotoId"));
+
+        verifyNothingSaved();
     }
 
     @Test
@@ -514,15 +591,34 @@ class DeliveryServiceTest {
     }
 
     @Test
-    void aProofPhotoIsRefusedUntilPhotosCanBeStored() {
+    void aPhotoThatCantBeAttachedLeavesTheParcelUndelivered() {
         Parcel parcel = stored(aParcelMovedTo(PICKED_UP, AT_BRANCH, OUT_FOR_DELIVERY));
+        UUID someoneElsesPhoto = UUID.randomUUID();
+        org.mockito.Mockito.doThrow(new FieldValidationException("proofPhotoId", "Add the photo again."))
+                .when(proofPhotos).attach(any(), any(), any(), any(), any());
 
         assertThatThrownBy(() -> service.changeStatus(new ChangeStatusCommand(parcel.getId(), DELIVERED,
-                COURIER_ID, "COURIER", null, null, "Kamala Silva", UUID.randomUUID())))
+                COURIER_ID, "COURIER", null, null, "Kamala Silva", someoneElsesPhoto)))
                 .isInstanceOfSatisfying(FieldValidationException.class,
                         e -> assertThat(e.fieldErrors()).containsOnlyKeys("proofPhotoId"));
 
+        // The exception rolls the transaction back in the real service: here nothing reached the repositories.
         verifyNothingSaved();
+    }
+
+    @Test
+    void proofPhotosAreStoredAndReadThroughProofPhotos() {
+        UUID parcelId = UUID.randomUUID();
+        byte[] image = {1, 2, 3};
+        com.swiftdrop.delivery.ProofPhotoRef ref =
+                new com.swiftdrop.delivery.ProofPhotoRef(UUID.randomUUID(), "image/jpeg", 3, NOW);
+        when(proofPhotos.store(parcelId, COURIER_ID, "image/jpeg", image)).thenReturn(ref);
+        when(proofPhotos.findAttached(parcelId))
+                .thenReturn(java.util.Optional.of(new com.swiftdrop.delivery.ProofPhoto("image/jpeg", image)));
+
+        assertThat(service.storeProofPhoto(parcelId, COURIER_ID, "image/jpeg", image)).isEqualTo(ref);
+        assertThat(service.findProofPhoto(parcelId)).get()
+                .extracting(com.swiftdrop.delivery.ProofPhoto::contentType).isEqualTo("image/jpeg");
     }
 
     @Test
@@ -632,13 +728,14 @@ class DeliveryServiceTest {
                 new BigDecimal("450.00"), "LKR", NOW);
     }
 
+    /** No size: the fee quoter is a mock here, so it doesn't need one. */
     private static CreateDeliveryCommand customerBooking(UUID customerId) {
         return new CreateDeliveryCommand(customerId, null, null, PICKUP, RECIPIENT, new BigDecimal("2.00"), null,
-                null);
+                null, null, PaymentMethod.AT_PICKUP);
     }
 
     private static CreateDeliveryCommand merchantOrder(UUID merchantId, String orderRef) {
         return new CreateDeliveryCommand(null, merchantId, orderRef, PICKUP, RECIPIENT, new BigDecimal("1.50"),
-                new BigDecimal("2500.00"), null);
+                new BigDecimal("2500.00"), null, null, PaymentMethod.AT_DROP_OFF);
     }
 }

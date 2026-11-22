@@ -2,6 +2,7 @@ package com.swiftdrop.delivery.internal.dto;
 
 import com.swiftdrop.delivery.CreateDeliveryCommand;
 import com.swiftdrop.delivery.ParcelSize;
+import com.swiftdrop.delivery.PaymentMethod;
 import com.swiftdrop.shared.reference.District;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validation;
@@ -32,9 +33,10 @@ class CreateDeliveryRequestTest {
     @Test
     void eachBrokenRuleNamesItsField() {
         var broken = request(contact("12345"), null, new BigDecimal("0"), new BigDecimal("-5"), "x".repeat(501),
-                0, null, 301, null);
+                0, null, 301, null, null);
 
         assertThat(messagesByField(VALIDATOR.validate(broken)))
+                .containsEntry("paymentMethod", "Choose how the delivery fee will be paid.")
                 .containsEntry("pickup.phone", "Enter a Sri Lankan mobile number, like 077 123 4567.")
                 .containsEntry("recipient", "Enter the recipient's details.")
                 .containsEntry("weightKg", "Enter a weight above 0 kg.")
@@ -73,7 +75,8 @@ class CreateDeliveryRequestTest {
         UUID customerId = UUID.randomUUID();
         var pickup = new ContactRequest("  Nimal Perera ", "077 123 4567", "12 Galle Road", "Colombo 03",
                 District.COLOMBO);
-        var request = request(pickup, contact("0719876543"), new BigDecimal("2.50"), null, "   ", 40, 30, 12, true);
+        var request = request(pickup, contact("0719876543"), new BigDecimal("2.50"), null, "   ", 40, 30, 12, true,
+                PaymentMethod.AT_DROP_OFF);
 
         CreateDeliveryCommand command = request.toCommand(customerId);
 
@@ -84,6 +87,7 @@ class CreateDeliveryRequestTest {
         assertThat(command.recipient().phone()).isEqualTo("+94719876543");
         assertThat(command.weightKg()).isEqualByComparingTo("2.50");
         assertThat(command.size()).isEqualTo(new ParcelSize(40, 30, 12, true));
+        assertThat(command.paymentMethod()).isEqualTo(PaymentMethod.AT_DROP_OFF);
         // blank instructions mean "none"
         assertThat(command.instructions()).isNull();
     }
@@ -96,10 +100,12 @@ class CreateDeliveryRequestTest {
                             "city": "Colombo", "district": "COLOMBO"},
                  "recipient": {"name": "Kamala", "phone": "0719876543", "addressLine": "45 Peradeniya Road",
                                "city": "Kandy", "district": "KANDY"},
-                 "weightKg": 1.8, "lengthCm": 40, "widthCm": 30, "heightCm": 12}""", CreateDeliveryRequest.class);
+                 "weightKg": 1.8, "lengthCm": 40, "widthCm": 30, "heightCm": 12, "paymentMethod": "AT_PICKUP"}""",
+                CreateDeliveryRequest.class);
 
         assertThat(VALIDATOR.validate(request)).isEmpty();
         assertThat(request.toCommand(UUID.randomUUID()).size().keepUpright()).isFalse();
+        assertThat(request.paymentMethod()).isEqualTo(PaymentMethod.AT_PICKUP);
     }
 
     @Test
@@ -114,8 +120,16 @@ class CreateDeliveryRequestTest {
     private static CreateDeliveryRequest request(ContactRequest pickup, ContactRequest recipient, BigDecimal weightKg,
                                                  BigDecimal codAmount, String instructions, Integer lengthCm,
                                                  Integer widthCm, Integer heightCm, Boolean keepUpright) {
+        return request(pickup, recipient, weightKg, codAmount, instructions, lengthCm, widthCm, heightCm, keepUpright,
+                PaymentMethod.AT_PICKUP);
+    }
+
+    private static CreateDeliveryRequest request(ContactRequest pickup, ContactRequest recipient, BigDecimal weightKg,
+                                                 BigDecimal codAmount, String instructions, Integer lengthCm,
+                                                 Integer widthCm, Integer heightCm, Boolean keepUpright,
+                                                 PaymentMethod paymentMethod) {
         return new CreateDeliveryRequest(pickup, recipient, weightKg, codAmount, instructions, lengthCm, widthCm,
-                heightCm, keepUpright);
+                heightCm, keepUpright, paymentMethod);
     }
 
     private static ContactRequest contact(String phone) {

@@ -9,6 +9,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.web.servlet.ResultActions;
 import tools.jackson.databind.JsonNode;
 
@@ -22,6 +23,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -125,6 +127,7 @@ abstract class RealWorkflowTest extends IntegrationTest {
         body.put("lengthCm", 40);
         body.put("widthCm", 30);
         body.put("heightCm", 12);
+        body.put("paymentMethod", "AT_PICKUP");
         body.put("codAmount", new BigDecimal("2500.00"));
         String response = postJson("/api/v1/deliveries", body, customer)
                 .andExpect(status().isCreated())
@@ -210,6 +213,23 @@ abstract class RealWorkflowTest extends IntegrationTest {
 
     protected ResultActions moveTo(StaffCourier courier, UUID parcelId, String status) throws Exception {
         return changeStatus(courier, parcelId, Map.of("status", status));
+    }
+
+    /** Uploads a photo of the signed delivery slip for a parcel the courier is delivering; its proofPhotoId. */
+    protected UUID uploadProof(StaffCourier courier, UUID parcelId) throws Exception {
+        String body = mvc.perform(multipart(COURIER + "/" + parcelId + "/proof")
+                        .file(new MockMultipartFile("file", "slip.jpg", "image/jpeg", CourierApiTest.jpeg()))
+                        .cookie(courier.cookie()))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        return UUID.fromString(json.readTree(body).get("proofPhotoId").asString());
+    }
+
+    /** DELIVERED with the recipient's name and a freshly uploaded proof photo, as the courier screens do it. */
+    protected ResultActions deliver(StaffCourier courier, UUID parcelId, String recipientName) throws Exception {
+        UUID photo = uploadProof(courier, parcelId);
+        return changeStatus(courier, parcelId, Map.of("status", "DELIVERED", "recipientName", recipientName,
+                "proofPhotoId", photo.toString()));
     }
 
     /** Hand over at the task's branch (pickup, transfer) or return a failed delivery to it. */

@@ -6,6 +6,7 @@ import com.swiftdrop.delivery.DeliverySnapshot;
 import com.swiftdrop.delivery.FailureReason;
 import com.swiftdrop.delivery.ParcelSize;
 import com.swiftdrop.delivery.ParcelStatus;
+import com.swiftdrop.delivery.PaymentMethod;
 import com.swiftdrop.shared.error.BusinessRuleException;
 import com.swiftdrop.shared.error.ErrorCode;
 import com.swiftdrop.shared.reference.District;
@@ -122,6 +123,11 @@ public class Parcel {
     @Column(name = "fee_breakdown")
     private String feeBreakdown;
 
+    /** How the fee is paid, fixed at booking; null for parcels booked before payment methods. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "payment_method", length = 20)
+    private PaymentMethod paymentMethod;
+
     @Column(name = "assigned_courier_id")
     private UUID assignedCourierId;
 
@@ -191,6 +197,7 @@ public class Parcel {
         parcel.billableWeightKg = price.billableWeightKg();
         parcel.rateCardVersion = price.rateCardVersion();
         parcel.feeBreakdown = price.breakdownJson();
+        parcel.paymentMethod = command.paymentMethod();
         parcel.createdAt = now;
         parcel.updatedAt = now;
         parcel.statusChangedAt = now;
@@ -248,7 +255,7 @@ public class Parcel {
                 recipient.toContact(), weightKg, codAmount, instructions, assignedCourierId, assignedAt, createdAt,
                 updatedAt, proofRecipientName, proofPhotoId != null, failureReason, merchantOrderRef, feeAmount,
                 currency, version == null ? 0L : version, currentBranch, size(), vehicle, billableWeightKg,
-                rateCardVersion);
+                rateCardVersion, paymentMethod);
     }
 
     /** The measurements, or null for a parcel booked before sizes. */

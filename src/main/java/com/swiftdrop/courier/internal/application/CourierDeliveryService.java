@@ -10,11 +10,15 @@ import com.swiftdrop.delivery.DeliveryApi;
 import com.swiftdrop.delivery.DeliverySnapshot;
 import com.swiftdrop.delivery.FailureReason;
 import com.swiftdrop.delivery.ParcelStatus;
+import com.swiftdrop.delivery.ParcelStatusEntry;
+import com.swiftdrop.delivery.ProofPhoto;
+import com.swiftdrop.delivery.ProofPhotoRef;
 import com.swiftdrop.dispatch.AssignmentApi;
 import com.swiftdrop.dispatch.AssignmentItemView;
 import com.swiftdrop.dispatch.AssignmentStatus;
 import com.swiftdrop.dispatch.AssignmentType;
 import com.swiftdrop.dispatch.AssignmentView;
+import com.swiftdrop.dispatch.ItemOutcome;
 import com.swiftdrop.dispatch.RecordOutcomeCommand;
 import com.swiftdrop.dispatch.TaskProblem;
 import com.swiftdrop.shared.error.ApiException;
@@ -128,8 +132,9 @@ public class CourierDeliveryService {
                     continue;
                 }
                 // A parcel can be in two of the courier's tasks today (handed over at a branch, then given to them
-                // again for the next leg): the open step wins.
-                steps.merge(item.parcelId(), CourierTask.of(task, item), (kept, other) -> kept.closed() ? other : kept);
+                // again for the next leg): the open step wins; if both are finished, the most recently finished one
+                // (e.g. the delivery, not the earlier pickup handover). History keeps one entry per task.
+                steps.merge(item.parcelId(), CourierTask.of(task, item), CourierTask::forToday);
             }
         }
         Map<UUID, DeliverySnapshot> parcels = byId(delivery.findAllById(steps.keySet()));
@@ -152,6 +157,15 @@ public class CourierDeliveryService {
      * pages the closed items here. With a tracking number it reads only that parcel's items.
      */
     public Page<CourierParcel> history(UUID courierId, int page, int size, String trackingNumber) {
+        return history(courierId, page, size, trackingNumber, HistoryFilter.NONE);
+    }
+
+    /**
+     * The history with optional filters ({@link HistoryFilter}: type, outcome, completion days in Sri Lankan time),
+     * applied to all of the courier's finished entries before paging, so pages and totals count only matching entries.
+     */
+    public Page<CourierParcel> history(UUID courierId, int page, int size, String trackingNumber,
+                                       HistoryFilter filter) {
         if (page < 0) {
             throw new FieldValidationException("page", "Use a page number of 0 or more.");
         }
@@ -170,6 +184,9 @@ public class CourierDeliveryService {
             completed = completedSteps(courierId, found.get().id());
         } else {
             completed = completedSteps(courierId, assignments.findOpenForCourier(courierId, Instant.EPOCH));
+        }
+        if (filter != null && !filter.isEmpty()) {
+            completed = completed.stream().filter(filter::matches).toList();
         }
 
         int from = (int) Math.min(request.getOffset(), completed.size());
@@ -190,6 +207,59 @@ public class CourierDeliveryService {
         DeliverySnapshot parcel = delivery.findById(parcelId)
                 .orElseThrow(() -> new NotFoundException(ErrorCode.NOT_FOUND));
         return new ParcelDetail(parcel, delivery.history(parcelId), task);
+    }
+
+    /**
+     * One finished entry of the courier's history, exactly as it was: the parcel's step in that task (not the parcel's
+     * latest one), read-only, with the parcel's status history cut off when that step finished.
+     *
+     * <p>404 (never more detail, so nothing about other tasks leaks) when the task is unknown or not this courier's,
+     * when the parcel isn't in it, or when the step isn't finished yet (an open step is live work: it is read with
+     * {@link #detail}). The step is finished when its item closed (handed over, delivered, returned, not collected, not
+     * taken out) or its task was closed by the dispatcher.
+     *
+     * <p>The history ends at the item's own finish time, not the task's: sibling parcels may finish later. Delivery's
+     * status entries carry no task id, so the history is the parcel's timeline up to that moment (its own step is the
+     * last entry), never anything that happened after it.
+     */
+    public ParcelDetail historyEntry(UUID courierId, UUID parcelId, UUID assignmentId) {
+        AssignmentView task = own(courierId, assignmentId).orElseThrow(() -> new NotFoundException(ErrorCode.NOT_FOUND));
+        AssignmentItemView item = task.items().stream()
+                .filter(candidate -> candidate.parcelId().equals(parcelId))
+                .findFirst()
+                .orElseThrow(() -> new NotFoundException(ErrorCode.NOT_FOUND));
+        CourierTask step = CourierTask.of(task, item);
+        if (!step.closed()) {
+            throw new NotFoundException(ErrorCode.NOT_FOUND);
+        }
+        DeliveryApi delivery = delivery();
+        DeliverySnapshot parcel = delivery.findById(parcelId)
+                .orElseThrow(() -> new NotFoundException(ErrorCode.NOT_FOUND));
+        Instant finishedAt = finishedAt(step, task, item);
+        List<ParcelStatusEntry> history = delivery.history(parcelId).stream()
+                .filter(entry -> !entry.occurredAt().isAfter(finishedAt))
+                .toList();
+        return new ParcelDetail(parcel, history, step);
+    }
+
+    /**
+     * When this parcel's step finished: its item's close time; for a step left open when the dispatcher closed the
+     * task, when the task was cancelled or completed; failing that, the item's last update.
+     */
+    private static Instant finishedAt(CourierTask step, AssignmentView task, AssignmentItemView item) {
+        if (step.completedAt() != null) {
+            return step.completedAt();
+        }
+        if (item.closedAt() != null) {
+            return item.closedAt();
+        }
+        if (task.cancelledAt() != null) {
+            return task.cancelledAt();
+        }
+        if (task.completedAt() != null) {
+            return task.completedAt();
+        }
+        return item.updatedAt();
     }
 
     // ---- Writes ----
@@ -216,8 +286,11 @@ public class CourierDeliveryService {
         }
         DeliverySnapshot updated;
         try {
+            // DELIVERED attaches the proof photo in the same transaction (delivery checks it is this parcel's and
+            // was uploaded by this courier); nothing is kept if any step below fails.
             updated = delivery.changeStatus(new ChangeStatusCommand(parcelId, target, courierId, ACTOR_ROLE,
-                    change.note(), change.failureReason(), change.recipientName(), null, task.branchFor(target)));
+                    change.note(), change.failureReason(), change.recipientName(), change.proofPhotoId(),
+                    task.branchFor(target)));
         } catch (ForbiddenException ex) {
             throw new NotFoundException(ErrorCode.NOT_FOUND);
         }
@@ -257,6 +330,49 @@ public class CourierDeliveryService {
         return new ParcelDetail(parcel, delivery.history(parcelId), stepAfter(after, parcelId, task));
     }
 
+    // ---- Proof of delivery ----
+
+    /**
+     * Stores the photo of the delivery slip the recipient signed, for a parcel the courier is delivering now (an open
+     * DELIVERY step, out for delivery). It is attached only when the courier marks the parcel DELIVERED with the
+     * returned id; until then it can be replaced by uploading again. Checked in the usual order: the image (400), the
+     * parcel is yours (404), the task is open (409 ASSIGNMENT_CLOSED), the step is a delivery waiting for DELIVERED
+     * (409 TASK_STEP_NOT_ALLOWED: a pickup, not out for delivery yet, already delivered), the parcel can be delivered
+     * (409 INVALID_STATUS_TRANSITION).
+     */
+    public ProofPhotoRef uploadProof(UUID courierId, UUID parcelId, byte[] content) {
+        DeliveryApi delivery = delivery();
+        ProofImages.Checked image = ProofImages.check(content);
+        CourierTask task = step(courierId, parcelId);
+        DeliverySnapshot parcel = delivery.findById(parcelId)
+                .orElseThrow(() -> new NotFoundException(ErrorCode.NOT_FOUND));
+        requireOpen(task);
+        if (task.type() != AssignmentType.DELIVERY || !task.stepStatuses().contains(ParcelStatus.DELIVERED)) {
+            throw new BusinessRuleException(ErrorCode.TASK_STEP_NOT_ALLOWED);
+        }
+        if (!parcel.status().canMoveTo(ParcelStatus.DELIVERED)) {
+            throw new BusinessRuleException(ErrorCode.INVALID_STATUS_TRANSITION);
+        }
+        return delivery.storeProofPhoto(parcelId, courierId, image.contentType(), image.content());
+    }
+
+    /**
+     * The proof photo of a parcel this courier delivered (their DELIVERY step for it ended DELIVERED). 404 for any
+     * other parcel, including one they only picked up, so a signed slip is seen only by the courier who collected the
+     * signature.
+     */
+    public ProofPhoto proof(UUID courierId, UUID parcelId) {
+        DeliveryApi delivery = delivery();
+        boolean deliveredByThisCourier = assignments.findItemsForCourierAndParcel(courierId, parcelId).stream()
+                .anyMatch(item -> item.outcome() == ItemOutcome.DELIVERED
+                        && own(courierId, item.assignmentId())
+                                .filter(task -> task.type() == AssignmentType.DELIVERY).isPresent());
+        if (!deliveredByThisCourier) {
+            throw new NotFoundException(ErrorCode.NOT_FOUND);
+        }
+        return delivery.findProofPhoto(parcelId).orElseThrow(() -> new NotFoundException(ErrorCode.NOT_FOUND));
+    }
+
     /**
      * Completes the task once every parcel in it is closed (handed over, delivered, returned, or never taken). Whether
      * an item is closed, and whether a task may be completed, are dispatch's rules ({@code ItemOutcome.closes},
@@ -290,9 +406,8 @@ public class CourierDeliveryService {
             if (!step.closed()) {
                 return step;
             }
-            if (latest == null) {
-                latest = step;
-            }
+            // No open step: the most recently finished one, whatever order dispatch returned the items in.
+            latest = latest == null ? step : CourierTask.forToday(latest, step);
         }
         if (latest == null) {
             throw new NotFoundException(ErrorCode.NOT_FOUND);
@@ -376,6 +491,9 @@ public class CourierDeliveryService {
         if (recipientName != null && target != ParcelStatus.DELIVERED) {
             throw new FieldValidationException("recipientName", "Only for delivered parcels.");
         }
+        if (request.proofPhotoId() != null && target != ParcelStatus.DELIVERED) {
+            throw new FieldValidationException("proofPhotoId", "Only for delivered parcels.");
+        }
         if (reason != null && target != ParcelStatus.FAILED) {
             throw new FieldValidationException("failureReason", "Only for failed deliveries.");
         }
@@ -384,6 +502,9 @@ public class CourierDeliveryService {
         }
         if (target == ParcelStatus.DELIVERED && (recipientName == null || recipientName.length() < 2)) {
             throw new FieldValidationException("recipientName", "Enter the name of the person who received the parcel.");
+        }
+        if (target == ParcelStatus.DELIVERED && request.proofPhotoId() == null) {
+            throw new FieldValidationException("proofPhotoId", ProofImages.REQUIRED);
         }
         if (target == ParcelStatus.FAILED && reason == null) {
             throw new FieldValidationException("failureReason", "Select why the delivery failed.");
@@ -395,10 +516,11 @@ public class CourierDeliveryService {
         if (reason == FailureReason.OTHER && (note == null || note.length() < 3)) {
             throw new FieldValidationException("note", "Describe what went wrong.");
         }
-        return new ValidChange(note, reason, recipientName, receivedBy);
+        return new ValidChange(note, reason, recipientName, receivedBy, request.proofPhotoId());
     }
 
-    private record ValidChange(String note, FailureReason failureReason, String recipientName, String receivedBy) {
+    private record ValidChange(String note, FailureReason failureReason, String recipientName, String receivedBy,
+                               UUID proofPhotoId) {
     }
 
     static String normalizeTrackingNumber(String trackingNumber) {

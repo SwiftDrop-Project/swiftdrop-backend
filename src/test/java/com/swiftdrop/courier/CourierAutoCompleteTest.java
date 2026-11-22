@@ -91,7 +91,8 @@ class CourierAutoCompleteTest extends CourierApiTest {
         AssignmentView task = givenTask(courier.id(), AssignmentType.DELIVERY,
                 step(delivered, ItemOutcome.LOADED), step(failed, ItemOutcome.LOADED));
 
-        postStatus(delivered.id(), Map.of("status", "DELIVERED", "recipientName", "Nimal Perera"), courier.cookie())
+        postStatus(delivered.id(), Map.of("status", "DELIVERED", "recipientName", "Nimal Perera",
+                "proofPhotoId", PROOF_ID), courier.cookie())
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.completed").value(true))
                 .andExpect(jsonPath("$.task.status").value("IN_PROGRESS"));
