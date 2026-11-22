@@ -81,6 +81,22 @@ public final class SignUpFields {
         Class<? extends Payload>[] payload() default {};
     }
 
+    /** Optional email field: omitted/null is allowed, but any supplied value (including blank) must be a valid email. */
+    @Size(max = 254)
+    @Pattern(regexp = EMAIL_PATTERN)
+    @ReportAsSingleViolation
+    @Constraint(validatedBy = {})
+    @Target({FIELD, PARAMETER, RECORD_COMPONENT})
+    @Retention(RUNTIME)
+    @Documented
+    public @interface OptionalEmailAddress {
+        String message() default EMAIL_MESSAGE;
+
+        Class<?>[] groups() default {};
+
+        Class<? extends Payload>[] payload() default {};
+    }
+
     /**
      * Sign-up only: the email's domain must not be a disposable-inbox service and must have MX records (DNS failures
      * are allowed). Messages come from {@code EmailDomainChecker}. Checked only when the address is well-formed.

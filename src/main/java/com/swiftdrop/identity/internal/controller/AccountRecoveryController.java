@@ -38,7 +38,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class AccountRecoveryController {
 
     static final String RESEND_MESSAGE = "If this email is waiting for verification, we've sent a new code.";
-    static final String FORGOT_MESSAGE = "If an account matches, we've sent a code to its email.";
+    static final String FORGOT_MESSAGE = "If the details match an account, we've sent a code to its registered email.";
 
     private final AuthService authService;
     private final AuthCookies authCookies;
@@ -79,11 +79,12 @@ public class AccountRecoveryController {
     @PostMapping(path = "/password/forgot", consumes = MediaType.APPLICATION_JSON_VALUE)
     @PreAuthorize("permitAll()")
     @Operation(summary = """
-            Email a password reset code to the account with this email or mobile number (public). Always 202 with \
-            the same message, whether or not an account matches.""")
+            Email a password reset code to the account with this email or mobile number (public). When optional \
+            confirmationEmail is supplied, a code is issued only if it matches the email registered on that account. \
+            Always 202 with the same message, whether or not the details match an account.""")
     @SecurityRequirements
     public ResponseEntity<MessageResponse> forgot(@Valid @RequestBody ForgotPasswordRequest request) {
-        authService.forgotPassword(request.identifier());
+        authService.forgotPassword(request.identifier(), request.confirmationEmail());
         return ResponseEntity.status(HttpStatus.ACCEPTED).body(new MessageResponse(FORGOT_MESSAGE));
     }
 
