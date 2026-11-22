@@ -133,10 +133,10 @@ class CustomerProfileTest extends IntegrationTest {
     @Test
     void customerCanUpdatePreferences() throws Exception {
         Cookie customer = registerCustomer(uniqueEmail(), uniquePhone());
-        UUID fakeAddressId = UUID.randomUUID();
+        String addressId = saveAddress(customer);
 
         Map<String, Object> preferences = Map.of(
-                "defaultPickupAddressId", fakeAddressId.toString(),
+                "defaultPickupAddressId", addressId,
                 "preferredPaymentMethod", "MOCK_CARD"
         );
 
@@ -145,7 +145,37 @@ class CustomerProfileTest extends IntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json.writeValueAsString(preferences)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.defaultPickupAddressId").value(fakeAddressId.toString()))
-                .andExpect(jsonPath("$.preferredPaymentMethod").value("MOCK_CARD"));
+                .andExpect(jsonPath("$.defaultPickupAddressId").value(addressId))
+                .andExpect(jsonPath("$.preferredPaymentMethod").value("MOCK_CARD"))
+                .andExpect(jsonPath("$.savedAddressesCount").value(1));
+    }
+
+    @Test
+    void theDefaultPickupAddressMustBeOneOfTheCustomersOwn() throws Exception {
+        Cookie customer = registerCustomer(uniqueEmail(), uniquePhone());
+        String someoneElses = saveAddress(registerCustomer(uniqueEmail(), uniquePhone()));
+
+        for (String addressId : new String[] {someoneElses, UUID.randomUUID().toString()}) {
+            mvc.perform(patch("/api/v1/customer/profile/preferences")
+                            .cookie(customer)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(json.writeValueAsString(Map.of(
+                                    "defaultPickupAddressId", addressId,
+                                    "preferredPaymentMethod", "MOCK_CARD"))))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+                    .andExpect(jsonPath("$.fieldErrors.defaultPickupAddressId")
+                            .value("Choose one of your saved addresses."));
+        }
+    }
+
+    private String saveAddress(Cookie customer) throws Exception {
+        Map<String, Object> address = Map.of(
+                "label", "Home", "contactName", "Nimali Perera", "phone", uniquePhone(),
+                "addressLine", "24 Temple Road", "city", "Nugegoda", "district", "COLOMBO", "postalCode", "10250");
+        String response = postJson("/api/v1/customer/addresses", address, customer)
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        return json.readTree(response).get("id").asString();
     }
 }

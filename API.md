@@ -82,6 +82,7 @@ Change it in the same PR as the code, and tell the frontend team.
 | 409 | `ASSIGNMENT_STARTED` | Dispatch: cancelling or reassigning a task the courier has already started |
 | 409 | `ASSIGNMENT_NEEDS_PARCEL` | Dispatch: removing the last parcel of a task |
 | 409 | `ASSIGNMENT_CHANGED` | Dispatch: someone else changed the task at the same moment |
+| 409 | `ADDRESS_LIMIT_REACHED` | Customer addresses: saving a 21st address |
 | 409 | `WEBHOOK_LIMIT_REACHED` | Webhooks: creating or turning on a 6th active subscription |
 | 409 | `WEBHOOK_DELIVERY_NOT_RETRYABLE` | Webhooks: retrying a delivery that is not `FAILED` |
 | 409 | `WEBHOOK_URL_IN_USE` | Webhooks: another of your active subscriptions already uses this callback URL |
@@ -112,6 +113,7 @@ Messages of the new codes (show them as-is):
 | `ASSIGNMENT_STARTED` | The courier has already started this task. |
 | `ASSIGNMENT_NEEDS_PARCEL` | A task needs at least one parcel. Cancel the task instead. |
 | `ASSIGNMENT_CHANGED` | This task was just changed by someone else. Refresh and try again. |
+| `ADDRESS_LIMIT_REACHED` | You can save up to 20 addresses. Delete one before adding another. |
 | `WEBHOOK_LIMIT_REACHED` | You can have up to 5 active webhooks. Turn one off before adding another. |
 | `WEBHOOK_DELIVERY_NOT_RETRYABLE` | Only failed deliveries can be sent again. |
 | `WEBHOOK_URL_IN_USE` | You already have a webhook for this address. Add the events to it instead. |
@@ -593,7 +595,81 @@ Updates delivery preferences (default pickup address and preferred payment metho
 }
 ```
 - `200`: Updated CustomerProfileResponse
-- `400` `VALIDATION_FAILED` · `401` `UNAUTHENTICATED` · `403` `FORBIDDEN`
+- `defaultPickupAddressId` must be one of the customer's saved addresses (below), or `null` for no default.
+- `400` `VALIDATION_FAILED` (`fieldErrors.defaultPickupAddressId`: "Choose one of your saved addresses.") · `401`
+  `UNAUTHENTICATED` · `403` `FORBIDDEN`
+
+### Saved addresses (role `CUSTOMER` only)
+Pickup and drop-off addresses the customer saves once and reuses when booking. A customer can save up to 20. The
+default pickup address is the profile's `defaultPickupAddressId` (so there is at most one). Someone else's address
+and an unknown id are both `404 NOT_FOUND`.
+
+**CustomerAddress (response)**
+```json
+{
+  "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+  "label": "Home",
+  "contactName": "Nimali Perera",
+  "phone": "+94771234567",
+  "addressLine": "24 Temple Road",
+  "city": "Nugegoda",
+  "district": "COLOMBO",
+  "postalCode": "10250",
+  "landmark": "Opposite the post office",
+  "isDefault": true,
+  "createdAt": "2026-11-22T15:00:00Z",
+  "updatedAt": "2026-11-22T15:00:00Z"
+}
+```
+`landmark` is `null` when not given. `phone` comes back as `+947XXXXXXXX`.
+
+**Request body** (POST and PUT)
+```json
+{
+  "label": "Home",
+  "contactName": "Nimali Perera",
+  "phone": "077 123 4567",
+  "addressLine": "24 Temple Road",
+  "city": "Nugegoda",
+  "district": "COLOMBO",
+  "postalCode": "10250",
+  "landmark": "Opposite the post office",
+  "useAsDefault": true
+}
+```
+| Field | Rule | Error message |
+|---|---|---|
+| `label` | Required, max 40 | Enter a label, like Home or Office. |
+| `contactName` | Required, max 100 | Enter a name. |
+| `phone` | Sri Lankan mobile (as `phone` above) | Enter a Sri Lankan mobile number, like 077 123 4567. |
+| `addressLine` | Required, max 200 | Enter the address. |
+| `city` | Required, max 80 | Enter the city. |
+| `district` | One of the 25 district codes | Select a district. |
+| `postalCode` | Exactly 5 digits | Enter the 5-digit postal code. |
+| `landmark` | Optional, max 150 | Use 150 characters or fewer. |
+| `useAsDefault` | Optional. `true`: make it the default pickup address; `false` (on PUT): stop it being the default; left out: leave the default as it is | - |
+
+The fields match a delivery's `pickup` / `recipient`, so a saved address can fill the booking form.
+
+#### `GET /customer/addresses`
+The customer's addresses as an array of CustomerAddress: the default pickup address first, then the rest in the order
+they were saved. `200` (an empty array when none) · `401` · `403`
+
+#### `POST /customer/addresses`
+Saves an address. `201` CustomerAddress · `400` `VALIDATION_FAILED` · `401` · `403` · `409` `ADDRESS_LIMIT_REACHED`
+(already 20 addresses)
+
+#### `PUT /customer/addresses/{id}`
+Replaces every field of one of the customer's addresses. `200` CustomerAddress · `400` `VALIDATION_FAILED` · `401` ·
+`403` · `404` `NOT_FOUND`
+
+#### `PUT /customer/addresses/{id}/default`
+Makes it the default pickup address (no body); the old default stops being the default. `200` CustomerAddress ·
+`401` · `403` · `404` `NOT_FOUND`
+
+#### `DELETE /customer/addresses/{id}`
+Deletes it. Deleting the default pickup address leaves the customer without a default. `204` · `401` · `403` · `404`
+`NOT_FOUND`
 
 ---
 
