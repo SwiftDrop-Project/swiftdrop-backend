@@ -313,15 +313,14 @@ Codes (also for password reset): 6 random digits, valid **10 minutes**, dead aft
 
 #### `POST /auth/password/forgot` (public)
 ```json
-{ "identifier": "0771234567 or name@example.com" }
+{ "identifier": "0771234567 or name@example.com", "confirmationEmail": "name@example.com" }
 ```
-Same `identifier` rules as login. If an account matches, a 6-digit code ("Your SwiftDrop password reset code")
-is emailed to **that account's email** (also when the identifier was a mobile number).
+Same `identifier` rules as login. `confirmationEmail` is optional (omitted or `null` keeps the existing identifier-only behavior, including mobile callers). When `confirmationEmail` is supplied, it must be a valid non-blank email address; the account is still looked up only by `identifier`, and a 6-digit code ("Your SwiftDrop password reset code") is issued and emailed to **that account's registered email** only if the normalized `confirmationEmail` matches it. A mismatch does not send any email and does not invalidate any existing code.
 - `202`, always, with the same body:
   ```json
-  { "message": "If an account matches, we've sent a code to its email." }
+  { "message": "If the details match an account, we've sent a code to its registered email." }
   ```
-- `400` `VALIDATION_FAILED` (`fieldErrors.identifier`) · `429` `TOO_MANY_REQUESTS`
+- `400` `VALIDATION_FAILED` (`fieldErrors.identifier` / `fieldErrors.confirmationEmail`) · `429` `TOO_MANY_REQUESTS`
 
 #### `POST /auth/password/reset` (public)
 ```json

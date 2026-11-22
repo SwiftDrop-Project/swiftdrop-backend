@@ -53,11 +53,22 @@ public class PasswordService {
      * 60-second cooldown and after 5 codes in an hour.
      */
     public void forgot(String identifier) {
+        forgot(identifier, null);
+    }
+
+    /**
+     * Emails a reset code to the account matching {@code identifier}. When {@code confirmationEmail} is non-null,
+     * compares it against the account's stored email (using {@link UserService#normalizeEmail}) before issuing a code
+     * so a mismatch never sends an email or invalidates an existing code.
+     */
+    public void forgot(String identifier, String confirmationEmail) {
         findUser(identifier)
                 .filter(user -> user.getStatus() != UserStatus.REMOVED
                         && user.getStatus() != UserStatus.DISABLED
                         && user.getStatus() != UserStatus.REJECTED
                         && !user.isMustChangePassword())
+                .filter(user -> confirmationEmail == null
+                        || UserService.normalizeEmail(confirmationEmail).equals(UserService.normalizeEmail(user.getEmail())))
                 .ifPresent(user ->
                         codes.issue(user.getId(), VerificationPurpose.PASSWORD_RESET).ifPresent(code ->
                                 notifications.sendAccountEmail(new AccountEmail(AccountEmail.Type.PASSWORD_RESET,
