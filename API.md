@@ -1009,6 +1009,49 @@ The customer's own deliveries, newest first, as a page of Delivery (the shape ab
 - `200` · `400` (`id` is not a UUID) · `401` · `403` (not a `CUSTOMER`) · `404` `NOT_FOUND`: no such delivery, or it
   isn't yours (the same answer, so ids can't be probed).
 
+### Receipt of a delivery
+`GET /deliveries/{id}/receipt` (logged-in `CUSTOMER`): the receipt as JSON, for the preview on "My deliveries".
+```json
+{
+  "trackingNumber": "SD2611003152",
+  "status": "DELIVERED",
+  "bookedAt": "2026-11-09T05:12:00Z",
+  "pickup": { "name": "Nimali Perera", "phone": "+94771234567", "addressLine": "24 Temple Road",
+              "city": "Gampaha", "district": "GAMPAHA" },
+  "recipient": { "name": "Kamal Silva", "phone": "+94719876543", "addressLine": "118 Galle Road",
+                 "city": "Colombo 03", "district": "COLOMBO" },
+  "weightKg": 2.00,
+  "billableWeightKg": 2,
+  "size": { "lengthCm": 30, "widthCm": 20, "heightCm": 15, "keepUpright": false },
+  "vehicle": "BIKE",
+  "lines": [
+    { "component": "BASE", "label": "Base fee", "amount": 650.00 },
+    { "component": "WEIGHT", "label": "Extra weight (1 kg)", "amount": 330.00 }
+  ],
+  "total": 980.00,
+  "currency": "LKR",
+  "codAmount": null,
+  "paymentMethod": "AT_PICKUP",
+  "paymentStatus": "PAID"
+}
+```
+- The fee is the one fixed at booking (the parcel's stored fee lines), never a new quote, so a receipt doesn't change
+  when the rate card does. `lines` add up to `total`; a parcel booked before pricing has one line
+  `{ "component": "FEE", "label": "Delivery fee" }`. `label` is the text to show: "Base fee", "Extra weight (N kg)",
+  "Pickup", "Drop-off", "Between branches", "Cash on delivery handling".
+- `billableWeightKg`, `size` and `vehicle` are null for parcels booked before sizes; `paymentMethod` for parcels booked
+  before payment methods. `codAmount` is the cash collected from the recipient for the sender, not part of the fee.
+- `paymentStatus`: `PAID` once the courier has collected the fee (`AT_PICKUP`: from `PICKED_UP` on; `AT_DROP_OFF`:
+  once `DELIVERED`), otherwise `DUE`. `null` for `ONLINE` (online payments aren't recorded yet) and without a method.
+- `200` · `400` (`id` is not a UUID) · `401` · `403` (not a `CUSTOMER`) · `404` `NOT_FOUND` (no such delivery, or it
+  isn't yours).
+
+`GET /deliveries/{id}/receipt/pdf` (logged-in `CUSTOMER`): the same receipt as a one-page A4 PDF to download.
+- `200` `application/pdf` with `Content-Disposition: attachment; filename="SwiftDrop-receipt-SD2611003152.pdf"` and
+  `Cache-Control: no-store` (it holds personal data). Dates in Sri Lankan time; amounts "Rs. 1,250.00".
+- The frontend links to it directly (the browser sends the `SD_TOKEN` cookie), so the download needs no JavaScript.
+- Errors as above, as the usual JSON error body.
+
 ---
 
 ## Pricing (WP4)
