@@ -569,6 +569,8 @@ Returns customer account details, delivery preferences, and stats counters.
     "preferredPaymentMethod": "CASH_ON_DELIVERY"
   }
   ```
+- `totalDeliveries`: every delivery the customer has booked (from the delivery module). `savedAddressesCount` is
+  `0` until saved addresses are built.
 - `401` `UNAUTHENTICATED` · `403` `FORBIDDEN`
 
 #### `PATCH /customer/profile/personal-details`
@@ -1021,15 +1023,21 @@ Response `201`: a Delivery.
   `FORBIDDEN` (logged in, but not a `CUSTOMER`) · `409` `PARCEL_NEEDS_MANUAL_QUOTE` (no vehicle carries or fits it)
 
 ### My deliveries
-`GET /deliveries?page=0&size=20&status=AT_BRANCH` (logged-in `CUSTOMER`)
+`GET /deliveries?page=0&size=20&status=AT_BRANCH&q=SD2611` (logged-in `CUSTOMER`)
 
 The customer's own deliveries, newest first, as a page of Delivery (the shape above):
 ```json
 { "content": [ /* Delivery */ ], "page": 0, "size": 20, "totalElements": 3, "totalPages": 1 }
 ```
-- `page` from 0 (default 0); `size` 1-100 (default 20); `status` optional, one of the parcel statuses.
+- `page` from 0 (default 0); `size` 1-100 (default 20).
+- `status` optional, one of the parcel statuses, and may be repeated: the delivery is in any of them. The tabs on
+  "My deliveries" use it: **Active** `status=CREATED&status=PICKED_UP&status=AT_BRANCH&status=IN_TRANSIT&status=OUT_FOR_DELIVERY`,
+  **Delivered** `status=DELIVERED`, **Failed** `status=FAILED`; no `status` is every delivery.
+- `q` optional, at most 30 characters: part of the tracking number, spaces and case ignored (`sd 2611 0031` finds
+  `SD2611003152`). Only the customer's own deliveries are searched.
 - `200` · `400` `VALIDATION_FAILED` (`fieldErrors.page`: "Use a page number of 0 or more.", `fieldErrors.size`:
-  "Use a page size from 1 to 100."; an unknown `status` too) · `401` · `403` (not a `CUSTOMER`)
+  "Use a page size from 1 to 100.", `fieldErrors.q`: "Use at most 30 characters."; an unknown `status` too) · `401`
+  · `403` (not a `CUSTOMER`)
 
 ### One delivery with its history
 `GET /deliveries/{id}` (logged-in `CUSTOMER`)

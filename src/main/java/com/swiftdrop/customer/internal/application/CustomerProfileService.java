@@ -8,11 +8,14 @@ import com.swiftdrop.customer.internal.dto.CustomerProfileResponse;
 import com.swiftdrop.customer.internal.dto.UpdatePersonalDetailsRequest;
 import com.swiftdrop.customer.internal.dto.UpdatePreferencesRequest;
 import com.swiftdrop.customer.internal.persistence.CustomerProfileRepository;
+import com.swiftdrop.delivery.DeliveryApi;
+import com.swiftdrop.delivery.ParcelStatus;
 import com.swiftdrop.identity.IdentityApi;
 import com.swiftdrop.identity.UserSummary;
 import com.swiftdrop.shared.error.ErrorCode;
 import com.swiftdrop.shared.error.NotFoundException;
 import com.swiftdrop.shared.validation.PhoneNumberNormalizer;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -25,10 +28,19 @@ public class CustomerProfileService implements CustomerApi {
 
     private final CustomerProfileRepository profileRepository;
     private final IdentityApi identityApi;
+    private final DeliveryApi deliveryApi;
 
-    public CustomerProfileService(CustomerProfileRepository profileRepository, IdentityApi identityApi) {
+    public CustomerProfileService(CustomerProfileRepository profileRepository, IdentityApi identityApi,
+                                  DeliveryApi deliveryApi) {
         this.profileRepository = profileRepository;
         this.identityApi = identityApi;
+        this.deliveryApi = deliveryApi;
+    }
+
+    /** Every delivery the customer has booked, counted by WP3's parcel service (no rows are loaded). */
+    private long totalDeliveries(UUID userId) {
+        ParcelStatus everyStatus = null;
+        return deliveryApi.findByCustomer(userId, everyStatus, PageRequest.of(0, 1)).getTotalElements();
     }
 
     @Override
@@ -59,7 +71,7 @@ public class CustomerProfileService implements CustomerApi {
         CustomerProfile profile = profileRepository.findById(userId)
                 .orElseGet(() -> profileRepository.save(new CustomerProfile(userId)));
 
-        long totalDeliveries = 0;
+        long totalDeliveries = totalDeliveries(userId);
         long savedAddressesCount = 0;
 
         return new CustomerProfileResponse(
@@ -90,7 +102,7 @@ public class CustomerProfileService implements CustomerApi {
                 updatedUser.email(),
                 updatedUser.phone(),
                 updatedUser.createdAt(),
-                0,
+                totalDeliveries(userId),
                 0,
                 profile.getDefaultPickupAddressId(),
                 profile.getPreferredPaymentMethod()
@@ -114,7 +126,7 @@ public class CustomerProfileService implements CustomerApi {
                 user.email(),
                 user.phone(),
                 user.createdAt(),
-                0,
+                totalDeliveries(userId),
                 0,
                 saved.getDefaultPickupAddressId(),
                 saved.getPreferredPaymentMethod()

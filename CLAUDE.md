@@ -51,6 +51,7 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
 - Current dependencies: identity -> notifications, shared; merchants -> identity, notifications, shared; delivery -> pricing, shared;
   dispatch -> delivery, identity, shared; tracking -> delivery, shared; courier -> delivery, dispatch, shared;
   pricing -> shared; infrastructure -> shared; webhooks -> delivery, merchants, shared;
+  customer -> identity, delivery, shared;
   assistant -> tracking, pricing, delivery, identity, shared. Nothing depends on courier, assistant or
   webhooks.
 - webhooks (contract in API.md "Webhooks", built): reads `ParcelStatusChanged` from `webhooks.q` (declared by

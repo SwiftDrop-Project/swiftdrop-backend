@@ -5,6 +5,7 @@ import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 
+import java.math.BigDecimal;
 import java.util.Map;
 import java.util.UUID;
 
@@ -60,6 +61,32 @@ class CustomerProfileTest extends IntegrationTest {
                 .andExpect(jsonPath("$.preferredPaymentMethod").value("CASH_ON_DELIVERY"))
                 .andExpect(jsonPath("$.totalDeliveries").value(0))
                 .andExpect(jsonPath("$.savedAddressesCount").value(0));
+    }
+
+    @Test
+    void totalDeliveriesCountsTheCustomersOwnBookings() throws Exception {
+        Cookie customer = registerCustomer(uniqueEmail(), uniquePhone());
+        Cookie someoneElse = registerCustomer(uniqueEmail(), uniquePhone());
+        postJson("/api/v1/deliveries", booking(), customer).andExpect(status().isCreated());
+        postJson("/api/v1/deliveries", booking(), customer).andExpect(status().isCreated());
+        postJson("/api/v1/deliveries", booking(), someoneElse).andExpect(status().isCreated());
+
+        mvc.perform(get("/api/v1/customer/profile").cookie(customer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalDeliveries").value(2));
+    }
+
+    private static Map<String, Object> booking() {
+        return Map.of(
+                "pickup", Map.of("name", "Nimal Perera", "phone", uniquePhone(), "addressLine", "12 Galle Road",
+                        "city", "Colombo 03", "district", "COLOMBO"),
+                "recipient", Map.of("name", "Kamala Silva", "phone", uniquePhone(),
+                        "addressLine", "45 Peradeniya Road", "city", "Kandy", "district", "KANDY"),
+                "weightKg", new BigDecimal("1.50"),
+                "lengthCm", 30,
+                "widthCm", 20,
+                "heightCm", 10,
+                "paymentMethod", "AT_PICKUP");
     }
 
     @Test
