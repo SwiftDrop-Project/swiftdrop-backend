@@ -14,7 +14,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.UUID;
 
-/** Issues HS256 JWTs. Claims: sub (user id), role, status, ver (token version), iat, exp. No personal data. */
+/** Issues HS256 JWTs. Claims: sub (user id), role, status, ver (token version), pwd_change, iat, exp. No personal data. */
 @Service
 public class TokenService {
 
@@ -27,6 +27,11 @@ public class TokenService {
     }
 
     public String issue(UUID userId, Role role, UserStatus status, int tokenVersion, boolean rememberMe) {
+        return issue(userId, role, status, tokenVersion, false, rememberMe);
+    }
+
+    public String issue(UUID userId, Role role, UserStatus status, int tokenVersion, boolean mustChangePassword,
+                        boolean rememberMe) {
         Instant now = Instant.now();
         Duration lifetime = rememberMe
                 ? Duration.ofDays(properties.jwt().rememberMeDays())
@@ -36,6 +41,7 @@ public class TokenService {
                 .claim(TokenClaims.ROLE, role.name())
                 .claim(TokenClaims.STATUS, status.name())
                 .claim(TokenClaims.VERSION, tokenVersion)
+                .claim(TokenClaims.MUST_CHANGE_PASSWORD, mustChangePassword)
                 .issuedAt(now)
                 .expiresAt(now.plus(lifetime))
                 .build();

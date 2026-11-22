@@ -15,6 +15,9 @@ public final class TokenClaims {
      */
     public static final String VERSION = "ver";
 
+    /** True when the user must change an initial or admin-reset password before using protected endpoints. */
+    public static final String MUST_CHANGE_PASSWORD = "pwd_change";
+
     private TokenClaims() {
     }
 }

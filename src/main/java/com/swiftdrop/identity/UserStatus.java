@@ -15,5 +15,7 @@ public enum UserStatus {
     /** Blocked by an admin. */
     DISABLED,
     /** Signed up with Google and must still call POST /auth/complete-profile (no phone yet). */
-    PROFILE_INCOMPLETE
+    PROFILE_INCOMPLETE,
+    /** Soft-deleted / permanently deactivated by an admin; preserves historical audit references. */
+    REMOVED
 }

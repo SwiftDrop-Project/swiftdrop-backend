@@ -20,7 +20,8 @@ class ModuleArchitectureTest {
     void modulesAreTheOnesFromTheArchitectureDiagram() {
         assertThat(MODULES.stream().map(ApplicationModule::getIdentifier).map(Object::toString))
                 .containsExactlyInAnyOrder("shared", "infrastructure", "identity", "merchants", "pricing", "delivery",
-                        "dispatch", "reporting", "tracking", "notifications", "webhooks", "outbox");
+                        "dispatch", "reporting", "tracking", "notifications", "webhooks", "outbox", "courier",
+                        "settings", "assistant");
     }
 
     @Test

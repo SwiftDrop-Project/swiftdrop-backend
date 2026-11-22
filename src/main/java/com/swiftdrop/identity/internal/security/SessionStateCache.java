@@ -13,9 +13,10 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * The current status and token version of each logged-in user, read by {@link SessionValidityFilter} on every
- * authenticated request. Cached for at most {@link #TTL}, so a change made on another backend instance takes effect
- * within 30 seconds; on this instance it takes effect at once, because every change calls {@link #evict}.
+ * The current status, token version and password-change requirement of each logged-in user, read by
+ * {@link SessionValidityFilter} and {@link PasswordChangeRequiredFilter} on every authenticated request.
+ * Cached for at most {@link #TTL}, so a change made on another backend instance takes effect within 30 seconds;
+ * on this instance it takes effect at once, because every change calls {@link #evict}.
  */
 @Component
 public class SessionStateCache {
@@ -23,7 +24,7 @@ public class SessionStateCache {
     static final Duration TTL = Duration.ofSeconds(30);
 
     /** What a session check needs to know about a user. */
-    public record SessionState(UserStatus status, int tokenVersion) {
+    public record SessionState(UserStatus status, int tokenVersion, boolean mustChangePassword) {
     }
 
     private final UserRepository users;
@@ -39,7 +40,7 @@ public class SessionStateCache {
     /** Empty when the user no longer exists. */
     public Optional<SessionState> get(UUID userId) {
         return cache.get(userId, id -> users.findById(id)
-                .map(user -> new SessionState(user.getStatus(), user.getTokenVersion())));
+                .map(user -> new SessionState(user.getStatus(), user.getTokenVersion(), user.isMustChangePassword())));
     }
 
     /**

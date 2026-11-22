@@ -151,7 +151,7 @@ public class AuthService {
         UserSummary user = userService.completeProfile(userId, null, normalizePhone(rawPhone), Role.CUSTOMER,
                 UserStatus.ACTIVE);
         String token = tokenService.issue(user.id(), user.role(), user.status(), userService.tokenVersion(user.id()),
-                true);
+                user.mustChangePassword(), true);
         return new AuthResult(new Account(user, null), token);
     }
 
@@ -182,7 +182,7 @@ public class AuthService {
     public void resetPassword(String identifier, String code, String newPassword) {
         // Hashed first (BCrypt is slow), also for unknown identifiers so timing reveals nothing.
         String newHash = passwordEncoder.encode(newPassword);
-        CheckResult result = passwordService.reset(identifier, code, newHash);
+        CheckResult result = passwordService.reset(identifier, code, newPassword, newHash);
         if (result != CheckResult.MATCH) {
             throw result.toException();
         }
@@ -191,7 +191,8 @@ public class AuthService {
     /**
      * Changes the password of a logged-in user and ends their other sessions. Returns a new token for this session
      * ({@code rememberMe}: same lifetime as the current one). 400 with {@code fieldErrors.currentPassword} when the
-     * current password is wrong or the account has none yet.
+     * current password is wrong or the account has none yet, or {@code fieldErrors.newPassword} when reusing the
+     * current password.
      */
     public String changePassword(UUID userId, String currentPassword, String newPassword, boolean rememberMe) {
         LoginAccount account = userService.findLoginAccountById(userId)
@@ -202,7 +203,11 @@ public class AuthService {
         if (!passwordEncoder.matches(currentPassword, account.passwordHash())) {
             throw new FieldValidationException("currentPassword", WRONG_CURRENT_PASSWORD);
         }
-        LoginAccount updated = passwordService.change(userId, passwordEncoder.encode(newPassword));
+        if (passwordEncoder.matches(newPassword, account.passwordHash())) {
+            throw new FieldValidationException("newPassword", PasswordService.SAME_PASSWORD);
+        }
+        LoginAccount updated = passwordService.change(userId, account.tokenVersion(), newPassword,
+                passwordEncoder.encode(newPassword));
         return issueToken(updated, rememberMe);
     }
 
@@ -224,12 +229,13 @@ public class AuthService {
             case PENDING_EMAIL_VERIFICATION -> throw new ForbiddenException(ErrorCode.EMAIL_NOT_VERIFIED);
             case PENDING_APPROVAL -> throw new ForbiddenException(ErrorCode.ACCOUNT_PENDING_APPROVAL);
             case REJECTED -> throw new ForbiddenException(ErrorCode.ACCOUNT_REJECTED);
-            case DISABLED -> throw new ForbiddenException(ErrorCode.ACCOUNT_DISABLED);
+            case DISABLED, REMOVED -> throw new ForbiddenException(ErrorCode.ACCOUNT_DISABLED);
         }
     }
 
     private String issueToken(LoginAccount account, boolean rememberMe) {
-        return tokenService.issue(account.id(), account.role(), account.status(), account.tokenVersion(), rememberMe);
+        return tokenService.issue(account.id(), account.role(), account.status(), account.tokenVersion(),
+                account.mustChangePassword(), rememberMe);
     }
 
     private Optional<LoginAccount> findAccount(String identifier) {

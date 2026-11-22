@@ -1,6 +1,7 @@
 package com.swiftdrop.infrastructure.internal.web;
 
 import com.swiftdrop.shared.reference.District;
+import com.swiftdrop.shared.reference.VehicleType;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -22,6 +23,10 @@ public class MetaController {
             .sorted(Comparator.comparing(DistrictResponse::name))
             .toList();
 
+    private static final List<VehicleTypeResponse> VEHICLE_TYPES = Arrays.stream(VehicleType.values())
+            .map(v -> new VehicleTypeResponse(v.name(), v.displayName()))
+            .toList();
+
     @GetMapping("/districts")
     @PreAuthorize("permitAll()")
     @Operation(summary = "All 25 districts of Sri Lanka, sorted by name (public)")
@@ -29,6 +34,16 @@ public class MetaController {
         return DISTRICTS;
     }
 
+    @GetMapping("/vehicle-types")
+    @PreAuthorize("permitAll()")
+    @Operation(summary = "Supported courier vehicle types (public)")
+    public List<VehicleTypeResponse> vehicleTypes() {
+        return VEHICLE_TYPES;
+    }
+
     public record DistrictResponse(String code, String name) {
+    }
+
+    public record VehicleTypeResponse(String code, String name) {
     }
 }

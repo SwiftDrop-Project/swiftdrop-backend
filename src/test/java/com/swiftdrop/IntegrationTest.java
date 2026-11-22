@@ -53,7 +53,18 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "management.health.mail.enabled=false",
         "swiftdrop.mail.from=no-reply@test.swiftdrop.lk",
         "swiftdrop.security.verification-codes.secret=test-only-code-secret-0123456789-abcdefghijklmnop",
-        "swiftdrop.email-checks.mx-enabled=true"
+        "swiftdrop.email-checks.mx-enabled=true",
+        // webhooks: fixed key and strict URLs, whatever the local .env says
+        "swiftdrop.webhooks.encryption-key=test-only-webhook-key-0123456789-abcdefghijklmnop",
+        "swiftdrop.webhooks.allow-insecure-urls=false",
+        // no background sender: tests call WebhookDispatcher.dispatchDue() themselves
+        "swiftdrop.webhooks.dispatcher.enabled=false",
+        // assistant: never call the real Gemini from tests, whatever the local .env says (tests stub it)
+        "swiftdrop.assistant.provider=rules",
+        "swiftdrop.assistant.gemini.api-key=",
+        // proof-of-delivery photos: kept in memory, never uploaded to Cloudinary, whatever the local .env says
+        "swiftdrop.delivery.proof-photos.storage=memory",
+        "swiftdrop.delivery.proof-photos.cloudinary-url="
 })
 @AutoConfigureMockMvc
 @Import({TestcontainersConfiguration.class, TestDoublesConfiguration.class})

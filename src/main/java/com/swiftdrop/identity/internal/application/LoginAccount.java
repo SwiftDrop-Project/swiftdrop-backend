@@ -9,7 +9,12 @@ import java.util.UUID;
  * What the auth flows need to check a login and issue a token. {@code passwordHash} is null for Google-only
  * accounts; {@code tokenVersion} goes into the token's "ver" claim.
  */
-public record LoginAccount(UUID id, String passwordHash, Role role, UserStatus status, int tokenVersion) {
+public record LoginAccount(UUID id, String passwordHash, Role role, UserStatus status, int tokenVersion,
+                           boolean mustChangePassword) {
+
+    public LoginAccount(UUID id, String passwordHash, Role role, UserStatus status, int tokenVersion) {
+        this(id, passwordHash, role, status, tokenVersion, false);
+    }
 
     /** Keeps the password hash out of logs. */
     @Override

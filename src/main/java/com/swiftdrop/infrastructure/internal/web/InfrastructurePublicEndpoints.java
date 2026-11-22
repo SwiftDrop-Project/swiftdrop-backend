@@ -18,6 +18,7 @@ class InfrastructurePublicEndpoints implements PublicEndpoints {
         var paths = PublicEndpoints.paths();
         return List.of(
                 paths.matcher(HttpMethod.GET, ApiPaths.PREFIX + "/meta/districts"),
+                paths.matcher(HttpMethod.GET, ApiPaths.PREFIX + "/meta/vehicle-types"),
                 paths.matcher("/swagger-ui.html"),
                 paths.matcher("/swagger-ui/**"),
                 paths.matcher("/v3/api-docs/**"),

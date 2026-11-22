@@ -2,8 +2,10 @@ package com.swiftdrop.identity.internal.security;
 
 import com.swiftdrop.shared.web.ApiPaths;
 import com.swiftdrop.shared.web.PublicEndpoints;
+import jakarta.servlet.Filter;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.Customizer;
@@ -44,7 +46,8 @@ public class SecurityConfig {
                                             SecurityProperties properties, GoogleSignInHandler googleSignInHandler,
                                             JsonMapper jsonMapper, List<PublicEndpoints> publicEndpoints,
                                             AuthRateLimiter rateLimiter, SessionStateCache sessions,
-                                            AuthCookies authCookies)
+                                            AuthCookies authCookies,
+                                            @Qualifier("apiKeyAuthenticationFilter") Filter apiKeyFilter)
             throws Exception {
         RequestMatcher publicMatcher = new OrRequestMatcher(publicEndpoints.stream()
                 .flatMap(endpoints -> endpoints.matchers().stream())
@@ -73,12 +76,15 @@ public class SecurityConfig {
                         .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter()))
                         .authenticationEntryPoint(errorHandlers.unauthenticated())
                         .accessDeniedHandler(errorHandlers.forbidden()))
-                // Order: rate limit → read JWT → session still valid? → PROFILE_INCOMPLETE restriction → role checks.
+                // Order: rate limit → API key → read JWT → session still valid? → PROFILE_INCOMPLETE → PASSWORD_CHANGE_REQUIRED → role checks.
                 .addFilterBefore(new AuthRateLimitFilter(rateLimiter, errorHandlers),
                         BearerTokenAuthenticationFilter.class)
+                .addFilterBefore(apiKeyFilter, BearerTokenAuthenticationFilter.class)
                 .addFilterAfter(new SessionValidityFilter(sessions, errorHandlers, authCookies),
                         BearerTokenAuthenticationFilter.class)
                 .addFilterAfter(new ProfileIncompleteFilter(errorHandlers), SessionValidityFilter.class)
+                .addFilterAfter(new PasswordChangeRequiredFilter(sessions, errorHandlers),
+                        ProfileIncompleteFilter.class)
                 .exceptionHandling(ex -> ex
                         .authenticationEntryPoint(errorHandlers.unauthenticated())
                         .accessDeniedHandler(errorHandlers.forbidden()));

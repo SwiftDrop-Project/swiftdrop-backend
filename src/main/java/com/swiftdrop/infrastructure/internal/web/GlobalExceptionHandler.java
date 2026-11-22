@@ -4,10 +4,12 @@ import com.swiftdrop.shared.error.ApiError;
 import com.swiftdrop.shared.error.ApiException;
 import com.swiftdrop.shared.error.ErrorCode;
 import com.swiftdrop.shared.error.FieldValidationException;
+import com.swiftdrop.shared.error.TooManyRequestsException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
@@ -19,6 +21,9 @@ import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartException;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 import tools.jackson.core.JacksonException;
 
@@ -37,15 +42,28 @@ public class GlobalExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     /** Messages for fields whose JSON value could not be read at all (bad enum value, wrong type). */
-    private static final Map<String, String> UNREADABLE_FIELD_MESSAGES = Map.of(
-            "accountType", "Select an account type.",
-            "pickupDistrict", "Select a district.",
-            "parcelsPerMonth", "Select a range.",
-            "acceptTerms", "Accept the terms to continue.");
+    private static final Map<String, String> UNREADABLE_FIELD_MESSAGES = Map.ofEntries(
+            Map.entry("accountType", "Select an account type."),
+            Map.entry("pickupDistrict", "Select a district."),
+            Map.entry("branch", "Select a branch."),
+            Map.entry("vehicleType", "Select a vehicle type."),
+            Map.entry("courierId", "Select a courier."),
+            Map.entry("parcelsPerMonth", "Select a range."),
+            Map.entry("paymentMethod", "Choose how the delivery fee will be paid."),
+            Map.entry("acceptTerms", "Accept the terms to continue."));
 
     @ExceptionHandler(ApiException.class)
     ResponseEntity<ApiError> handleApi(ApiException ex) {
         return respond(ApiError.of(ex.code(), ex.getMessage()));
+    }
+
+    /** 429 from a service: the same body, plus how long to wait in {@code Retry-After} (seconds). */
+    @ExceptionHandler(TooManyRequestsException.class)
+    ResponseEntity<ApiError> handleTooManyRequests(TooManyRequestsException ex) {
+        ApiError body = ApiError.of(ex.code(), ex.getMessage());
+        return ResponseEntity.status(body.status())
+                .header(HttpHeaders.RETRY_AFTER, Long.toString(ex.retryAfterSeconds()))
+                .body(body);
     }
 
     /** A rule checked in the service layer, reported like an invalid request body. */
@@ -119,6 +137,18 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
     ResponseEntity<ApiError> handleUnsupportedMediaType(HttpMediaTypeNotSupportedException ex) {
         return respond(ApiError.of(ErrorCode.UNSUPPORTED_MEDIA_TYPE));
+    }
+
+    /** An uploaded file over spring.servlet.multipart.max-file-size (e.g. a proof-of-delivery photo). */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    ResponseEntity<ApiError> handleUploadTooLarge(MaxUploadSizeExceededException ex) {
+        return respond(ApiError.validation(Map.of("file", "This file is too large.")));
+    }
+
+    /** A broken multipart body, or a required part missing. */
+    @ExceptionHandler({MultipartException.class, MissingServletRequestPartException.class})
+    ResponseEntity<ApiError> handleBadMultipart(Exception ex) {
+        return respond(ApiError.validation(Map.of()));
     }
 
     @ExceptionHandler(Exception.class)

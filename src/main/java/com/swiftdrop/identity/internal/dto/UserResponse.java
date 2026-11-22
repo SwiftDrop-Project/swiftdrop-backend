@@ -17,15 +17,21 @@ public record UserResponse(
         String phone,
         Role role,
         UserStatus status,
+        boolean mustChangePassword,
         @Schema(nullable = true, description = "Only for role MERCHANT, otherwise null")
         MerchantInfo merchant) {
+
+    public UserResponse(UUID id, String fullName, String email, String phone, Role role, UserStatus status,
+                        MerchantInfo merchant) {
+        this(id, fullName, email, phone, role, status, false, merchant);
+    }
 
     /** {@code merchant} is null for everyone except merchants. */
     public static UserResponse of(UserSummary user, MerchantProfiles.Profile merchant) {
         MerchantInfo info = merchant == null ? null : new MerchantInfo(merchant.businessName(),
                 merchant.pickupDistrict(), merchant.city(), merchant.approvalStatus());
         return new UserResponse(user.id(), user.fullName(), user.email(), user.phone(), user.role(), user.status(),
-                info);
+                user.mustChangePassword(), info);
     }
 
     public record MerchantInfo(

@@ -16,7 +16,7 @@ It is one Spring Boot application (a modular monolith, with boundaries checked b
 | Language and framework | Java 21, Spring Boot 4.1 (Spring MVC, Spring Security 7, Jackson 3) |
 | Database | PostgreSQL 17 on Neon (one schema per module), Spring Data JPA (Hibernate), Flyway migrations |
 | Security | JWT (HS256) in an httpOnly cookie, via Spring Security's OAuth2 resource server; Google sign-in via OAuth2 client (OpenID Connect); BCrypt passwords |
-| Messaging and mail | RabbitMQ (Spring AMQP): exchange `parcel.events`, queues `notifications.q` and `webhooks.q` (declared, no feature uses them yet); Spring Mail |
+| Messaging and mail | RabbitMQ (Spring AMQP): exchange `parcel.events`, queues `notifications.q` (declared, not used yet) and `webhooks.q` (read by webhooks); Spring Mail |
 | Architecture | Spring Modulith 2.1 (`ModuleArchitectureTest` checks the module boundaries) |
 | API docs | springdoc-openapi (Swagger UI) |
 | Build | Maven (wrapper included: `mvnw`, `mvnw.cmd`), Lombok |
@@ -34,13 +34,15 @@ architecture diagram). `SwiftdropBackendApplication` stays at the root.
 | `identity` | Register, log in, log out, current user, Google sign-in, complete-profile, JWTs, the `SD_TOKEN` cookie, roles, seed accounts, the security filter chain | `identity` | Viduranga | Built |
 | `merchants` | Merchant business profiles and the admin approval workflow (API keys later) | `merchants` | Viduranga | Built |
 | `pricing` | Delivery rates and price quotes | `pricing` | TBD | Placeholder |
-| `delivery` | Parcels, status changes, proof of delivery, receipts, outbox events | `delivery` | TBD | Placeholder |
-| `dispatch` | Assigning parcels to couriers by zone | - | TBD | Placeholder |
+| `delivery` | Parcels, status changes, proof of delivery, receipts, outbox events | `delivery` | Pasindu | Contracts ready |
+| `dispatch` | Courier assignments (pickup, transfer between branches, final delivery) and what happened to each parcel in them | `dispatch` | D.M.A.I. Disanayaka | Tables and domain model (`AssignmentApi` and dispatcher endpoints next) |
 | `reporting` | Delivery and cash-on-delivery reports | - | TBD | Placeholder |
 | `tracking` | Parcel tracking by tracking number, live updates (SSE) | - | TBD | Placeholder |
 | `notifications` | Emails (and later SMS) to users | `notifications` | TBD | Placeholder |
-| `webhooks` | Merchant webhooks | `webhooks` | TBD | Placeholder |
+| `webhooks` | Merchant webhook subscriptions and signed, retried delivery of parcel events (API.md "Webhooks") | `webhooks` | chanuka (WP6) | Built: subscriptions, signed delivery with retries, test pings, history and retry for merchants, admin delivery logs |
 | `outbox` | Relays delivery's outbox events to RabbitMQ | - | TBD | Placeholder |
+| `assistant` | AI delivery assistant: a chatbot answering "Where is my parcel?" and "How much to send 2 kg to Kandy?" only from the data of the tracking and pricing APIs, and daily, weekly and monthly service reports for admins (delivery, tracking and identity data); Google Gemini only rewrites those answers clearly. The same data tools are an MCP server at `/api/v1/mcp` (API.md "Assistant") | - | D.M.A.I. Disanayaka | Built |
+| `courier` | The courier's parcels, one card each (a dispatcher may group several in one task): today's pickups and deliveries, status updates with branch handover and return, Unable to Collect, completed-parcel history; tasks complete by themselves (through `AssignmentApi` and `DeliveryApi`) | - | Kalpani | Built (on the real `AssignmentApi` and `DeliveryApi`) |
 
 Each module's `package-info.java` describes its purpose, owner, schema and the events it publishes and consumes.
 Placeholder modules already have their public contract types (for example `DeliveryApi`, `ParcelStatusChanged`)
@@ -120,6 +122,11 @@ Use the same `RABBITMQ_PASSWORD` and `JWT_SECRET` as in `swiftdrop-deploy/.env`.
 - Git Bash: `openssl rand -base64 48`
 - PowerShell: `$b = New-Object byte[] 48; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [Convert]::ToBase64String($b)`
 
+Parcel events (parcel webhooks, live tracking, the dispatch pickup queue) are only published while
+`SWIFTDROP_OUTBOX_RELAY_ENABLED=true`. It is `false` by default, and then only webhook test pings are sent, with no
+error anywhere (the console says "Outbox relay is off" at startup). On the shared Neon database turn it on in **one**
+backend only: the relay has no row locking, so each event goes to whichever laptop's RabbitMQ publishes it first.
+
 **3. Start the backend.**
 
 Git Bash:
@@ -187,7 +194,10 @@ secrets in the code.
 | `DEMO_PASSWORD` | empty | No | Password for the demo accounts |
 | `GOOGLE_CLIENT_ID` | empty | No | Google OAuth client ID. Google sign-in is on only when both Google values are set. |
 | `GOOGLE_CLIENT_SECRET` | empty | No | Google OAuth client secret. Never commit it. |
-
+| `ASSISTANT_PROVIDER` | `rules` | No | `gemini`: Google Gemini rewrites the assistant's answers clearly from the API data (needs `GEMINI_API_KEY`); `rules`: plain answers without AI |
+| `GEMINI_API_KEY` | empty | No | Google AI Studio key for the assistant. Only in `.env`; never commit it. |
+| `GEMINI_MODEL` | `gemini-3.5-flash` | No | Gemini model for the assistant |
+| `ASSISTANT_MESSAGES_PER_MINUTE` | `20` | No | Chat messages and MCP tool calls per user or IP per minute |
 The connection pool is small on purpose (at most 3 connections, none kept while idle), because the
 whole team shares one Neon database. These values are fixed in `application.yml`.
 
@@ -196,8 +206,8 @@ How to create the Google client: see "Google sign-in setup" in the
 
 ## Database migrations (Flyway)
 
-- Each stateful module owns one schema: `identity`, `merchants`, `pricing`, `delivery`, `webhooks`,
-  `notifications`. dispatch, reporting, tracking and outbox own none. No foreign keys or joins across schemas;
+- Each stateful module owns one schema: `identity`, `merchants`, `pricing`, `delivery`, `dispatch`, `webhooks`,
+  `notifications`. reporting, tracking, outbox and courier own none. No foreign keys or joins across schemas;
   a module refers to another module's rows by UUID only. Entities use `@Table(schema = "<module>")`.
 - Schema changes happen **only** through Flyway files in the module's own folder:
   `src/main/resources/db/migration/<module>/`. A module's first migration starts with
@@ -220,6 +230,10 @@ Current migrations (the baseline for the new Neon database; the old `V2026110114
 | `merchants/V202611030905__merchants_baseline.sql` | `merchants` schema, `merchants.merchant_profiles` (no foreign keys) |
 | `identity/V202611031000__email_verification.sql` | Status `PENDING_EMAIL_VERIFICATION` (column widened to 30), `users.token_version`, `identity.verification_codes` |
 | `notifications/V202611031005__notifications_baseline.sql` | `notifications` schema, `notifications.email_log` |
+| `delivery/V202611052245__create_parcels.sql` | `delivery` schema, `delivery.parcels` (no foreign keys) |
+| `delivery/V202611060017__create_parcel_status_history.sql` | `delivery.parcel_status_history` (one row per status change) |
+| `delivery/V202611060024__create_outbox_events.sql` | `delivery.outbox_events` (the transactional outbox) |
+| `dispatch/V202611101200__create_dispatch_schema.sql` | `dispatch` schema, `dispatch.courier_assignments` and `dispatch.assignment_items` (a parcel is open in at most one assignment; no foreign keys) |
 
 Flyway orders migrations by version across **all** module folders, so a new file must also be newer than the
 migrations it depends on (e.g. a change to `identity.users` must sort after the identity baseline).
@@ -330,6 +344,7 @@ PowerShell: `.\mvnw.cmd test`
 |---|---|
 | `ModuleArchitectureTest` | Module list, boundaries and cycles (`ApplicationModules.verify()`), module docs |
 | `DatabaseIsolationTest` | Tests use Testcontainers, never `.env`; one schema per module, no cross-schema foreign keys |
+| `dispatch/...` | Assignment rules (branches per type, outcomes, completing), the dispatch tables' constraints, one open assignment per parcel, courier queries |
 | `identity/AuthRegisterTest` | Register customer and merchant, validation, duplicates |
 | `identity/AuthLoginTest` | Login with email or mobile, remember me, account statuses (incl. unverified email), logout |
 | `identity/AuthMeTest` | Current user |
@@ -346,6 +361,10 @@ PowerShell: `.\mvnw.cmd test`
 | `merchants/AdminMerchantTest` | Admin list, approve, reject, and access rules |
 | `merchants/internal/...` | Demo merchant seeding (approved, can log in, parallel-safe) |
 | `infrastructure/...` | Districts, correlation ID, RabbitMQ exchange and queues |
+| `courier/Courier*Test` | Courier endpoints with `AssignmentApi` and `DeliveryApi` mocked (dispatch as an in-memory stand-in that keeps its contract): access (401/403), ownership and privacy (404, contacts), today's list, order and counts, status changes with `receivedBy` and the branch check, Unable to Collect, each parcel completed on its own and the task completing by itself, history of completed parcels, request rules and error codes (400/409) |
+| `courier/CourierDispatchFlowTest`, `courier/CourierWorkflowIntegrationTest` | Courier endpoints on the **real** delivery and dispatch modules (no mocks): a parcel from Delgoda to Deniyaya through three couriers and tasks, Unable to Collect, a failed delivery returned and delivered again, completed parcels in the history while their task is open, ownership, roles, the dispatcher reassigning, removing and cancelling, later-day tasks, refused steps that change nothing |
+| `courier/CourierWorkflowRollbackTest` | The parcel status, the task outcome and the automatic completion commit together: dispatch failing after the parcel moved, the completion failing, and a real clash with the dispatcher (`409 ASSIGNMENT_CHANGED`) keep nothing |
+| `courier/internal/application/CourierDayTest` | "Today" in Sri Lankan time |
 | `shared/validation/...` | Phone number rules |
 | `SwiftdropBackendApplicationTests` | App starts, health, Swagger, Google off without credentials |
 
