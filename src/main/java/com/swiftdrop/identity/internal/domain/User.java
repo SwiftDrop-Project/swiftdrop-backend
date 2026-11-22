@@ -143,6 +143,15 @@ public class User {
         this.status = status;
     }
 
+    public void updateContact(String fullName, String phone) {
+        if (fullName != null && !fullName.isBlank()) {
+            this.fullName = fullName.trim();
+        }
+        if (phone != null && !phone.isBlank()) {
+            this.phone = phone.trim();
+        }
+    }
+
     /** Sets a new BCrypt hash, clears any forced password-change flag, and ends every existing session. */
     public void changePassword(String passwordHash) {
         this.passwordHash = passwordHash;
