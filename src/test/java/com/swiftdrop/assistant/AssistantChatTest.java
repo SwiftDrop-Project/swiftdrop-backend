@@ -99,17 +99,45 @@ class AssistantChatTest extends IntegrationTest {
     void asksForWhatIsMissingAndUsesTheAnswer() throws Exception {
         String question = "How much to send 2 kg to Kandy?";
         String followUp = read(ask(CHAT, null, question)).path("reply").asString("");
-        assertThat(followUp).contains("collect it from").doesNotContain("Rs.");
+        // The size picks the vehicle, whose fee is added for the pickup and the delivery, so it's asked for too.
+        assertThat(followUp).contains("collect it from", "its size").doesNotContain("Rs.");
 
-        JsonNode answer = read(ask(CHAT, null, question, followUp, "Colombo"));
+        JsonNode answer = read(ask(CHAT, null, question, followUp, "Colombo, 30 by 20 by 10 cm"));
 
-        assertThat(answer.path("cards").path(0).path("data").path("pickupDistrict").asString(""))
-                .isEqualTo("Colombo");
-        assertThat(answer.path("cards").path(0).path("data").path("dropOffDistrict").asString(""))
-                .isEqualTo("Kandy");
-        // Without measurements the estimate is provisional, and the answer says so.
-        assertThat(answer.path("cards").path(0).path("data").path("status").asString("")).isEqualTo("PROVISIONAL");
-        assertThat(answer.path("reply").asString("")).contains("plus the pickup and delivery charges");
+        JsonNode price = answer.path("cards").path(0).path("data");
+        assertThat(price.path("pickupDistrict").asString("")).isEqualTo("Colombo");
+        assertThat(price.path("dropOffDistrict").asString("")).isEqualTo("Kandy");
+        assertThat(price.path("status").asString("")).isEqualTo("COMPLETE");
+        assertThat(price.path("vehicle").asString("")).isNotEmpty();
+        assertThat(price.path("lines").toString()).contains("PICKUP", "DELIVERY");
+        assertThat(answer.path("reply").asString(""))
+                .contains("It goes by " + price.path("vehicleText").asString(), "pickup by", "delivery by");
+    }
+
+    @Test
+    void pricesTheRateCardExample() throws Exception {
+        // 40 x 30 x 12 / 5000 = 2.88 kg volumetric, so 3 kg is billed: (3 - 1) x 50 = 100; bike legs 150 + 150;
+        // 94.3 km x 1.30 = 122.6 km x Rs. 1 = 122.60. Total Rs. 522.60.
+        JsonNode answer = read(ask(CHAT, null, "How much to send 2.5 kg from Colombo to Kandy, 40 x 30 x 12 cm?"));
+
+        JsonNode price = answer.path("cards").path(0).path("data");
+        assertThat(price.path("total").decimalValue()).isEqualByComparingTo("522.60");
+        assertThat(price.path("billableWeightKg").asInt()).isEqualTo(3);
+        assertThat(price.path("vehicle").asString("")).isEqualTo("BIKE");
+        assertThat(answer.path("reply").asString("")).contains("Rs. 522.60", "weight (billed as 3 kg) Rs. 100.00",
+                "pickup by bike Rs. 150.00", "delivery by bike Rs. 150.00",
+                "transport between branches (122.6 km) Rs. 122.60");
+    }
+
+    @Test
+    void asksOnlyForTheSizeWhenTheRestIsGiven() throws Exception {
+        String question = "How much to send 2 kg from Colombo to Kandy?";
+        String followUp = read(ask(CHAT, null, question)).path("reply").asString("");
+        assertThat(followUp).contains("its size").doesNotContain("collect it from", "Rs.");
+
+        JsonNode answer = read(ask(CHAT, null, question, followUp, "30 x 20 x 10"));
+
+        assertThat(answer.path("cards").path(0).path("data").path("status").asString("")).isEqualTo("COMPLETE");
     }
 
     @Test
@@ -176,11 +204,17 @@ class AssistantChatTest extends IntegrationTest {
     }
 
     @Test
-    void offTopicQuestionsGetTheHelpText() throws Exception {
-        ask(CHAT, null, "Write me a poem about cats")
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.reply").value(
-                        org.hamcrest.Matchers.containsString("only help with SwiftDrop deliveries")));
+    void questionsWithoutDataSayTheSystemHasNoAnswer() throws Exception {
+        // Nothing in SwiftDrop answers these, so the reply is the fixed one (no cards, never Gemini's own words).
+        for (String question : List.of("Write me a poem about cats", "What is your refund policy?")) {
+            ask(CHAT, null, question)
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.provider").value("rules"))
+                    .andExpect(jsonPath("$.cards").isEmpty())
+                    .andExpect(jsonPath("$.reply").value(org.hamcrest.Matchers.allOf(
+                            org.hamcrest.Matchers.containsString("don't have that information"),
+                            org.hamcrest.Matchers.containsString("support@swiftdrop.lk"))));
+        }
     }
 
     // ---- Admin reports ----

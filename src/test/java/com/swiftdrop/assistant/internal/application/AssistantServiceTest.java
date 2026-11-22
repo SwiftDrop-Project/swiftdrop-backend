@@ -71,6 +71,23 @@ class AssistantServiceTest {
     }
 
     @Test
+    void aQuestionWithoutDataGetsTheFixedAnswerNotAnLlmOne() {
+        // The real rules provider with no tools: nothing in SwiftDrop answers a refund question.
+        AssistantProperties properties = new AssistantProperties("gemini", 20,
+                new AssistantProperties.Gemini("key", "m", "http://unused", Duration.ofSeconds(1)));
+        AssistantService service = new AssistantService(properties,
+                new RulesChatProvider(new com.swiftdrop.assistant.internal.tools.AssistantTools(List.of())), gemini,
+                new AssistantRateLimiter(properties));
+
+        ChatReply reply = service.chat(List.of(new Turn(true, "What is your refund policy?")), visitor);
+
+        assertThat(reply.text()).contains("don't have that information", "support@swiftdrop.lk");
+        assertThat(reply.cards()).isEmpty();
+        assertThat(reply.provider()).isEqualTo("rules");
+        verify(gemini, never()).write(anyString(), anyString(), any());
+    }
+
+    @Test
     void geminiIsNotUsedWithoutAKeyOrWhenRulesAreChosen() {
         when(rules.reply(any(), any())).thenReturn(new ChatReply("plain", parcel, "rules"));
 
