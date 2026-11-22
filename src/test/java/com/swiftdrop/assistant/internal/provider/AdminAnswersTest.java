@@ -150,4 +150,16 @@ class AdminAnswersTest {
         assertThat(answers.answer("Hello", admin, cards)).isNull();
         verify(tools, never()).run(anyString(), any(), any());
     }
+
+    @Test
+    void priceQuestionsAreLeftToThePriceEstimate() {
+        assertThat(answers.answer("What is the delivery rate from Colombo to Kandy for 2 kg?", admin, cards))
+                .isNull();
+        assertThat(answers.answer("Delivery rate to Kandy", admin, cards)).isNull();
+        assertThat(answers.answer("What do 3kg parcels sent to Galle cost?", admin, cards)).isNull();
+        verify(tools, never()).run(anyString(), any(), any());
+
+        assertThat(answers.answer("What is the delivery rate this month?", admin, cards))
+                .startsWith("The delivery success rate");
+    }
 }

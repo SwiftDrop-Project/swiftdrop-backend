@@ -46,7 +46,11 @@ final class AdminAnswers {
     private static final Pattern LIST = Pattern.compile(
             "\\b(show|list|find|which|what are|give me|see|display|search)\\b", I);
 
-    private static final Pattern RATE = Pattern.compile("\\b(success|failure|delivery|completion)\\s+rate\\b", I);
+    /** A price question, which the price estimate answers ("rate" alone isn't one: "success rate"). */
+    private static final Pattern PRICE = Pattern.compile("\\b(how much|price|prices|cost|costs|fee|fees|charges?"
+            + "|quote|estimate)\\b|\\d\\s*(kg|kgs|kilos?|kilograms?)\\b", I);
+    private static final Pattern DELIVERY_RATE = Pattern.compile("\\bdelivery\\s+rates?\\b", I);
+    private static final Pattern RATE =Pattern.compile("\\b(success|failure|delivery|completion)\\s+rate\\b", I);
     private static final Pattern TOP_DISTRICTS = Pattern.compile("\\b(top|most|busiest|popular|main|biggest)\\b.*"
             + "\\b(districts?|areas?|cities|city|towns?|places?|regions?|routes?)\\b"
             + "|\\b(districts?|areas?)\\b.*\\b(most|busiest)\\b", I);
@@ -78,7 +82,19 @@ final class AdminAnswers {
     }
 
     /** The answer to an admin's question, or null when it isn't one of these questions. */
+    /**
+     * Whether the admin asks for a delivery fee: price words or a weight, or a "delivery rate" between districts
+     * ("delivery rate this month" is the success rate).
+     */
+    static boolean isPriceQuestion(String text) {
+        return PRICE.matcher(text).find()
+                || DELIVERY_RATE.matcher(text).find() && !Words.districtsIn(text).isEmpty();
+    }
+
     String answer(String text, Caller caller, List<AssistantCard> cards) {
+        if (isPriceQuestion(text)) {
+            return null;
+        }
         LocalDate today = LocalDate.now(Words.SRI_LANKA);
         boolean howMany = HOW_MANY.matcher(text).find();
         boolean period = ReportRequest.hasPeriod(text);

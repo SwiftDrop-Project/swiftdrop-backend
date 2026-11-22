@@ -1477,7 +1477,7 @@ logged-in customer or merchant, their own parcels. It never sees names, phone nu
 | Step | Who | Needs | Uses |
 |---|---|---|---|
 | `track_parcel` | anyone | `trackingNumber` (spaces and case ignored) | `GET /track/{trackingNumber}` (counts against its 30/minute limit) |
-| `estimate_price` | anyone | `pickupDistrict`, `dropOffDistrict` (district codes), `weightKg` (0.01-50), optional `lengthCm`, `widthCm`, `heightCm` (1-300, all three or none) | `POST /pricing/estimate` |
+| `estimate_price` | anyone | `pickupDistrict`, `dropOffDistrict` (district codes), `weightKg` (0.01-50), `lengthCm`, `widthCm`, `heightCm` (1-300; the size picks the vehicle, whose fee is added for the pickup and the delivery, so the assistant asks for it) | `POST /pricing/estimate` |
 | `list_districts` | anyone | none | `GET /meta/districts` |
 | `my_parcels` | logged-in CUSTOMER or MERCHANT (`/assistant/chat/me`) | optional `status` | `GET /tracking/mine` (their latest 10) |
 | `service_report` | logged-in ADMIN (`/assistant/chat/me`); never on MCP | `period` (`DAILY`, `WEEKLY`, `MONTHLY`), optional `date` (yyyy-MM-dd, any day in the period; today when left out) | `DeliveryApi.stats` (booked, delivered, failed per day; the same figures as the admin dashboard), `DeliveryApi.countByStatus`, `TrackingApi.breakdown` (districts and failure reasons from `tracking.parcel_index`, like `/admin/tracking/parcels`), `IdentityApi.getUserRoleCounts` |
@@ -1554,7 +1554,7 @@ conversation and sends it each time, oldest first; the last message must be the 
 | `TRACKING` | `trackingNumber`, `status`, `statusText`, `from`, `to` (town, district), `currentBranch`, `lastUpdate` (text), `updatedAt` |
 | `PARCEL_LIST` | `parcels`: up to 10 rows shaped like `TRACKING`; an admin's search adds `total` (how many match) and `filters` (in words) |
 | `FACTS` | `title`, `subtitle` (the period, or null for figures of right now), `facts`: `label`, `value` (text) |
-| `PRICE` | as above; `status` is `COMPLETE`, `PROVISIONAL` (no size given: pickup and delivery charges not included) or `MANUAL_QUOTE` (`total` null) |
+| `PRICE` | as above, plus `vehicleText` ("bike", "tuk-tuk", "lorry") and `sizeCm` ("30 x 20 x 10"); `status` is `COMPLETE` (with the `PICKUP` and `DELIVERY` lines of the vehicle) or `MANUAL_QUOTE` (`total` null) |
 | `REPORT` | `period`, `title`, `from`, `to`, `countedTo`, `partial`, `rangeText`, `booked`, `delivered`, `failed`, `successRate` (delivered / (delivered + failed) in %, one decimal, null when none finished), `previous` (`from`, `to`, `text`, the same four figures), `changes` (`booked`, `delivered`, `failed`: `difference`, `percent` or null), `perDay` and `busiestDay` (weekly and monthly only), `topPickupDistricts` / `topDropOffDistricts` (top 5 `district`, `count`), `failureReasons` (`reason`, `count`; parcels that failed in the period and are still FAILED), `statusNow` (`status`, `label`, `count`, all parcels now), `accountsNow` (`total`, `customers`, `merchants`, `couriers`, `dispatchers`, `pendingMerchants`) |
 
 Rules and errors:

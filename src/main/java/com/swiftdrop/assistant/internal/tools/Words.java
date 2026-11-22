@@ -2,6 +2,7 @@ package com.swiftdrop.assistant.internal.tools;
 
 import com.swiftdrop.delivery.FailureReason;
 import com.swiftdrop.delivery.ParcelStatus;
+import com.swiftdrop.pricing.Vehicle;
 import com.swiftdrop.shared.reference.District;
 import java.math.BigDecimal;
 import java.text.DecimalFormat;
@@ -24,6 +25,9 @@ public final class Words {
 
     public static final ZoneId SRI_LANKA = ZoneId.of("Asia/Colombo");
 
+    /** Where to send anything SwiftDrop's data can't answer (the help pages show the same address). */
+    public static final String CONTACT_TEAM = "please contact our team at support@swiftdrop.lk";
+
     private static final DateTimeFormatter WHEN =
             DateTimeFormatter.ofPattern("d MMM yyyy, h:mm a", Locale.ENGLISH).withZone(SRI_LANKA);
 
@@ -42,6 +46,15 @@ public final class Words {
     public static String rupees(BigDecimal amount) {
         DecimalFormat format = new DecimalFormat("#,##0.00", DecimalFormatSymbols.getInstance(Locale.ENGLISH));
         return "Rs. " + format.format(amount);
+    }
+
+    /** BIKE → "bike", TUK_TUK → "tuk-tuk", LORRY → "lorry" */
+    public static String vehicle(Vehicle vehicle) {
+        return switch (vehicle) {
+            case BIKE -> "bike";
+            case TUK_TUK -> "tuk-tuk";
+            case LORRY -> "lorry";
+        };
     }
 
     /** "SD2611004817" → "SD 2611 0048 17" */
