@@ -4,12 +4,12 @@ package com.swiftdrop.settings.internal.application;
 import com.swiftdrop.settings.internal.domain.DeliverySettings;
 import com.swiftdrop.settings.internal.dto.DeliverySettingsRequest;
 import com.swiftdrop.settings.internal.persistence.DeliverySettingsRepository;
-import org.springframework.http.HttpStatus;
+import com.swiftdrop.shared.error.FieldValidationException;
 import org.springframework.stereotype.Service;
-import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 
@@ -60,44 +60,52 @@ public class DeliverySettingsService {
 
     private void validate(DeliverySettingsRequest request) {
 
-        if (request.pickupStart() == null ||
-            request.pickupEnd() == null ||
-            request.sameDayCutoff() == null) {
-            badRequest("Pickup times are required.");
+        if (request.pickupStart() == null) {
+            badRequest("pickupStart", "Pickup times are required.");
+        }
+        if (request.pickupEnd() == null) {
+            badRequest("pickupEnd", "Pickup times are required.");
+        }
+        if (request.sameDayCutoff() == null) {
+            badRequest("sameDayCutoff", "Pickup times are required.");
         }
 
         if (!request.pickupStart().isBefore(request.pickupEnd())) {
-            badRequest("Pickup end time must be after start time.");
+            badRequest("pickupEnd", "Pickup end time must be after start time.");
         }
 
         if (request.sameDayCutoff().isBefore(request.pickupStart()) ||
             request.sameDayCutoff().isAfter(request.pickupEnd())) {
-            badRequest("Cut-off time must be within pickup hours.");
+            badRequest("sameDayCutoff", "Cut-off time must be within pickup hours.");
         }
 
         List<String> operatingDays = request.operatingDays();
 
         if (operatingDays == null || operatingDays.isEmpty()) {
-            badRequest("Select at least one operating day.");
+            badRequest("operatingDays", "Select at least one operating day.");
         }
 
-        if (!VALID_DAYS.containsAll(operatingDays) ||
+        // Null check first: Set.of(...).containsAll and Set.copyOf throw NullPointerException on a null day.
+        if (operatingDays.stream().anyMatch(Objects::isNull) ||
+            !VALID_DAYS.containsAll(operatingDays) ||
             Set.copyOf(operatingDays).size() != operatingDays.size()) {
-            badRequest("Invalid or duplicate operating days.");
+            badRequest("operatingDays", "Invalid or duplicate operating days.");
         }
 
         if (request.failedAttempts() == null ||
             request.failedAttempts() < 1 ||
             request.failedAttempts() > 5) {
-            badRequest("Failed attempts must be between 1 and 5.");
+            badRequest("failedAttempts", "Failed attempts must be between 1 and 5.");
         }
     }
 
-    private void badRequest(String message) {
-        throw new ResponseStatusException(
-            HttpStatus.BAD_REQUEST,
-            message
-        );
+    /**
+     * 400 VALIDATION_FAILED with {@code fieldErrors: {field: message}}, the same shape as a Bean Validation error,
+     * so the admin form can show the message next to the field. (A ResponseStatusException is not mapped by
+     * GlobalExceptionHandler and would answer 500.)
+     */
+    private void badRequest(String field, String message) {
+        throw new FieldValidationException(field, message);
     }
 
     private DeliverySettingsRequest toResponse(
