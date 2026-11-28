@@ -66,6 +66,10 @@ public enum ErrorCode {
         /** Customer addresses: saving a 21st address. */
         ADDRESS_LIMIT_REACHED(HttpStatus.CONFLICT,
                         "You can save up to 20 addresses. Delete one before adding another."),
+        /** Payments: paying by card for a delivery that isn't an online payment, or is already paid or not charged. */
+        PAYMENT_NOT_PAYABLE(HttpStatus.CONFLICT, "This delivery doesn't need a card payment."),
+        /** Payments: the mock card was declined (test card 4000 0000 0000 0002). */
+        CARD_DECLINED(HttpStatus.PAYMENT_REQUIRED, "Your card was declined. Try another card."),
         /** Webhooks: creating or turning on a 6th active subscription. */
         WEBHOOK_LIMIT_REACHED(HttpStatus.CONFLICT,
                         "You can have up to 5 active webhooks. Turn one off before adding another."),

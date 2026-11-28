@@ -83,6 +83,8 @@ Change it in the same PR as the code, and tell the frontend team.
 | 409 | `ASSIGNMENT_NEEDS_PARCEL` | Dispatch: removing the last parcel of a task |
 | 409 | `ASSIGNMENT_CHANGED` | Dispatch: someone else changed the task at the same moment |
 | 409 | `ADDRESS_LIMIT_REACHED` | Customer addresses: saving a 21st address |
+| 409 | `PAYMENT_NOT_PAYABLE` | Payments: a card payment for a delivery that isn't online, is already paid or wasn't charged |
+| 402 | `CARD_DECLINED` | Payments: the mock card was declined (test card 4000 0000 0000 0002) |
 | 409 | `WEBHOOK_LIMIT_REACHED` | Webhooks: creating or turning on a 6th active subscription |
 | 409 | `WEBHOOK_DELIVERY_NOT_RETRYABLE` | Webhooks: retrying a delivery that is not `FAILED` |
 | 409 | `WEBHOOK_URL_IN_USE` | Webhooks: another of your active subscriptions already uses this callback URL |
@@ -114,6 +116,8 @@ Messages of the new codes (show them as-is):
 | `ASSIGNMENT_NEEDS_PARCEL` | A task needs at least one parcel. Cancel the task instead. |
 | `ASSIGNMENT_CHANGED` | This task was just changed by someone else. Refresh and try again. |
 | `ADDRESS_LIMIT_REACHED` | You can save up to 20 addresses. Delete one before adding another. |
+| `PAYMENT_NOT_PAYABLE` | This delivery doesn't need a card payment. |
+| `CARD_DECLINED` | Your card was declined. Try another card. |
 | `WEBHOOK_LIMIT_REACHED` | You can have up to 5 active webhooks. Turn one off before adding another. |
 | `WEBHOOK_DELIVERY_NOT_RETRYABLE` | Only failed deliveries can be sent again. |
 | `WEBHOOK_URL_IN_USE` | You already have a webhook for this address. Add the events to it instead. |
@@ -670,6 +674,83 @@ Makes it the default pickup address (no body); the old default stops being the d
 #### `DELETE /customer/addresses/{id}`
 Deletes it. Deleting the default pickup address leaves the customer without a default. `204` · `401` · `403` · `404`
 `NOT_FOUND`
+
+---
+
+## Payments (role `CUSTOMER` only)
+One payment record for every delivery the customer booked (the "Payments" page). The records follow the deliveries:
+every request first brings them up to date, so a new booking has its payment straight away. How the fee is paid is
+the delivery's `paymentMethod`:
+
+| `method` | Shown as | `status` |
+|---|---|---|
+| `ONLINE` | Mock card | `DUE` until paid here with a test card, then `PAID` (with `cardBrand` and `cardLast4`). `NOT_CHARGED` while the delivery has `FAILED` and it wasn't paid. |
+| `AT_PICKUP` | Cash at pickup | `DUE` while `CREATED`, then `PAID` (the courier took the cash at pickup). |
+| `AT_DROP_OFF` | Cash on delivery | `PAID` once `DELIVERED`, `NOT_CHARGED` while `FAILED`, otherwise `DUE`. |
+| `null` (booked before payment methods) | Cash on delivery | as `AT_DROP_OFF`. |
+
+`paidAt`: for cash, when the parcel reached `PICKED_UP` / `DELIVERED`; for a card, when it was paid. A failed delivery
+that is tried again is `DUE` again. No real money moves: the mock card accepts only test numbers.
+
+**Payment (response)**
+```json
+{
+  "id": "5f0c7a52-1f0e-4b6e-9a4e-0d3c1c1f2a10",
+  "parcelId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+  "trackingNumber": "SD2611003152",
+  "bookedAt": "2026-11-09T05:12:00Z",
+  "method": "ONLINE",
+  "status": "PAID",
+  "amount": 980.00,
+  "currency": "LKR",
+  "cardBrand": "VISA",
+  "cardLast4": "4242",
+  "paidAt": "2026-11-09T05:20:41Z"
+}
+```
+
+#### `GET /payments?page=0&size=20`
+The customer's payments, newest booking first, as a page:
+`{ "content": [ /* Payment */ ], "page": 0, "size": 20, "totalElements": 5, "totalPages": 1 }`.
+`page` from 0, `size` 1-100. `200` · `400` `VALIDATION_FAILED` (`fieldErrors.page` / `fieldErrors.size`, as My
+deliveries) · `401` · `403`
+
+#### `GET /payments/summary`
+```json
+{
+  "currency": "LKR",
+  "paidTotal": 3370.00, "paidCount": 3,
+  "dueTotal": 1250.00, "dueCount": 1,
+  "dueCashTotal": 1250.00, "dueCashCount": 1,
+  "dueOnlineTotal": 0.00, "dueOnlineCount": 0,
+  "notChargedCount": 1,
+  "dueCashTrackingNumber": "SD2611004817"
+}
+```
+"Due" is split into cash (to hand to the courier) and online (to pay here). `dueCashTrackingNumber` only when exactly
+one cash payment is due. `200` · `401` · `403`
+
+#### `POST /payments/{id}/card`
+Pays an `ONLINE` payment that is `DUE` with a mock card. Nothing is charged and the card details are not stored (only
+the brand and last 4 digits are kept).
+```json
+{ "cardNumber": "4242 4242 4242 4242", "expiry": "12/28", "cvc": "123", "nameOnCard": "Nimali Perera" }
+```
+| Test card | Result |
+|---|---|
+| `4242 4242 4242 4242` (Visa), `5555 5555 5555 4444` (Mastercard) | Approved: `200` Payment, `PAID` |
+| `4000 0000 0000 0002` | Declined: `402` `CARD_DECLINED`, nothing changes |
+| any other number | `400`, `fieldErrors.cardNumber`: "Use a test card, like 4242 4242 4242 4242." |
+
+| Field | Rule | Error message |
+|---|---|---|
+| `cardNumber` | Required, digits (spaces allowed) | Enter the card number. |
+| `expiry` | `MM/YY`, this month or later | Enter the expiry date as MM/YY. / This card has expired. |
+| `cvc` | 3 or 4 digits | Enter the 3 or 4 digit security code. |
+| `nameOnCard` | Required, max 100 | Enter the name on the card. |
+
+`200` Payment · `400` `VALIDATION_FAILED` · `401` · `402` `CARD_DECLINED` · `403` · `404` `NOT_FOUND` (no such
+payment, or not yours) · `409` `PAYMENT_NOT_PAYABLE` (not an online payment, already paid, or not charged)
 
 ---
 
