@@ -68,6 +68,7 @@ class PaymentSync {
     }
 
     /**
+<<<<<<< HEAD
      * The record of one parcel, made now if it has none yet (a delivery just booked online and paid on the spot,
      * before the Payments page ever listed it), and brought up to date with the parcel. Runs in the caller's
      * transaction; two requests at once still make one row (the insert does nothing for the second).
@@ -84,6 +85,8 @@ class PaymentSync {
     }
 
     /**
+=======
+>>>>>>> 53298e6f2d7b071eaf14fe6fefb651418225b004
      * Updates one record from its parcel (also before a card payment, so its status is current). Paid or not comes
      * only from delivery's {@code feePaymentStatus}; a paid fee takes the amount and time delivery recorded.
      */

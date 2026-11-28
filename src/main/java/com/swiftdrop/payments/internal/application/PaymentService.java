@@ -6,7 +6,10 @@ import com.swiftdrop.delivery.PaymentMethod;
 import com.swiftdrop.delivery.RecordOnlinePaymentCommand;
 import com.swiftdrop.payments.internal.domain.Payment;
 import com.swiftdrop.payments.internal.domain.PaymentStatus;
+<<<<<<< HEAD
 import com.swiftdrop.payments.internal.dto.CardCheckResponse;
+=======
+>>>>>>> 53298e6f2d7b071eaf14fe6fefb651418225b004
 import com.swiftdrop.payments.internal.dto.CardPaymentRequest;
 import com.swiftdrop.payments.internal.dto.PaymentResponse;
 import com.swiftdrop.payments.internal.dto.PaymentSummaryResponse;
@@ -26,7 +29,10 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.UUID;
+<<<<<<< HEAD
 import java.util.function.Supplier;
+=======
+>>>>>>> 53298e6f2d7b071eaf14fe6fefb651418225b004
 
 /**
  * The logged-in customer's payments. Every read first brings the records up to date with the parcels
@@ -74,6 +80,7 @@ public class PaymentService {
      * courier screens). Two payments at once: the second is 409.
      */
     public PaymentResponse payByCard(UUID customerId, UUID paymentId, CardPaymentRequest card) {
+<<<<<<< HEAD
         return payInTransaction(card, () -> {
             Payment payment = payments.findByIdAndCustomerId(paymentId, customerId)
                     .orElseThrow(() -> new NotFoundException(ErrorCode.NOT_FOUND));
@@ -114,6 +121,15 @@ public class PaymentService {
         try {
             return transaction.execute(status -> {
                 Payment payment = find.get();
+=======
+        try {
+            return transaction.execute(status -> {
+                Payment payment = payments.findByIdAndCustomerId(paymentId, customerId)
+                        .orElseThrow(() -> new NotFoundException(ErrorCode.NOT_FOUND));
+                DeliverySnapshot parcel = deliveries.findById(payment.getParcelId())
+                        .orElseThrow(() -> new NotFoundException(ErrorCode.NOT_FOUND));
+                sync.follow(parcel, payment);
+>>>>>>> 53298e6f2d7b071eaf14fe6fefb651418225b004
                 if (payment.getMethod() != PaymentMethod.ONLINE || payment.getStatus() != PaymentStatus.DUE) {
                     throw new ConflictException(ErrorCode.PAYMENT_NOT_PAYABLE);
                 }

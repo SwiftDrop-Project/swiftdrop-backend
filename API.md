@@ -587,8 +587,11 @@ and migrations: `docs/wp2-customer-migration-plan.md`.
 | Payments | `GET /payments?page&size` | - | page of Payment | "Payments" |
 | Payments | `GET /payments/summary` | - | PaymentSummary | "Payments" |
 | Payments | `POST /payments/{id}/card` | mock card (test numbers only) | Payment | "Payments" |
+<<<<<<< HEAD
 | Create delivery | `POST /payments/card-check` | mock card | `cardBrand`, `cardLast4` (nothing charged) | "Online payment on Create delivery" |
 | Create delivery | `POST /payments/parcels/{parcelId}/card` | mock card | Payment | "Online payment on Create delivery" |
+=======
+>>>>>>> 53298e6f2d7b071eaf14fe6fefb651418225b004
 
 Where the code lives: `customer` module (profile, addresses), `payments` module (payments), and the `delivery` module
 (history filters and receipts, because they read parcels; built by WP2, owned by WP3's module). New error codes:
@@ -792,6 +795,7 @@ already has a payment for the parcel (two tabs at once), the answer is `409 PAYM
 
 `200` Payment · `400` `VALIDATION_FAILED` · `401` · `402` `CARD_DECLINED` · `403` · `404` `NOT_FOUND` (no such
 payment, or not yours) · `409` `PAYMENT_NOT_PAYABLE` (not an online payment, already paid, or not charged)
+<<<<<<< HEAD
 
 ### Online payment on "Create delivery"
 When the customer chooses **Online payment** on the Create delivery page, the payment gateway opens first; the delivery
@@ -810,6 +814,8 @@ can be created only after the card is approved, and the fee is paid as part of c
 
 The card details stay in the browser's memory between steps 1 and 3 and are sent only to these endpoints; the backend
 keeps only the brand and last 4 digits.
+=======
+>>>>>>> 53298e6f2d7b071eaf14fe6fefb651418225b004
 
 ---
 
