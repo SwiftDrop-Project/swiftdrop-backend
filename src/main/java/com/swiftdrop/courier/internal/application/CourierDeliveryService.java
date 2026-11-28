@@ -9,10 +9,12 @@ import com.swiftdrop.delivery.ChangeStatusCommand;
 import com.swiftdrop.delivery.DeliveryApi;
 import com.swiftdrop.delivery.DeliverySnapshot;
 import com.swiftdrop.delivery.FailureReason;
+import com.swiftdrop.delivery.FeePaymentStatus;
 import com.swiftdrop.delivery.ParcelStatus;
 import com.swiftdrop.delivery.ParcelStatusEntry;
 import com.swiftdrop.delivery.ProofPhoto;
 import com.swiftdrop.delivery.ProofPhotoRef;
+import com.swiftdrop.delivery.RecordFeeCollectionCommand;
 import com.swiftdrop.dispatch.AssignmentApi;
 import com.swiftdrop.dispatch.AssignmentItemView;
 import com.swiftdrop.dispatch.AssignmentStatus;
@@ -23,6 +25,7 @@ import com.swiftdrop.dispatch.RecordOutcomeCommand;
 import com.swiftdrop.dispatch.TaskProblem;
 import com.swiftdrop.shared.error.ApiException;
 import com.swiftdrop.shared.error.BusinessRuleException;
+import com.swiftdrop.shared.error.ConflictException;
 import com.swiftdrop.shared.error.ErrorCode;
 import com.swiftdrop.shared.error.FieldValidationException;
 import com.swiftdrop.shared.error.ForbiddenException;
@@ -73,6 +76,8 @@ public class CourierDeliveryService {
     /** The role name delivery records as the actor of a courier's change. */
     static final String ACTOR_ROLE = "COURIER";
     static final int MAX_PAGE_SIZE = 100;
+    /** The request field that confirms the delivery fee's cash collection. */
+    static final String FEE_COLLECTED = "feeCollected";
 
     private static final Logger log = LoggerFactory.getLogger(CourierDeliveryService.class);
 
@@ -284,6 +289,7 @@ public class CourierDeliveryService {
         if (!parcel.status().canMoveTo(target) || !task.atTheRightBranch(target, parcel.currentBranch())) {
             throw new BusinessRuleException(ErrorCode.INVALID_STATUS_TRANSITION);
         }
+        boolean collectFee = checkFeeCollection(parcel, task, target, change.feeConfirmed());
         DeliverySnapshot updated;
         try {
             // DELIVERED attaches the proof photo in the same transaction (delivery checks it is this parcel's and
@@ -291,6 +297,12 @@ public class CourierDeliveryService {
             updated = delivery.changeStatus(new ChangeStatusCommand(parcelId, target, courierId, ACTOR_ROLE,
                     change.note(), change.failureReason(), change.recipientName(), change.proofPhotoId(),
                     task.branchFor(target)));
+            if (collectFee) {
+                // The fee's payment (the parcel's own amount) in the same transaction as the status change and the
+                // task outcome below: all three are kept, or none.
+                updated = delivery.recordFeeCollection(new RecordFeeCollectionCommand(parcelId, courierId,
+                        task.assignmentId()));
+            }
         } catch (ForbiddenException ex) {
             throw new NotFoundException(ErrorCode.NOT_FOUND);
         }
@@ -460,6 +472,39 @@ public class CourierDeliveryService {
                 .orElse(before);
     }
 
+    /**
+     * The delivery fee rule of a status change ({@link FeeCollection}), checked after the task and the transition:
+     * <ul>
+     *   <li>the fee is collected at this change and the courier didn't confirm it → 400 {@code feeCollected}
+     *   (proposed business rule: the step can't succeed without the cash fee);</li>
+     *   <li>the courier confirmed a collection that doesn't belong here → 409 FEE_ALREADY_COLLECTED when the fee is
+     *   already paid, otherwise 400 {@code feeCollected} (paid online, no payment method, or another step);</li>
+     *   <li>otherwise nothing: ONLINE and older parcels are never blocked for their payment.</li>
+     * </ul>
+     *
+     * @return true when the collection is to be recorded with this change
+     */
+    private static boolean checkFeeCollection(DeliverySnapshot parcel, CourierTask task, ParcelStatus target,
+                                              boolean confirmed) {
+        boolean dueHere = FeeCollection.collectOn(parcel, task) == target;
+        if (dueHere && !confirmed) {
+            throw new FieldValidationException(FEE_COLLECTED, "Confirm that you collected the delivery fee of "
+                    + parcel.currency() + " " + parcel.feeAmount().toPlainString() + " in cash.");
+        }
+        if (confirmed && !dueHere) {
+            FeePaymentStatus status = parcel.feePaymentStatus();
+            if (status.isPaid()) {
+                throw new ConflictException(ErrorCode.FEE_ALREADY_COLLECTED);
+            }
+            throw new FieldValidationException(FEE_COLLECTED, switch (status) {
+                case AWAITING_ONLINE_VERIFICATION -> "This delivery fee is paid online: there is no cash to collect.";
+                case NOT_RECORDED -> "No payment method is recorded for this parcel: there is no fee to collect.";
+                default -> "The delivery fee isn't collected at this step.";
+            });
+        }
+        return dueHere;
+    }
+
     private static void requireOpen(CourierTask task) {
         if (task.taskClosed()) {
             throw new BusinessRuleException(ErrorCode.ASSIGNMENT_CLOSED);
@@ -500,6 +545,11 @@ public class CourierDeliveryService {
         if (receivedBy != null && target != ParcelStatus.AT_BRANCH) {
             throw new FieldValidationException("receivedBy", "Only when you hand the parcel over at a branch.");
         }
+        // Never with a transfer, handover, failed delivery or return: the fee is only collected on a successful
+        // pickup or delivery.
+        if (request.feeCollected() != null && target != ParcelStatus.PICKED_UP && target != ParcelStatus.DELIVERED) {
+            throw new FieldValidationException(FEE_COLLECTED, "Only when you pick up or deliver the parcel.");
+        }
         if (target == ParcelStatus.DELIVERED && (recipientName == null || recipientName.length() < 2)) {
             throw new FieldValidationException("recipientName", "Enter the name of the person who received the parcel.");
         }
@@ -516,11 +566,13 @@ public class CourierDeliveryService {
         if (reason == FailureReason.OTHER && (note == null || note.length() < 3)) {
             throw new FieldValidationException("note", "Describe what went wrong.");
         }
-        return new ValidChange(note, reason, recipientName, receivedBy, request.proofPhotoId());
+        return new ValidChange(note, reason, recipientName, receivedBy, request.proofPhotoId(),
+                Boolean.TRUE.equals(request.feeCollected()));
     }
 
+    /** @param feeConfirmed the courier confirmed collecting the delivery fee ({@code feeCollected: true}) */
     private record ValidChange(String note, FailureReason failureReason, String recipientName, String receivedBy,
-                               UUID proofPhotoId) {
+                               UUID proofPhotoId, boolean feeConfirmed) {
     }
 
     static String normalizeTrackingNumber(String trackingNumber) {

@@ -82,6 +82,8 @@ Change it in the same PR as the code, and tell the frontend team.
 | 409 | `ASSIGNMENT_STARTED` | Dispatch: cancelling or reassigning a task the courier has already started |
 | 409 | `ASSIGNMENT_NEEDS_PARCEL` | Dispatch: removing the last parcel of a task |
 | 409 | `ASSIGNMENT_CHANGED` | Dispatch: someone else changed the task at the same moment |
+| 409 | `FEE_ALREADY_COLLECTED` | Courier: confirming a delivery fee that is already paid (or a race: one confirmation wins) |
+| 409 | `FEE_COLLECTION_NOT_ALLOWED` | Delivery (`DeliveryApi.recordFeeCollection`): not a cash fee, or the parcel isn't at its collection status |
 | 409 | `WEBHOOK_LIMIT_REACHED` | Webhooks: creating or turning on a 6th active subscription |
 | 409 | `WEBHOOK_DELIVERY_NOT_RETRYABLE` | Webhooks: retrying a delivery that is not `FAILED` |
 | 409 | `WEBHOOK_URL_IN_USE` | Webhooks: another of your active subscriptions already uses this callback URL |
@@ -112,6 +114,8 @@ Messages of the new codes (show them as-is):
 | `ASSIGNMENT_STARTED` | The courier has already started this task. |
 | `ASSIGNMENT_NEEDS_PARCEL` | A task needs at least one parcel. Cancel the task instead. |
 | `ASSIGNMENT_CHANGED` | This task was just changed by someone else. Refresh and try again. |
+| `FEE_ALREADY_COLLECTED` | The delivery fee for this parcel has already been paid. |
+| `FEE_COLLECTION_NOT_ALLOWED` | The delivery fee for this parcel can't be collected now. |
 | `WEBHOOK_LIMIT_REACHED` | You can have up to 5 active webhooks. Turn one off before adding another. |
 | `WEBHOOK_DELIVERY_NOT_RETRYABLE` | Only failed deliveries can be sent again. |
 | `WEBHOOK_URL_IN_USE` | You already have a webhook for this address. Add the events to it instead. |
@@ -1318,6 +1322,8 @@ The **task** becomes `COMPLETED` by itself, in the same transaction, when its la
   "to": { "city": "Kandy", "district": "KANDY" },
   "weightKg": 1.2,
   "codAmount": 2450.00,
+  "deliveryFee": { "amount": 522.60, "currency": "LKR", "paymentMethod": "AT_DROP_OFF",
+                   "status": "AWAITING_CASH_COLLECTION", "collectedAt": null, "collectOn": "DELIVERED" },
   "instructions": "Call before you arrive.",
   "assignedAt": "2026-11-05T02:30:00Z",
   "updatedAt": "2026-11-05T05:10:00Z",
@@ -1337,6 +1343,22 @@ The **task** becomes `COMPLETED` by itself, in the same transaction, when its la
   `null` once the parcel is completed or the task is closed. `from` / `to` (city and district) are always there.
 - `assignedAt`: when the dispatcher created the task.
 - `codAmount`: cash to collect in rupees; `null` when already paid. `instructions` may be `null`.
+- `deliveryFee`: SwiftDrop's delivery fee as fixed at booking (`amount`, `currency`) and how the customer chose to pay
+  it (`paymentMethod`: `ONLINE`, `AT_PICKUP` (the sender pays the courier at pickup) or `AT_DROP_OFF` (the recipient
+  pays the courier at delivery); `null` for parcels booked before payment methods). Always present, on every entry
+  (Today, details, history, history entries and status change answers). It is **not** the cash on delivery
+  (`codAmount`, the price of the goods), which is unchanged.
+  - `status`: `AWAITING_CASH_COLLECTION` (AT_PICKUP / AT_DROP_OFF, not collected yet) · `CASH_COLLECTED` (a courier
+    collected it) · `AWAITING_ONLINE_VERIFICATION` (ONLINE chosen; **not paid** as far as SwiftDrop knows) ·
+    `ONLINE_VERIFIED` (a verified online payment is recorded; nothing records one yet: the payments work will) ·
+    `NOT_RECORDED` (booked before payment methods). Choosing `ONLINE` at booking is never a payment.
+  - `collectedAt`: when it was collected or verified; `null` while unpaid.
+  - `collectOn`: the status change of this step that must confirm the cash collection with `feeCollected: true`:
+    `PICKED_UP` (an AT_PICKUP fee in an open pickup), `DELIVERED` (an AT_DROP_OFF fee, out for delivery); `null`
+    when nothing is collected in this step, always on a finished step or history entry, and never in a transfer,
+    handover, failed delivery or return.
+  - The payment belongs to the parcel (`delivery.fee_payments`, one per parcel), so it is the same for every courier
+    and task: a fee collected at pickup shows `CASH_COLLECTED` to the delivery courier.
 - `completed`: the courier is done with this parcel (table above), whatever the other parcels of its task are doing.
   `completedAt`: when; `null` while it is active.
 - `proof`: `{ "recipientName": "Nimal Perera", "hasPhoto": true }` (who received it, and whether the photo of the
@@ -1445,7 +1467,7 @@ each opened on their own. Same fields as `GET /courier/deliveries/{parcelId}`, r
 
 ### `POST /courier/deliveries/{parcelId}/status`
 ```json
-{ "status": "PICKED_UP", "note": "Collected from front desk" }
+{ "status": "PICKED_UP", "note": "Collected from front desk", "feeCollected": true }
 ```
 ```json
 { "status": "AT_BRANCH", "receivedBy": "S. Silva", "note": "Counter 2" }
@@ -1454,7 +1476,8 @@ each opened on their own. Same fields as `GET /courier/deliveries/{parcelId}`, r
 { "status": "OUT_FOR_DELIVERY" }
 ```
 ```json
-{ "status": "DELIVERED", "recipientName": "Nimal Perera", "proofPhotoId": "3f1d…", "note": "Left with the guard" }
+{ "status": "DELIVERED", "recipientName": "Nimal Perera", "proofPhotoId": "3f1d…", "note": "Left with the guard",
+  "feeCollected": true }
 ```
 ```json
 { "status": "FAILED", "failureReason": "RECIPIENT_UNAVAILABLE", "note": "No answer, called twice" }
@@ -1467,6 +1490,16 @@ each opened on their own. Same fields as `GET /courier/deliveries/{parcelId}`, r
   `note`. Pickups, `FAILED`, the return to the branch (`AT_BRANCH`) and Unable to Collect take no photo.
 - `recipientName` and `proofPhotoId` only with `DELIVERED`; `failureReason` only with `FAILED`; `receivedBy` only with
   `AT_BRANCH`. `note` is optional otherwise.
+- `feeCollected` (only with `PICKED_UP` or `DELIVERED`): the courier confirms they collected the delivery fee in cash.
+  It is **required** (`true`) when the parcel's `deliveryFee.collectOn` is this status (an `AT_PICKUP` fee in a pickup,
+  an `AT_DROP_OFF` fee in a delivery out for delivery, not collected yet) and refused otherwise: `ONLINE`, no payment
+  method, another step, or a fee already paid (`409 FEE_ALREADY_COLLECTED`). The request carries no amount: the
+  parcel's own fee and currency are recorded (`delivery.fee_payments`) in the same transaction as the status change and
+  the task outcome, so all are kept or none. `ONLINE` parcels and parcels booked before payment methods are never held
+  back for their payment. **Proposed business rule, for team review:** the successful pickup or delivery of an unpaid
+  cash fee can't be completed without this confirmation. A sender who doesn't pay is "Unable to Collect"; a recipient
+  who doesn't pay is a `FAILED` delivery (e.g. `RECIPIENT_REFUSED`), returned to the branch: the fee stays unpaid and is
+  collected at a later successful delivery.
 - `200`: the updated parcel (same shape as `GET /courier/deliveries/{parcelId}`), with `completed` and `task.status`
   as they are after the step (`COMPLETED` when this was the task's last open parcel). Customers, merchants and the
   tracking page are told through the delivery module's `ParcelStatusChanged` event (`actorRole: COURIER`).
@@ -1474,10 +1507,12 @@ each opened on their own. Same fields as `GET /courier/deliveries/{parcelId}`, r
 - `409` `ASSIGNMENT_CLOSED`: the task was completed or cancelled. `409` `TASK_STEP_NOT_ALLOWED`: not the task's next
   step (a skipped step, the button pressed twice, a completed parcel). `409` `INVALID_STATUS_TRANSITION`: the parcel
   can't make the move now (its status changed, or it isn't at the task's origin branch for loading). `409`
-  `ASSIGNMENT_CHANGED`: the dispatcher changed the task at the same moment. Nothing was saved; the frontend reloads the
-  parcel.
+  `ASSIGNMENT_CHANGED`: the dispatcher changed the task at the same moment. `409` `FEE_ALREADY_COLLECTED`: the
+  delivery fee is already paid (also when two confirmations race: one wins). Nothing was saved; the frontend reloads
+  the parcel.
 - Checked in this order: the request (400), the parcel is yours (404), the task is open, the step is allowed, the
-  parcel can move (409).
+  parcel can move (409), then the delivery fee (`400` `feeCollected` missing or not allowed, `409`
+  `FEE_ALREADY_COLLECTED`).
 
 ### `POST /courier/deliveries/{parcelId}/unable-to-collect`
 "Unable to Collect": the courier couldn't take the parcel (one action for both task types).
@@ -1540,6 +1575,9 @@ Other modules read the proof through `DeliveryApi.findProofPhoto(parcelId)` (con
 | `failureReason` with another status | Not allowed | Only for failed deliveries. |
 | `receivedBy` (`AT_BRANCH`) | Required, 2-100 chars | Enter the name of the person at the branch who received the parcel. |
 | `receivedBy` with another status | Not allowed | Only when you hand the parcel over at a branch. |
+| `feeCollected` with a status other than `PICKED_UP` / `DELIVERED` | Not allowed | Only when you pick up or deliver the parcel. |
+| `feeCollected` (`deliveryFee.collectOn` is this status) | Required, `true` | Confirm that you collected the delivery fee of LKR 522.60 in cash. |
+| `feeCollected` with nothing to collect at this step | Not allowed | This delivery fee is paid online: there is no cash to collect. / No payment method is recorded for this parcel: there is no fee to collect. / The delivery fee isn't collected at this step. |
 | `problem` (Unable to Collect) | Required, one of the values above | Select why you couldn't take the parcel. |
 | `page` (history) | 0 or more | Use a page number of 0 or more. |
 | `size` (history) | 1-100 | Use a page size from 1 to 100. |
