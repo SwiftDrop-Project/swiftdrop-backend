@@ -28,6 +28,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -43,6 +44,9 @@ public class DeliveryController {
     /** The largest page of "My deliveries" (the same cap as DeliveryApi.findByCustomer). */
     static final int MAX_PAGE_SIZE = 100;
 
+    /** The longest tracking number search ("SD 2611 0031 52" is 15 characters with its spaces). */
+    static final int MAX_SEARCH_LENGTH = 30;
+
     private final DeliveryApi deliveries;
 
     public DeliveryController(DeliveryApi deliveries) {
@@ -57,21 +61,28 @@ public class DeliveryController {
         return ResponseEntity.status(HttpStatus.CREATED).body(DeliveryResponse.from(parcel));
     }
 
-    /** A bad page or size is a 400 here; the API is not asked to cap it quietly. */
+    /**
+     * A bad page, size or search is a 400 here; the API is not asked to cap it quietly. {@code status} may be repeated
+     * ({@code ?status=PICKED_UP&status=AT_BRANCH}) for the "Active" tab; {@code q} is part of a tracking number.
+     */
     @GetMapping
-    @Operation(summary = "My deliveries, newest first, optionally only one status")
+    @Operation(summary = "My deliveries, newest first, optionally only some statuses or a tracking number search")
     public PageResponse<DeliveryResponse> list(@AuthenticationPrincipal Jwt jwt,
                                                @RequestParam(defaultValue = "0") int page,
                                                @RequestParam(defaultValue = "20") int size,
-                                               @RequestParam(required = false) ParcelStatus status) {
+                                               @RequestParam(required = false) Set<ParcelStatus> status,
+                                               @RequestParam(required = false) String q) {
         if (page < 0) {
             throw new FieldValidationException("page", "Use a page number of 0 or more.");
         }
         if (size < 1 || size > MAX_PAGE_SIZE) {
             throw new FieldValidationException("size", "Use a page size from 1 to " + MAX_PAGE_SIZE + ".");
         }
-        return PageResponse.from(deliveries.findByCustomer(CurrentUser.id(jwt), status, PageRequest.of(page, size)),
-                DeliveryResponse::from);
+        if (q != null && q.length() > MAX_SEARCH_LENGTH) {
+            throw new FieldValidationException("q", "Use at most " + MAX_SEARCH_LENGTH + " characters.");
+        }
+        return PageResponse.from(deliveries.findByCustomer(CurrentUser.id(jwt), status == null ? Set.of() : status, q,
+                PageRequest.of(page, size)), DeliveryResponse::from);
     }
 
     /**

@@ -8,11 +8,15 @@ import com.swiftdrop.customer.internal.dto.CustomerProfileResponse;
 import com.swiftdrop.customer.internal.dto.UpdatePersonalDetailsRequest;
 import com.swiftdrop.customer.internal.dto.UpdatePreferencesRequest;
 import com.swiftdrop.customer.internal.persistence.CustomerProfileRepository;
+import com.swiftdrop.delivery.DeliveryApi;
+import com.swiftdrop.delivery.ParcelStatus;
 import com.swiftdrop.identity.IdentityApi;
 import com.swiftdrop.identity.UserSummary;
 import com.swiftdrop.shared.error.ErrorCode;
+import com.swiftdrop.shared.error.FieldValidationException;
 import com.swiftdrop.shared.error.NotFoundException;
 import com.swiftdrop.shared.validation.PhoneNumberNormalizer;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -25,10 +29,21 @@ public class CustomerProfileService implements CustomerApi {
 
     private final CustomerProfileRepository profileRepository;
     private final IdentityApi identityApi;
+    private final DeliveryApi deliveryApi;
+    private final CustomerAddressService addressService;
 
-    public CustomerProfileService(CustomerProfileRepository profileRepository, IdentityApi identityApi) {
+    public CustomerProfileService(CustomerProfileRepository profileRepository, IdentityApi identityApi,
+                                  DeliveryApi deliveryApi, CustomerAddressService addressService) {
         this.profileRepository = profileRepository;
         this.identityApi = identityApi;
+        this.deliveryApi = deliveryApi;
+        this.addressService = addressService;
+    }
+
+    /** Every delivery the customer has booked, counted by WP3's parcel service (no rows are loaded). */
+    private long totalDeliveries(UUID userId) {
+        ParcelStatus everyStatus = null;
+        return deliveryApi.findByCustomer(userId, everyStatus, PageRequest.of(0, 1)).getTotalElements();
     }
 
     @Override
@@ -59,8 +74,8 @@ public class CustomerProfileService implements CustomerApi {
         CustomerProfile profile = profileRepository.findById(userId)
                 .orElseGet(() -> profileRepository.save(new CustomerProfile(userId)));
 
-        long totalDeliveries = 0;
-        long savedAddressesCount = 0;
+        long totalDeliveries = totalDeliveries(userId);
+        long savedAddressesCount = addressService.count(userId);
 
         return new CustomerProfileResponse(
                 user.id(),
@@ -90,8 +105,8 @@ public class CustomerProfileService implements CustomerApi {
                 updatedUser.email(),
                 updatedUser.phone(),
                 updatedUser.createdAt(),
-                0,
-                0,
+                totalDeliveries(userId),
+                addressService.count(userId),
                 profile.getDefaultPickupAddressId(),
                 profile.getPreferredPaymentMethod()
         );
@@ -101,6 +116,12 @@ public class CustomerProfileService implements CustomerApi {
     public CustomerProfileResponse updatePreferences(UUID userId, UpdatePreferencesRequest request) {
         UserSummary user = identityApi.findById(userId)
                 .orElseThrow(() -> new NotFoundException(ErrorCode.NOT_FOUND));
+
+        // The default pickup address must be one of the customer's own saved addresses (null clears it).
+        if (request.defaultPickupAddressId() != null
+                && !addressService.isOwnAddress(userId, request.defaultPickupAddressId())) {
+            throw new FieldValidationException("defaultPickupAddressId", "Choose one of your saved addresses.");
+        }
 
         CustomerProfile profile = profileRepository.findById(userId)
                 .orElseGet(() -> new CustomerProfile(userId));
@@ -114,8 +135,8 @@ public class CustomerProfileService implements CustomerApi {
                 user.email(),
                 user.phone(),
                 user.createdAt(),
-                0,
-                0,
+                totalDeliveries(userId),
+                addressService.count(userId),
                 saved.getDefaultPickupAddressId(),
                 saved.getPreferredPaymentMethod()
         );
