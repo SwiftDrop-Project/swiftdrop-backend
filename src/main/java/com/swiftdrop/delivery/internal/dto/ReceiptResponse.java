@@ -23,8 +23,9 @@ import java.util.List;
  * @param total            the fee charged; the lines add up to it
  * @param codAmount        cash the courier collects from the recipient for the sender, or null. Not part of the fee
  * @param paymentMethod    how the fee is paid, or null for parcels booked before payment methods
- * @param paymentStatus    whether the fee has been paid, or null when SwiftDrop can't tell (online payments are not
- *                         recorded yet, and parcels without a payment method)
+ * @param paymentStatus    whether the fee has been paid, from delivery's {@code FeePaymentStatus} (the one rule):
+ *                         PAID once a payment is recorded (cash collected, or a verified online payment), DUE while it
+ *                         is awaited, null for parcels booked before payment methods
  */
 public record ReceiptResponse(
         String trackingNumber,

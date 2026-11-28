@@ -97,23 +97,23 @@ public class Payment {
     }
 
     /**
-     * Follows the parcel: its fee, method and the status they give. A cash payment that becomes paid gets
-     * {@code collectedAt} (when the courier took the cash) as its paid date. A card payment is never undone.
+     * Follows the parcel as delivery reports it: method, fee and the status its {@code feePaymentStatus} gives. The
+     * paid date is delivery's recorded payment time ({@code FeePayment.collectedAt}); null while not paid. The card
+     * brand and last 4 digits stay, to show which mock card paid.
      */
     public void follow(PaymentMethod method, BigDecimal amount, String currency, PaymentStatus status,
-                       Instant collectedAt) {
+                       Instant paidAt) {
         this.method = method;
-        if (!isPaidByCard()) {
-            this.amount = amount;
-            this.currency = currency;
-        }
-        if (status != this.status) {
-            this.status = status;
-            this.paidAt = status == PaymentStatus.PAID ? collectedAt : null;
-        }
+        this.amount = amount;
+        this.currency = currency;
+        this.status = status;
+        this.paidAt = status == PaymentStatus.PAID ? paidAt : null;
     }
 
-    /** Records a mock card payment: only the brand and the last 4 digits are kept. */
+    /**
+     * Records a mock card payment here (only the brand and the last 4 digits are kept). The caller records it in
+     * delivery too ({@code DeliveryApi.recordOnlinePayment}) in the same transaction, so both are kept or neither.
+     */
     public void payByCard(String brand, String last4, Instant at) {
         this.status = PaymentStatus.PAID;
         this.cardBrand = brand;

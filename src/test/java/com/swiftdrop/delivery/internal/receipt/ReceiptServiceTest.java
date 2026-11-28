@@ -1,7 +1,11 @@
 package com.swiftdrop.delivery.internal.receipt;
 
 import com.swiftdrop.delivery.CreateDeliveryCommand;
+import com.swiftdrop.delivery.DeliveryApi;
 import com.swiftdrop.delivery.DeliveryContact;
+import com.swiftdrop.delivery.FeePayment;
+import com.swiftdrop.delivery.FeePaymentSource;
+import com.swiftdrop.delivery.FeePaymentStatus;
 import com.swiftdrop.delivery.ParcelSize;
 import com.swiftdrop.delivery.ParcelStatus;
 import com.swiftdrop.delivery.PaymentMethod;
@@ -45,8 +49,10 @@ class ReceiptServiceTest {
             "[{\"component\":\"BASE\",\"amount\":650.00},{\"component\":\"WEIGHT\",\"amount\":330.00}]";
 
     private final ParcelRepository parcels = mock(ParcelRepository.class);
+    private final DeliveryApi deliveries = mock(DeliveryApi.class);
     private final ReceiptPdfRenderer renderer = mock(ReceiptPdfRenderer.class);
-    private final ReceiptService service = new ReceiptService(parcels, JsonMapper.builder().build(), renderer);
+    private final ReceiptService service =
+            new ReceiptService(parcels, deliveries, JsonMapper.builder().build(), renderer);
 
     @Test
     void theCustomersOwnReceiptHasTheBookedFeeLineByLine() {
@@ -126,24 +132,40 @@ class ReceiptServiceTest {
     }
 
     @Test
-    void theFeeIsPaidOnceTheCourierHasCollectedIt() {
-        // Cash at pickup: paid from the moment the parcel is picked up.
-        assertThat(ReceiptService.paymentStatus(PaymentMethod.AT_PICKUP, ParcelStatus.CREATED))
+    void paidOrDueComesOnlyFromDeliverysFeePaymentStatus() {
+        assertThat(ReceiptService.paymentStatus(FeePaymentStatus.CASH_COLLECTED)).isEqualTo(PaymentStatus.PAID);
+        assertThat(ReceiptService.paymentStatus(FeePaymentStatus.ONLINE_VERIFIED)).isEqualTo(PaymentStatus.PAID);
+        assertThat(ReceiptService.paymentStatus(FeePaymentStatus.AWAITING_CASH_COLLECTION))
                 .isEqualTo(PaymentStatus.DUE);
-        for (ParcelStatus status : List.of(ParcelStatus.PICKED_UP, ParcelStatus.AT_BRANCH, ParcelStatus.IN_TRANSIT,
-                ParcelStatus.OUT_FOR_DELIVERY, ParcelStatus.DELIVERED, ParcelStatus.FAILED)) {
-            assertThat(ReceiptService.paymentStatus(PaymentMethod.AT_PICKUP, status)).isEqualTo(PaymentStatus.PAID);
-        }
-        // Cash at drop-off: paid only once delivered; a failed delivery hasn't paid.
-        assertThat(ReceiptService.paymentStatus(PaymentMethod.AT_DROP_OFF, ParcelStatus.DELIVERED))
-                .isEqualTo(PaymentStatus.PAID);
-        assertThat(ReceiptService.paymentStatus(PaymentMethod.AT_DROP_OFF, ParcelStatus.FAILED))
+        assertThat(ReceiptService.paymentStatus(FeePaymentStatus.AWAITING_ONLINE_VERIFICATION))
                 .isEqualTo(PaymentStatus.DUE);
-        assertThat(ReceiptService.paymentStatus(PaymentMethod.AT_DROP_OFF, ParcelStatus.OUT_FOR_DELIVERY))
-                .isEqualTo(PaymentStatus.DUE);
-        // Online payments aren't recorded yet, and old parcels have no method: unknown.
-        assertThat(ReceiptService.paymentStatus(PaymentMethod.ONLINE, ParcelStatus.DELIVERED)).isNull();
-        assertThat(ReceiptService.paymentStatus(null, ParcelStatus.DELIVERED)).isNull();
+        // Booked before payment methods: nothing is known, so no Paid/Due.
+        assertThat(ReceiptService.paymentStatus(FeePaymentStatus.NOT_RECORDED)).isNull();
+    }
+
+    @Test
+    void aRecordedOnlinePaymentShowsAsPaidOnTheReceipt() {
+        Parcel parcel = parcel(CUSTOMER_ID, PaymentMethod.ONLINE, BREAKDOWN);
+        UUID id = parcel.toSnapshot().id();
+        FeePayment online = new FeePayment(new BigDecimal("980.00"), "LKR", PaymentMethod.ONLINE,
+                FeePaymentSource.ONLINE, null, null, BOOKED_AT, "payments:" + UUID.randomUUID());
+        when(parcels.findById(id)).thenReturn(Optional.of(parcel));
+        when(deliveries.findById(id)).thenReturn(Optional.of(parcel.toSnapshot(online)));
+
+        ReceiptResponse receipt = service.forCustomer(CUSTOMER_ID, id);
+
+        assertThat(receipt.paymentMethod()).isEqualTo(PaymentMethod.ONLINE);
+        assertThat(receipt.paymentStatus()).isEqualTo(PaymentStatus.PAID);
+    }
+
+    @Test
+    void anOnlinePaymentNotRecordedYetIsDue() {
+        Parcel parcel = parcel(CUSTOMER_ID, PaymentMethod.ONLINE, BREAKDOWN);
+        UUID id = parcel.toSnapshot().id();
+        when(parcels.findById(id)).thenReturn(Optional.of(parcel));
+        when(deliveries.findById(id)).thenReturn(Optional.of(parcel.toSnapshot()));
+
+        assertThat(service.forCustomer(CUSTOMER_ID, id).paymentStatus()).isEqualTo(PaymentStatus.DUE);
     }
 
     private static Parcel parcel(UUID customerId, PaymentMethod paymentMethod, String breakdown) {

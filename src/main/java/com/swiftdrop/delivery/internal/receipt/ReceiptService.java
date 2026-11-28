@@ -1,8 +1,8 @@
 package com.swiftdrop.delivery.internal.receipt;
 
+import com.swiftdrop.delivery.DeliveryApi;
 import com.swiftdrop.delivery.DeliverySnapshot;
-import com.swiftdrop.delivery.ParcelStatus;
-import com.swiftdrop.delivery.PaymentMethod;
+import com.swiftdrop.delivery.FeePaymentStatus;
 import com.swiftdrop.delivery.internal.domain.Parcel;
 import com.swiftdrop.delivery.internal.dto.ReceiptResponse;
 import com.swiftdrop.delivery.internal.dto.ReceiptResponse.Line;
@@ -42,25 +42,30 @@ public class ReceiptService {
             "COD", "Cash on delivery handling");
 
     private final ParcelRepository parcels;
+    private final DeliveryApi deliveries;
     private final JsonMapper jsonMapper;
     private final ReceiptPdfRenderer renderer;
 
-    public ReceiptService(ParcelRepository parcels, JsonMapper jsonMapper, ReceiptPdfRenderer renderer) {
+    public ReceiptService(ParcelRepository parcels, DeliveryApi deliveries, JsonMapper jsonMapper,
+                          ReceiptPdfRenderer renderer) {
         this.parcels = parcels;
+        this.deliveries = deliveries;
         this.jsonMapper = jsonMapper;
         this.renderer = renderer;
     }
 
     /**
      * The receipt of one of the customer's deliveries. Someone else's delivery, a merchant order and an unknown id
-     * are all 404 NOT_FOUND, like GET /deliveries/{id}, so nobody can find out which ids exist.
+     * are all 404 NOT_FOUND, like GET /deliveries/{id}, so nobody can find out which ids exist. The snapshot comes
+     * from {@link DeliveryApi#findById}, so it carries the recorded fee payment ({@code feePaymentStatus}).
      */
     @Transactional(readOnly = true)
     public ReceiptResponse forCustomer(UUID customerId, UUID parcelId) {
         Parcel parcel = parcels.findById(parcelId)
                 .filter(found -> customerId.equals(found.toSnapshot().customerId()))
                 .orElseThrow(() -> new NotFoundException(ErrorCode.NOT_FOUND));
-        return receipt(parcel.toSnapshot(), parcel.feeBreakdownJson());
+        DeliverySnapshot snapshot = deliveries.findById(parcelId).orElseGet(parcel::toSnapshot);
+        return receipt(snapshot, parcel.feeBreakdownJson());
     }
 
     /** The same receipt as a PDF document. */
@@ -78,7 +83,7 @@ public class ReceiptService {
                 parcel.recipient(), parcel.weightKg(), parcel.billableWeightKg(), parcel.size(), parcel.vehicle(),
                 lines(breakdownJson, parcel.feeAmount(), parcel.billableWeightKg()), parcel.feeAmount(),
                 parcel.currency(), parcel.codAmount(), parcel.paymentMethod(),
-                paymentStatus(parcel.paymentMethod(), parcel.status()));
+                paymentStatus(parcel.feePaymentStatus()));
     }
 
     /**
@@ -117,18 +122,15 @@ public class ReceiptService {
     }
 
     /**
-     * Paid when the courier has collected the fee: at pickup once the parcel has been picked up, at drop-off once it
-     * is delivered. Online payments are not recorded yet (payments work), so SwiftDrop can't tell: null.
+     * The one rule for "is the fee paid" is delivery's {@link FeePaymentStatus}: PAID once a payment is recorded (a
+     * courier collected the cash, or the payments module recorded a verified online payment), DUE while it is still
+     * awaited, and null for parcels booked before payment methods (nothing is known).
      */
-    static PaymentStatus paymentStatus(PaymentMethod method, ParcelStatus status) {
-        if (method == null) {
+    static PaymentStatus paymentStatus(FeePaymentStatus feePaymentStatus) {
+        if (feePaymentStatus == null || feePaymentStatus == FeePaymentStatus.NOT_RECORDED) {
             return null;
         }
-        return switch (method) {
-            case AT_PICKUP -> status == ParcelStatus.CREATED ? PaymentStatus.DUE : PaymentStatus.PAID;
-            case AT_DROP_OFF -> status == ParcelStatus.DELIVERED ? PaymentStatus.PAID : PaymentStatus.DUE;
-            case ONLINE -> null;
-        };
+        return feePaymentStatus.isPaid() ? PaymentStatus.PAID : PaymentStatus.DUE;
     }
 
     /** "SwiftDrop-receipt-SD2611003152.pdf" */

@@ -273,8 +273,8 @@ class DeliveryService implements DeliveryApi {
         Pageable capped = cappedPage(pageable);
         Pageable page = PageRequest.of(capped.getPageNumber(), capped.getPageSize(),
                 ParcelSearchSpecification.sort(ParcelSort.NEWEST));
-        return parcels.findAll(ParcelSearchSpecification.forCustomer(customerId, statuses, trackingNumber), page)
-                .map(Parcel::toSnapshot);
+        return snapshots(parcels.findAll(ParcelSearchSpecification.forCustomer(customerId, statuses, trackingNumber),
+                page));
     }
 
     /** The same rules as {@link #findByCustomer}; a null merchant id would return every customer's parcel. */

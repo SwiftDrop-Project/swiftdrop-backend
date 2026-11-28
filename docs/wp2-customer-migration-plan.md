@@ -78,15 +78,20 @@ addresses per customer is a service rule (`409 ADDRESS_LIMIT_REACHED`), not a co
 | `tracking_number`, `booked_at` | VARCHAR(20) / TIMESTAMPTZ, not null | Copied from the parcel so the page sorts and pages in this table alone |
 | `method` | VARCHAR(20), null | The parcel's `PaymentMethod`: `ONLINE`, `AT_PICKUP`, `AT_DROP_OFF`; null for parcels booked before payment methods (cash on delivery) |
 | `amount`, `currency` | NUMERIC(12,2) ≥ 0 / VARCHAR(3), not null | The parcel's fee |
-| `status` | VARCHAR(20), not null | `DUE`, `PAID`, `NOT_CHARGED` (rules in API.md "Payments") |
+| `status` | VARCHAR(20), not null | `DUE`, `PAID`, `NOT_CHARGED`: a copy for the page, worked out from delivery's `feePaymentStatus` (rules in API.md "Payments") |
 | `card_brand`, `card_last4` | VARCHAR(20) / VARCHAR(4), null | Only after a mock card payment. The full card number, expiry and security code are never stored |
-| `paid_at` | TIMESTAMPTZ, null | When paid (cash: when the parcel reached `PICKED_UP` / `DELIVERED`) |
+| `paid_at` | TIMESTAMPTZ, null | When paid: copied from delivery's recorded payment (`delivery.fee_payments`) |
 | `created_at`, `updated_at` | TIMESTAMPTZ, not null | |
 | `version` | BIGINT, not null, default 0 | Optimistic locking: two card payments at once, the second gets `409` |
 
 Index `ix_payments_customer (customer_id, booked_at DESC, id DESC)` for the Payments page. Records are created and
 updated from the customer's parcels whenever the Payments page asks (`INSERT ... ON CONFLICT (parcel_id) DO NOTHING`),
 so nothing depends on RabbitMQ.
+
+Whether a fee is paid is owned by the delivery module (WP3/WP9, PR #55): `delivery.fee_payments` holds at most one
+recorded payment per parcel, and `FeePaymentStatus` is the one rule everyone reads. `payments.payments` never decides
+it: a mock card payment is written to both tables in one transaction (`DeliveryApi.recordOnlinePayment`, reference
+`payments:<payments.payments.id>`), and cash collections are recorded by the courier module.
 
 ## 4. Changing this later
 

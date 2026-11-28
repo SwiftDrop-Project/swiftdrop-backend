@@ -1,48 +1,34 @@
 package com.swiftdrop.payments.internal.domain;
 
+import com.swiftdrop.delivery.FeePaymentStatus;
 import com.swiftdrop.delivery.ParcelStatus;
-import com.swiftdrop.delivery.PaymentMethod;
 
-/** Whether a delivery's fee has been paid. */
+/**
+ * How the Payments page shows a delivery's fee. Whether the fee is paid is never decided here: it comes from
+ * delivery's {@link FeePaymentStatus} (the one rule, shared with receipts and the courier screens).
+ */
 public enum PaymentStatus {
     /** Not paid yet: cash still to be collected by the courier, or an online payment still to be made. */
     DUE,
-    /** Paid: by mock card, or collected in cash by the courier. */
+    /** Paid: delivery recorded the cash collection or the verified online (mock card) payment. */
     PAID,
-    /** The delivery failed before the fee was collected, so nothing was charged (it is due again if retried). */
+    /**
+     * Not paid and not expected now: the delivery failed before the fee was paid (it is due again if retried), or the
+     * parcel was booked before payment methods, so nothing is recorded about its fee.
+     */
     NOT_CHARGED;
 
     /**
-     * The status a payment has for a parcel in this state.
-     * <ul>
-     *   <li>ONLINE: paid once paid by card; otherwise not charged while the delivery has failed, else due.</li>
-     *   <li>AT_PICKUP: the sender pays the courier at pickup, so paid from {@code PICKED_UP} on.</li>
-     *   <li>AT_DROP_OFF, and parcels without a method (cash on delivery): paid once {@code DELIVERED}, not charged
-     *   while {@code FAILED}.</li>
-     * </ul>
+     * PAID when delivery says the fee is paid ({@link FeePaymentStatus#isPaid}); NOT_CHARGED for a fee that is not
+     * recorded at all, or not paid while the delivery has FAILED; otherwise DUE.
      */
-    public static PaymentStatus of(PaymentMethod method, ParcelStatus parcelStatus, boolean paidByCard) {
-        if (method == PaymentMethod.ONLINE) {
-            if (paidByCard) {
-                return PAID;
-            }
-            return parcelStatus == ParcelStatus.FAILED ? NOT_CHARGED : DUE;
+    public static PaymentStatus of(FeePaymentStatus feePaymentStatus, ParcelStatus parcelStatus) {
+        if (feePaymentStatus.isPaid()) {
+            return PAID;
         }
-        if (method == PaymentMethod.AT_PICKUP) {
-            return parcelStatus == ParcelStatus.CREATED ? DUE : PAID;
+        if (feePaymentStatus == FeePaymentStatus.NOT_RECORDED || parcelStatus == ParcelStatus.FAILED) {
+            return NOT_CHARGED;
         }
-        return switch (parcelStatus) {
-            case DELIVERED -> PAID;
-            case FAILED -> NOT_CHARGED;
-            default -> DUE;
-        };
-    }
-
-    /** The parcel status at which the courier collects a cash fee (for the paid date), or null for online. */
-    public static ParcelStatus cashCollectedAt(PaymentMethod method) {
-        if (method == PaymentMethod.ONLINE) {
-            return null;
-        }
-        return method == PaymentMethod.AT_PICKUP ? ParcelStatus.PICKED_UP : ParcelStatus.DELIVERED;
+        return DUE;
     }
 }

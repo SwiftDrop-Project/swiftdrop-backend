@@ -713,17 +713,20 @@ Deletes it. Deleting the default pickup address leaves the customer without a de
 ## Payments (role `CUSTOMER` only)
 One payment record for every delivery the customer booked (the "Payments" page). The records follow the deliveries:
 every request first brings them up to date, so a new booking has its payment straight away. How the fee is paid is
-the delivery's `paymentMethod`:
+the delivery's `paymentMethod`; **whether it is paid comes only from the delivery's `feePaymentStatus`** (delivery's
+one rule, also used by receipts and the courier screens):
 
-| `method` | Shown as | `status` |
+| `method` | Shown as | delivery `feePaymentStatus` → `status` |
 |---|---|---|
-| `ONLINE` | Mock card | `DUE` until paid here with a test card, then `PAID` (with `cardBrand` and `cardLast4`). `NOT_CHARGED` while the delivery has `FAILED` and it wasn't paid. |
-| `AT_PICKUP` | Cash at pickup | `DUE` while `CREATED`, then `PAID` (the courier took the cash at pickup). |
-| `AT_DROP_OFF` | Cash on delivery | `PAID` once `DELIVERED`, `NOT_CHARGED` while `FAILED`, otherwise `DUE`. |
-| `null` (booked before payment methods) | Cash on delivery | as `AT_DROP_OFF`. |
+| `ONLINE` | Mock card | `AWAITING_ONLINE_VERIFICATION` → `DUE` until paid here with a test card; the payment is recorded in delivery (`recordOnlinePayment`), so `ONLINE_VERIFIED` → `PAID` (with `cardBrand` and `cardLast4`). |
+| `AT_PICKUP` | Cash at pickup | `AWAITING_CASH_COLLECTION` → `DUE`; `CASH_COLLECTED` (the courier recorded the cash) → `PAID`. |
+| `AT_DROP_OFF` | Cash on delivery | `AWAITING_CASH_COLLECTION` → `DUE`; `CASH_COLLECTED` → `PAID`. |
+| `null` (booked before payment methods) | Cash on delivery | `NOT_RECORDED` → `NOT_CHARGED` (nothing is recorded about its fee). |
 
-`paidAt`: for cash, when the parcel reached `PICKED_UP` / `DELIVERED`; for a card, when it was paid. A failed delivery
-that is tried again is `DUE` again. No real money moves: the mock card accepts only test numbers.
+A fee that isn't paid while the delivery has `FAILED` is `NOT_CHARGED` (`DUE` again if the delivery is tried again).
+The parcel status alone never makes a fee paid: a delivered parcel whose cash the courier didn't record stays `DUE`.
+`paidAt` and the paid amount are the ones delivery recorded (`FeePayment.collectedAt`). No real money moves: the mock
+card accepts only test numbers.
 
 **Payment (response)**
 ```json
@@ -765,7 +768,10 @@ one cash payment is due. `200` · `401` · `403`
 
 #### `POST /payments/{id}/card`
 Pays an `ONLINE` payment that is `DUE` with a mock card. Nothing is charged and the card details are not stored (only
-the brand and last 4 digits are kept).
+the brand and last 4 digits are kept). An approved card is recorded in delivery in the same transaction
+(`DeliveryApi.recordOnlinePayment`, `externalReference` = `payments:<payment id>`), so the delivery's
+`feePaymentStatus` becomes `ONLINE_VERIFIED` and receipts and the courier screens show it as paid. If delivery
+already has a payment for the parcel (two tabs at once), the answer is `409 PAYMENT_NOT_PAYABLE`.
 ```json
 { "cardNumber": "4242 4242 4242 4242", "expiry": "12/28", "cvc": "123", "nameOnCard": "Nimali Perera" }
 ```
@@ -1280,8 +1286,10 @@ The customer's own deliveries, newest first, as a page of Delivery (the shape ab
   "Pickup", "Drop-off", "Between branches", "Cash on delivery handling".
 - `billableWeightKg`, `size` and `vehicle` are null for parcels booked before sizes; `paymentMethod` for parcels booked
   before payment methods. `codAmount` is the cash collected from the recipient for the sender, not part of the fee.
-- `paymentStatus`: `PAID` once the courier has collected the fee (`AT_PICKUP`: from `PICKED_UP` on; `AT_DROP_OFF`:
-  once `DELIVERED`), otherwise `DUE`. `null` for `ONLINE` (online payments aren't recorded yet) and without a method.
+- `paymentStatus` follows the delivery's `feePaymentStatus` (the one rule for "is the fee paid"): `PAID` for
+  `CASH_COLLECTED` (a courier recorded the cash) and `ONLINE_VERIFIED` (paid by mock card on the Payments page),
+  `DUE` for `AWAITING_CASH_COLLECTION` and `AWAITING_ONLINE_VERIFICATION`, `null` for `NOT_RECORDED` (booked before
+  payment methods).
 - `200` · `400` (`id` is not a UUID) · `401` · `403` (not a `CUSTOMER`) · `404` `NOT_FOUND` (no such delivery, or it
   isn't yours).
 

@@ -4,7 +4,9 @@ import com.swiftdrop.delivery.DeliveryApi;
 import com.swiftdrop.delivery.DeliveryContact;
 import com.swiftdrop.delivery.DeliverySnapshot;
 import com.swiftdrop.delivery.ParcelStatus;
-import com.swiftdrop.delivery.ParcelStatusEntry;
+import com.swiftdrop.delivery.FeePayment;
+import com.swiftdrop.delivery.FeePaymentSource;
+import com.swiftdrop.delivery.FeePaymentStatus;
 import com.swiftdrop.delivery.PaymentMethod;
 import com.swiftdrop.payments.internal.domain.Payment;
 import com.swiftdrop.payments.internal.domain.PaymentStatus;
@@ -69,40 +71,46 @@ class PaymentSyncTest {
     }
 
     @Test
-    void cashOnDeliveryBecomesPaidWithTheTimeTheParcelWasDelivered() {
-        DeliverySnapshot parcel = parcel(PaymentMethod.AT_DROP_OFF, ParcelStatus.DELIVERED);
-        parcels(parcel);
-        Payment payment = payment(parcel, PaymentStatus.DUE);
-        when(payments.findByCustomerId(CUSTOMER)).thenReturn(List.of(payment));
-        when(deliveries.history(parcel.id())).thenReturn(List.of(
-                new ParcelStatusEntry(ParcelStatus.DELIVERED, null, null, "COURIER", DELIVERED_AT),
-                new ParcelStatusEntry(ParcelStatus.CREATED, null, null, "CUSTOMER", BOOKED)));
+    void cashIsPaidOnlyOnceACourierRecordedItWithTheTimeDeliveryRecorded() {
+        DeliverySnapshot delivered = parcel(PaymentMethod.AT_DROP_OFF, ParcelStatus.DELIVERED);
+        DeliverySnapshot collected = parcel(PaymentMethod.AT_DROP_OFF, ParcelStatus.DELIVERED,
+                new FeePayment(new BigDecimal("980.00"), "LKR", PaymentMethod.AT_DROP_OFF,
+                        FeePaymentSource.COURIER_CASH, UUID.randomUUID(), UUID.randomUUID(), DELIVERED_AT));
+        parcels(delivered, collected);
+        Payment notRecorded = payment(delivered, PaymentStatus.DUE);
+        Payment recorded = payment(collected, PaymentStatus.DUE);
+        when(payments.findByCustomerId(CUSTOMER)).thenReturn(List.of(notRecorded, recorded));
 
         sync.syncCustomer(CUSTOMER);
 
-        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.PAID);
-        assertThat(payment.getPaidAt()).isEqualTo(DELIVERED_AT);
+        // Delivered but no collection recorded by the courier: still due (one rule: delivery's feePaymentStatus).
+        assertThat(notRecorded.getStatus()).isEqualTo(PaymentStatus.DUE);
+        assertThat(notRecorded.getPaidAt()).isNull();
+        assertThat(recorded.getStatus()).isEqualTo(PaymentStatus.PAID);
+        assertThat(recorded.getPaidAt()).isEqualTo(DELIVERED_AT);
     }
 
     @Test
-    void aCardPaymentStaysPaidWhateverHappensToTheParcel() {
-        DeliverySnapshot parcel = parcel(PaymentMethod.ONLINE, ParcelStatus.FAILED);
+    void anOnlinePaymentIsPaidWhenDeliveryHasTheVerifiedPayment() {
+        Instant verifiedAt = Instant.parse("2026-11-09T05:20:00Z");
+        DeliverySnapshot parcel = parcel(PaymentMethod.ONLINE, ParcelStatus.CREATED,
+                new FeePayment(new BigDecimal("980.00"), "LKR", PaymentMethod.ONLINE, FeePaymentSource.ONLINE, null,
+                        null, verifiedAt, "payments:" + UUID.randomUUID()));
         parcels(parcel);
         Payment payment = payment(parcel, PaymentStatus.DUE);
-        Instant paidAt = Instant.parse("2026-11-09T05:20:00Z");
-        payment.payByCard("VISA", "4242", paidAt);
+        payment.payByCard("VISA", "4242", verifiedAt);
         when(payments.findByCustomerId(CUSTOMER)).thenReturn(List.of(payment));
 
         sync.syncCustomer(CUSTOMER);
 
         assertThat(payment.getStatus()).isEqualTo(PaymentStatus.PAID);
-        assertThat(payment.getPaidAt()).isEqualTo(paidAt);
+        assertThat(payment.getPaidAt()).isEqualTo(verifiedAt);
         assertThat(payment.getCardLast4()).isEqualTo("4242");
     }
 
     @Test
-    void aFailedCashOnDeliveryIsNotChargedAndHasNoPaidDate() {
-        DeliverySnapshot parcel = parcel(null, ParcelStatus.FAILED);
+    void anUnpaidFeeOfAFailedDeliveryIsNotChargedAndHasNoPaidDate() {
+        DeliverySnapshot parcel = parcel(PaymentMethod.AT_DROP_OFF, ParcelStatus.FAILED);
         parcels(parcel);
         Payment payment = payment(parcel, PaymentStatus.DUE);
         when(payments.findByCustomerId(CUSTOMER)).thenReturn(List.of(payment));
@@ -113,15 +121,33 @@ class PaymentSyncTest {
         assertThat(payment.getPaidAt()).isNull();
     }
 
+    @Test
+    void aParcelBookedBeforePaymentMethodsIsNotCharged() {
+        DeliverySnapshot parcel = parcel(null, ParcelStatus.DELIVERED);
+        parcels(parcel);
+        Payment payment = payment(parcel, PaymentStatus.DUE);
+        when(payments.findByCustomerId(CUSTOMER)).thenReturn(List.of(payment));
+
+        sync.syncCustomer(CUSTOMER);
+
+        assertThat(parcel.feePaymentStatus()).isEqualTo(FeePaymentStatus.NOT_RECORDED);
+        assertThat(payment.getStatus()).isEqualTo(PaymentStatus.NOT_CHARGED);
+    }
+
     private void parcels(DeliverySnapshot... parcels) {
         when(deliveries.findByCustomer(eq(CUSTOMER), isNull(ParcelStatus.class), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(parcels)));
     }
 
     private static DeliverySnapshot parcel(PaymentMethod method, ParcelStatus status) {
+        return parcel(method, status, null);
+    }
+
+    /** A snapshot as delivery gives it: feePaymentStatus worked out from the method and the recorded payment. */
+    private static DeliverySnapshot parcel(PaymentMethod method, ParcelStatus status, FeePayment feePayment) {
         return new DeliverySnapshot(UUID.randomUUID(), "SD2611003152", status, CUSTOMER, null, CONTACT, CONTACT,
                 new BigDecimal("2.00"), null, null, null, null, BOOKED, BOOKED, null, false, null, null,
-                new BigDecimal("980.00"), "LKR", 1L, null, null, null, null, null, method);
+                new BigDecimal("980.00"), "LKR", 1L, null, null, null, null, null, method, null, feePayment);
     }
 
     private static Payment payment(DeliverySnapshot parcel, PaymentStatus status) {

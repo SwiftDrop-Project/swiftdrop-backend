@@ -1,56 +1,54 @@
 package com.swiftdrop.payments.internal.domain;
 
+import com.swiftdrop.delivery.FeePaymentStatus;
 import com.swiftdrop.delivery.ParcelStatus;
-import com.swiftdrop.delivery.PaymentMethod;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
+import static com.swiftdrop.delivery.FeePaymentStatus.AWAITING_CASH_COLLECTION;
+import static com.swiftdrop.delivery.FeePaymentStatus.AWAITING_ONLINE_VERIFICATION;
+import static com.swiftdrop.delivery.FeePaymentStatus.CASH_COLLECTED;
+import static com.swiftdrop.delivery.FeePaymentStatus.NOT_RECORDED;
+import static com.swiftdrop.delivery.FeePaymentStatus.ONLINE_VERIFIED;
 import static com.swiftdrop.delivery.ParcelStatus.CREATED;
 import static com.swiftdrop.delivery.ParcelStatus.DELIVERED;
 import static com.swiftdrop.delivery.ParcelStatus.FAILED;
-import static com.swiftdrop.delivery.ParcelStatus.OUT_FOR_DELIVERY;
 import static com.swiftdrop.delivery.ParcelStatus.PICKED_UP;
 import static com.swiftdrop.payments.internal.domain.PaymentStatus.DUE;
 import static com.swiftdrop.payments.internal.domain.PaymentStatus.NOT_CHARGED;
 import static com.swiftdrop.payments.internal.domain.PaymentStatus.PAID;
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** When a delivery's fee counts as paid, due or not charged (API.md "Payments"). */
+/** Paid or not comes only from delivery's FeePaymentStatus (the one rule); the parcel status only adds "not charged". */
 class PaymentStatusTest {
 
-    @Test
-    void anOnlinePaymentIsDueUntilPaidByCardAndNotChargedWhileTheDeliveryHasFailed() {
-        assertThat(PaymentStatus.of(PaymentMethod.ONLINE, CREATED, false)).isEqualTo(DUE);
-        assertThat(PaymentStatus.of(PaymentMethod.ONLINE, DELIVERED, false)).isEqualTo(DUE);
-        assertThat(PaymentStatus.of(PaymentMethod.ONLINE, FAILED, false)).isEqualTo(NOT_CHARGED);
-        assertThat(PaymentStatus.of(PaymentMethod.ONLINE, CREATED, true)).isEqualTo(PAID);
-        assertThat(PaymentStatus.of(PaymentMethod.ONLINE, FAILED, true)).isEqualTo(PAID);
-    }
-
     @ParameterizedTest
-    @EnumSource(value = ParcelStatus.class, names = "CREATED", mode = EnumSource.Mode.EXCLUDE)
-    void cashAtPickupIsPaidOnceThePaRcelIsPickedUp(ParcelStatus status) {
-        assertThat(PaymentStatus.of(PaymentMethod.AT_PICKUP, CREATED, false)).isEqualTo(DUE);
-        assertThat(PaymentStatus.of(PaymentMethod.AT_PICKUP, status, false)).isEqualTo(PAID);
+    @EnumSource(ParcelStatus.class)
+    void aRecordedPaymentIsPaidWhateverTheParcelStatus(ParcelStatus parcelStatus) {
+        assertThat(PaymentStatus.of(CASH_COLLECTED, parcelStatus)).isEqualTo(PAID);
+        assertThat(PaymentStatus.of(ONLINE_VERIFIED, parcelStatus)).isEqualTo(PAID);
     }
 
     @Test
-    void cashOnDeliveryIsPaidWhenDeliveredAndNotChargedWhenTheDeliveryFailed() {
-        for (PaymentMethod method : new PaymentMethod[] {PaymentMethod.AT_DROP_OFF, null}) {
-            assertThat(PaymentStatus.of(method, CREATED, false)).isEqualTo(DUE);
-            assertThat(PaymentStatus.of(method, PICKED_UP, false)).isEqualTo(DUE);
-            assertThat(PaymentStatus.of(method, OUT_FOR_DELIVERY, false)).isEqualTo(DUE);
-            assertThat(PaymentStatus.of(method, DELIVERED, false)).isEqualTo(PAID);
-            assertThat(PaymentStatus.of(method, FAILED, false)).isEqualTo(NOT_CHARGED);
+    void anAwaitedFeeIsDueUntilDeliveryRecordsItEvenAfterPickupOrDelivery() {
+        // The parcel status alone never makes a fee paid: a courier (or the mock card) must record it.
+        for (FeePaymentStatus awaited : new FeePaymentStatus[] {AWAITING_CASH_COLLECTION, AWAITING_ONLINE_VERIFICATION}) {
+            assertThat(PaymentStatus.of(awaited, CREATED)).isEqualTo(DUE);
+            assertThat(PaymentStatus.of(awaited, PICKED_UP)).isEqualTo(DUE);
+            assertThat(PaymentStatus.of(awaited, DELIVERED)).isEqualTo(DUE);
         }
     }
 
     @Test
-    void cashIsCollectedAtPickupOrDropOff() {
-        assertThat(PaymentStatus.cashCollectedAt(PaymentMethod.AT_PICKUP)).isEqualTo(PICKED_UP);
-        assertThat(PaymentStatus.cashCollectedAt(PaymentMethod.AT_DROP_OFF)).isEqualTo(DELIVERED);
-        assertThat(PaymentStatus.cashCollectedAt(null)).isEqualTo(DELIVERED);
-        assertThat(PaymentStatus.cashCollectedAt(PaymentMethod.ONLINE)).isNull();
+    void anUnpaidFeeOfAFailedDeliveryIsNotCharged() {
+        assertThat(PaymentStatus.of(AWAITING_CASH_COLLECTION, FAILED)).isEqualTo(NOT_CHARGED);
+        assertThat(PaymentStatus.of(AWAITING_ONLINE_VERIFICATION, FAILED)).isEqualTo(NOT_CHARGED);
+    }
+
+    @ParameterizedTest
+    @EnumSource(ParcelStatus.class)
+    void aParcelBookedBeforePaymentMethodsIsNotCharged(ParcelStatus parcelStatus) {
+        assertThat(PaymentStatus.of(NOT_RECORDED, parcelStatus)).isEqualTo(NOT_CHARGED);
     }
 }

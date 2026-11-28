@@ -2,8 +2,8 @@ package com.swiftdrop.payments.internal.application;
 
 import com.swiftdrop.delivery.DeliveryApi;
 import com.swiftdrop.delivery.DeliverySnapshot;
+import com.swiftdrop.delivery.FeePayment;
 import com.swiftdrop.delivery.ParcelStatus;
-import com.swiftdrop.delivery.ParcelStatusEntry;
 import com.swiftdrop.payments.internal.domain.Payment;
 import com.swiftdrop.payments.internal.domain.PaymentStatus;
 import com.swiftdrop.payments.internal.persistence.PaymentRepository;
@@ -15,7 +15,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -23,9 +22,10 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
- * Brings a customer's payment records up to date with their parcels (DeliveryApi): a record for every parcel, and the
- * status its method and parcel status give. Cash becomes paid when the courier has collected it (the paid date is when
- * the parcel reached that status); a mock card payment is never undone.
+ * Brings a customer's payment records up to date with their parcels (DeliveryApi): a record for every parcel, with
+ * the status delivery's {@code feePaymentStatus} gives. Cash is paid once a courier recorded the collection
+ * (WP9, {@code recordFeeCollection}); online once this module recorded a mock card payment
+ * ({@code recordOnlinePayment}). The paid date is the one delivery recorded.
  */
 @Component
 class PaymentSync {
@@ -67,22 +67,17 @@ class PaymentSync {
         }
     }
 
-    /** Updates one record from its parcel (also before a card payment, so its status is current). */
+    /**
+     * Updates one record from its parcel (also before a card payment, so its status is current). Paid or not comes
+     * only from delivery's {@code feePaymentStatus}; a paid fee takes the amount and time delivery recorded.
+     */
     void follow(DeliverySnapshot parcel, Payment payment) {
-        PaymentStatus status = PaymentStatus.of(parcel.paymentMethod(), parcel.status(), payment.isPaidByCard());
-        Instant collectedAt = status == PaymentStatus.PAID && payment.getStatus() != PaymentStatus.PAID
-                && !payment.isPaidByCard() ? collectedAt(parcel) : null;
-        payment.follow(parcel.paymentMethod(), fee(parcel), currency(parcel), status, collectedAt);
-    }
-
-    /** When the courier collected the cash: the first time the parcel reached that status. */
-    private Instant collectedAt(DeliverySnapshot parcel) {
-        ParcelStatus at = PaymentStatus.cashCollectedAt(parcel.paymentMethod());
-        return deliveries.history(parcel.id()).stream()
-                .filter(entry -> entry.status() == at)
-                .map(ParcelStatusEntry::occurredAt)
-                .min(Comparator.naturalOrder())
-                .orElse(parcel.updatedAt());
+        PaymentStatus status = PaymentStatus.of(parcel.feePaymentStatus(), parcel.status());
+        FeePayment recorded = parcel.feePayment();
+        BigDecimal amount = recorded != null && recorded.amount() != null ? recorded.amount() : fee(parcel);
+        String currency = recorded != null && recorded.currency() != null ? recorded.currency() : currency(parcel);
+        Instant paidAt = recorded != null ? recorded.collectedAt() : null;
+        payment.follow(parcel.paymentMethod(), amount, currency, status, paidAt);
     }
 
     private List<DeliverySnapshot> allParcels(UUID customerId) {

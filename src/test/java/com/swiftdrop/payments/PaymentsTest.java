@@ -1,6 +1,9 @@
 package com.swiftdrop.payments;
 
 import com.swiftdrop.IntegrationTest;
+import com.swiftdrop.delivery.DeliveryApi;
+import com.swiftdrop.delivery.FeePaymentStatus;
+import com.swiftdrop.delivery.RecordFeeCollectionCommand;
 import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -35,6 +38,9 @@ class PaymentsTest extends IntegrationTest {
 
     @Autowired
     JdbcTemplate jdbc;
+
+    @Autowired
+    DeliveryApi deliveries;
 
     // ---- 401 / 403 ----
 
@@ -77,24 +83,36 @@ class PaymentsTest extends IntegrationTest {
     }
 
     @Test
-    void cashFollowsTheParcelStatus() throws Exception {
+    void cashIsPaidOnceACourierRecordedTheCollection() throws Exception {
         Cookie customer = registerCustomer(uniqueEmail(), uniquePhone());
         String atPickup = book(customer, "AT_PICKUP");
         String delivered = book(customer, "AT_DROP_OFF");
+        String deliveredNotRecorded = book(customer, "AT_DROP_OFF");
         String failed = book(customer, "AT_DROP_OFF");
         parcelStatus(atPickup, "PICKED_UP");
         parcelStatus(delivered, "DELIVERED");
+        parcelStatus(deliveredNotRecorded, "DELIVERED");
         parcelStatus(failed, "FAILED");
+        // WP9's courier screens record the cash; here straight through delivery's contract.
+        collectCash(atPickup);
+        collectCash(delivered);
 
         mvc.perform(get(PAYMENTS).cookie(customer))
                 .andExpect(jsonPath("$.content[?(@.parcelId == '" + atPickup + "')].status").value("PAID"))
                 .andExpect(jsonPath("$.content[?(@.parcelId == '" + delivered + "')].status").value("PAID"))
+                .andExpect(jsonPath("$.content[?(@.parcelId == '" + deliveredNotRecorded + "')].status")
+                        .value("DUE"))
                 .andExpect(jsonPath("$.content[?(@.parcelId == '" + failed + "')].status").value("NOT_CHARGED"));
         mvc.perform(get(PAYMENTS + "/summary").cookie(customer))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.paidCount").value(2))
-                .andExpect(jsonPath("$.dueCount").value(0))
+                .andExpect(jsonPath("$.dueCount").value(1))
                 .andExpect(jsonPath("$.notChargedCount").value(1));
+        // The receipt reads the same rule.
+        mvc.perform(get("/api/v1/deliveries/{id}/receipt", delivered).cookie(customer))
+                .andExpect(jsonPath("$.paymentStatus").value("PAID"));
+        mvc.perform(get("/api/v1/deliveries/{id}/receipt", deliveredNotRecorded).cookie(customer))
+                .andExpect(jsonPath("$.paymentStatus").value("DUE"));
     }
 
     @Test
@@ -116,8 +134,10 @@ class PaymentsTest extends IntegrationTest {
     @Test
     void anOnlinePaymentIsPaidWithATestCardKeepingOnlyTheLastFourDigits() throws Exception {
         Cookie customer = registerCustomer(uniqueEmail(), uniquePhone());
-        book(customer, "ONLINE");
+        String parcelId = book(customer, "ONLINE");
         String id = onlyPaymentId(customer);
+        mvc.perform(get("/api/v1/deliveries/{id}/receipt", parcelId).cookie(customer))
+                .andExpect(jsonPath("$.paymentStatus").value("DUE"));
 
         postJson(PAYMENTS + "/" + id + "/card", card("4242 4242 4242 4242"), customer)
                 .andExpect(status().isOk())
@@ -128,6 +148,13 @@ class PaymentsTest extends IntegrationTest {
 
         Map<String, Object> row = jdbc.queryForMap("SELECT * FROM payments.payments WHERE id = ?", UUID.fromString(id));
         assertThat(row.values()).noneMatch(value -> value != null && value.toString().contains("42424242"));
+        // One rule: delivery recorded the verified online payment, so the receipt says paid too.
+        assertThat(jdbc.queryForObject("SELECT external_reference FROM delivery.fee_payments WHERE parcel_id = ?",
+                String.class, UUID.fromString(parcelId))).isEqualTo("payments:" + id);
+        assertThat(deliveries.findById(UUID.fromString(parcelId)).orElseThrow().feePaymentStatus())
+                .isEqualTo(FeePaymentStatus.ONLINE_VERIFIED);
+        mvc.perform(get("/api/v1/deliveries/{id}/receipt", parcelId).cookie(customer))
+                .andExpect(jsonPath("$.paymentStatus").value("PAID"));
         // paying twice is refused
         postJson(PAYMENTS + "/" + id + "/card", card("4242 4242 4242 4242"), customer)
                 .andExpect(status().isConflict())
@@ -241,6 +268,12 @@ class PaymentsTest extends IntegrationTest {
 
     private void parcelStatus(String parcelId, String status) {
         jdbc.update("UPDATE delivery.parcels SET status = ? WHERE id = ?", status, UUID.fromString(parcelId));
+    }
+
+    /** A courier collected the cash fee (delivery checks the parcel is at the matching status). */
+    private void collectCash(String parcelId) {
+        deliveries.recordFeeCollection(
+                new RecordFeeCollectionCommand(UUID.fromString(parcelId), UUID.randomUUID(), UUID.randomUUID()));
     }
 
     private String trackingNumber(String parcelId) {
