@@ -25,6 +25,8 @@ Every direct sub-package of `com.swiftdrop` is a module. `SwiftdropBackendApplic
 | `webhooks` | - | `webhooks` (`subscriptions`, `deliveries`) | chanuka (WP6) |
 | `outbox` | - (reads the outbox only through `DeliveryOutboxApi`) | none | TBD |
 | `courier` | - (endpoints only; uses `DeliveryApi` and dispatch's `AssignmentApi`) | none | Kalpani |
+| `customer` | CustomerApi, CustomerSummary, PaymentMethod (preferred) | `customer` (`customer_profiles`, `customer_addresses`) | WP2 |
+| `payments` | - (endpoints only; one payment per customer delivery, read through `DeliveryApi`; mock card) | `payments` (`payments`) | WP2 |
 
 ```
 com.swiftdrop.<module>/
@@ -51,6 +53,7 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
 - Current dependencies: identity -> notifications, shared; merchants -> identity, notifications, shared; delivery -> pricing, shared;
   dispatch -> delivery, identity, shared; tracking -> delivery, shared; courier -> delivery, dispatch, shared;
   pricing -> shared; infrastructure -> shared; webhooks -> delivery, merchants, shared;
+  customer -> identity, delivery, shared; payments -> delivery, shared;
   assistant -> tracking, pricing, delivery, identity, shared. Nothing depends on courier, assistant or
   webhooks.
 - webhooks (contract in API.md "Webhooks", built): reads `ParcelStatusChanged` from `webhooks.q` (declared by
@@ -123,7 +126,8 @@ Empty folders hold a `package-info.java` (no `.gitkeep`).
   Hikari pool: max 3, min idle 0, idle timeout 60 s, max lifetime 5 min, connection timeout 30 s.
 
 ## Database
-- One schema per stateful module: identity, merchants, pricing, delivery, dispatch, tracking, webhooks, notifications.
+- One schema per stateful module: identity, merchants, pricing, delivery, dispatch, tracking, webhooks, notifications,
+  customer, payments.
   reporting, outbox and courier own no schema.
 - Entities use `@Table(schema = "<module>")`. No foreign keys or joins across schemas; refer to other modules' rows by UUID only.
 - Schema changes ONLY through Flyway, in the module's folder: `src/main/resources/db/migration/<module>/`.

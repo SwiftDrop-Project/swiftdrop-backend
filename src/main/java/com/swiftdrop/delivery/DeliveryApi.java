@@ -10,6 +10,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -75,6 +76,14 @@ public interface DeliveryApi {
 
     /** A customer's parcels, newest first. {@code status} null means every status; the page size is capped at 100. */
     Page<DeliverySnapshot> findByCustomer(UUID customerId, ParcelStatus status, Pageable pageable);
+
+    /**
+     * A customer's parcels for the "My deliveries" tabs and search, newest first: in any of {@code statuses} (null or
+     * empty means every status) and, when {@code trackingNumber} is not blank, whose tracking number contains it
+     * (spaces and case ignored, so {@code "sd 2611 0031"} finds {@code SD2611003152}). The page size is capped at 100.
+     */
+    Page<DeliverySnapshot> findByCustomer(UUID customerId, Set<ParcelStatus> statuses, String trackingNumber,
+                                          Pageable pageable);
 
     /** A merchant's orders, newest first. Same filter and paging rules as {@link #findByCustomer}. */
     Page<DeliverySnapshot> findByMerchant(UUID merchantId, ParcelStatus status, Pageable pageable);

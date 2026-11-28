@@ -267,6 +267,14 @@ public class Parcel {
                 rateCardVersion, paymentMethod, null, feePayment);
     }
 
+    /**
+     * The fee lines as stored (JSON, e.g. {@code [{"component":"BASE","amount":350.00}]}), or null for the old flat
+     * fee. Not in the snapshot: only the receipt inside this module reads it.
+     */
+    public String feeBreakdownJson() {
+        return feeBreakdown;
+    }
+
     /** The measurements, or null for a parcel booked before sizes. */
     private ParcelSize size() {
         return lengthCm == null ? null : new ParcelSize(lengthCm, widthCm, heightCm, keepUpright);

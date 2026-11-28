@@ -24,10 +24,14 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import static com.swiftdrop.delivery.ParcelStatus.AT_BRANCH;
 import static com.swiftdrop.delivery.ParcelStatus.CREATED;
+import static com.swiftdrop.delivery.ParcelStatus.IN_TRANSIT;
+import static com.swiftdrop.delivery.ParcelStatus.OUT_FOR_DELIVERY;
+import static com.swiftdrop.delivery.ParcelStatus.PICKED_UP;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
@@ -62,10 +66,10 @@ class DeliveryControllerTest {
     void myDeliveriesAsksForTheLoggedInCustomersPage() {
         PageRequest page = PageRequest.of(2, 10);
         DeliverySnapshot mine = parcel(CUSTOMER_ID, null, AT_BRANCH, District.GAMPAHA);
-        when(deliveries.findByCustomer(CUSTOMER_ID, AT_BRANCH, page))
+        when(deliveries.findByCustomer(CUSTOMER_ID, Set.of(AT_BRANCH), null, page))
                 .thenReturn(new PageImpl<>(List.of(mine), page, 21));
 
-        PageResponse<DeliveryResponse> response = controller.list(CUSTOMER, 2, 10, AT_BRANCH);
+        PageResponse<DeliveryResponse> response = controller.list(CUSTOMER, 2, 10, Set.of(AT_BRANCH), null);
 
         assertThat(response.content()).extracting(DeliveryResponse::id).containsExactly(mine.id());
         assertThat(response.page()).isEqualTo(2);
@@ -77,18 +81,35 @@ class DeliveryControllerTest {
     @Test
     void noStatusMeansEveryStatusAndTheLargestPageIsAllowed() {
         PageRequest page = PageRequest.of(0, DeliveryController.MAX_PAGE_SIZE);
-        when(deliveries.findByCustomer(CUSTOMER_ID, null, page)).thenReturn(Page.empty(page));
+        when(deliveries.findByCustomer(CUSTOMER_ID, Set.of(), null, page)).thenReturn(Page.empty(page));
 
-        assertThat(controller.list(CUSTOMER, 0, DeliveryController.MAX_PAGE_SIZE, null).content()).isEmpty();
+        assertThat(controller.list(CUSTOMER, 0, DeliveryController.MAX_PAGE_SIZE, null, null).content()).isEmpty();
 
-        verify(deliveries).findByCustomer(CUSTOMER_ID, null, page);
+        verify(deliveries).findByCustomer(CUSTOMER_ID, Set.of(), null, page);
     }
 
     @Test
-    void aBadPageOrSizeIsRefusedBeforeAnyQuery() {
-        assertFieldError(() -> controller.list(CUSTOMER, -1, 20, null), "page");
-        assertFieldError(() -> controller.list(CUSTOMER, 0, 0, null), "size");
-        assertFieldError(() -> controller.list(CUSTOMER, 0, DeliveryController.MAX_PAGE_SIZE + 1, null), "size");
+    void theActiveTabAndATrackingNumberSearchArePassedOn() {
+        PageRequest page = PageRequest.of(0, 20);
+        Set<ParcelStatus> active = Set.of(CREATED, PICKED_UP, AT_BRANCH, IN_TRANSIT, OUT_FOR_DELIVERY);
+        DeliverySnapshot mine = parcel(CUSTOMER_ID, null, OUT_FOR_DELIVERY, null);
+        when(deliveries.findByCustomer(CUSTOMER_ID, active, "sd 2611 0048", page))
+                .thenReturn(new PageImpl<>(List.of(mine), page, 1));
+
+        PageResponse<DeliveryResponse> response = controller.list(CUSTOMER, 0, 20, active, "sd 2611 0048");
+
+        assertThat(response.content()).extracting(DeliveryResponse::id).containsExactly(mine.id());
+    }
+
+    @Test
+    void aBadPageSizeOrSearchIsRefusedBeforeAnyQuery() {
+        String tooLong = "S".repeat(DeliveryController.MAX_SEARCH_LENGTH + 1);
+
+        assertFieldError(() -> controller.list(CUSTOMER, -1, 20, null, null), "page");
+        assertFieldError(() -> controller.list(CUSTOMER, 0, 0, null, null), "size");
+        assertFieldError(() -> controller.list(CUSTOMER, 0, DeliveryController.MAX_PAGE_SIZE + 1, null, null),
+                "size");
+        assertFieldError(() -> controller.list(CUSTOMER, 0, 20, null, tooLong), "q");
 
         verifyNoInteractions(deliveries);
     }

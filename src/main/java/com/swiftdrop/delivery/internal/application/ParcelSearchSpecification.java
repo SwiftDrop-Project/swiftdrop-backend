@@ -2,6 +2,7 @@ package com.swiftdrop.delivery.internal.application;
 
 import com.swiftdrop.delivery.ParcelSearch;
 import com.swiftdrop.delivery.ParcelSort;
+import com.swiftdrop.delivery.ParcelStatus;
 import com.swiftdrop.delivery.internal.domain.Parcel;
 import com.swiftdrop.delivery.internal.domain.TrackingNumberGenerator;
 import com.swiftdrop.shared.validation.PhoneNumberNormalizer;
@@ -16,6 +17,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /** Turns a {@link ParcelSearch} into a query on delivery.parcels and a sort order (DeliveryApi.search). */
@@ -50,6 +52,25 @@ final class ParcelSearchSpecification {
             String text = search.text() == null ? "" : search.text().trim();
             if (!text.isEmpty()) {
                 predicates.add(textMatches(text, root, cb));
+            }
+            return cb.and(predicates.toArray(Predicate[]::new));
+        };
+    }
+
+    /**
+     * One customer's parcels (DeliveryApi.findByCustomer with statuses): in any of the statuses (empty: any), and with
+     * a tracking number containing the given part (spaces and case ignored; blank: any).
+     */
+    static Specification<Parcel> forCustomer(UUID customerId, Set<ParcelStatus> statuses, String trackingNumber) {
+        return (root, query, cb) -> {
+            List<Predicate> predicates = new ArrayList<>();
+            predicates.add(cb.equal(root.get("customerId"), customerId));
+            if (statuses != null && !statuses.isEmpty()) {
+                predicates.add(root.get("status").in(statuses));
+            }
+            String number = trackingNumber == null ? "" : TrackingNumberGenerator.normalise(trackingNumber);
+            if (!number.isEmpty()) {
+                predicates.add(cb.like(root.get("trackingNumber"), like(number), '\\'));
             }
             return cb.and(predicates.toArray(Predicate[]::new));
         };
