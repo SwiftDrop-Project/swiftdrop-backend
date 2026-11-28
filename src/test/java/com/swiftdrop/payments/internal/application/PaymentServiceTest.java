@@ -10,6 +10,7 @@ import com.swiftdrop.delivery.PaymentMethod;
 import com.swiftdrop.delivery.RecordOnlinePaymentCommand;
 import com.swiftdrop.payments.internal.domain.Payment;
 import com.swiftdrop.payments.internal.domain.PaymentStatus;
+import com.swiftdrop.payments.internal.dto.CardCheckResponse;
 import com.swiftdrop.payments.internal.dto.CardPaymentRequest;
 import com.swiftdrop.payments.internal.dto.PaymentResponse;
 import com.swiftdrop.payments.internal.persistence.PaymentRepository;
@@ -17,6 +18,7 @@ import com.swiftdrop.payments.internal.provider.MockCardGateway;
 import com.swiftdrop.shared.error.BusinessRuleException;
 import com.swiftdrop.shared.error.ConflictException;
 import com.swiftdrop.shared.error.ErrorCode;
+import com.swiftdrop.shared.error.NotFoundException;
 import com.swiftdrop.shared.reference.District;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -118,6 +120,57 @@ class PaymentServiceTest {
         assertThatThrownBy(() -> service.payByCard(CUSTOMER, payment.getId(), card("4242 4242 4242 4242")))
                 .isInstanceOfSatisfying(ConflictException.class,
                         e -> assertThat(e.code()).isEqualTo(ErrorCode.PAYMENT_NOT_PAYABLE));
+        verify(deliveries, never()).recordOnlinePayment(any());
+    }
+
+    // ---- Create delivery with an online payment: the gateway check, then paying by the new delivery ----
+
+    @Test
+    void theGatewayCheckApprovesATestCardWithoutChargingOrStoringAnything() {
+        CardCheckResponse checked = service.checkCard(card("4242 4242 4242 4242"));
+
+        assertThat(checked.cardBrand()).isEqualTo("VISA");
+        assertThat(checked.cardLast4()).isEqualTo("4242");
+        verify(deliveries, never()).recordOnlinePayment(any());
+        verify(payments, never()).saveAndFlush(any());
+        verify(payments, never()).insertIfMissing(any(), any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void theGatewayCheckStopsTheDeclineCardBeforeAnyDeliveryIsBooked() {
+        assertThatThrownBy(() -> service.checkCard(card("4000 0000 0000 0002")))
+                .isInstanceOfSatisfying(BusinessRuleException.class,
+                        e -> assertThat(e.code()).isEqualTo(ErrorCode.CARD_DECLINED));
+    }
+
+    @Test
+    void aJustBookedOnlineDeliveryIsPaidByItsParcelIdMakingItsPaymentRecordFirst() {
+        DeliverySnapshot booked = parcel(null);
+        Payment made = payment(booked);
+        // No record yet (the Payments page never listed this parcel): the insert makes it.
+        when(payments.findByParcelIdAndCustomerId(PARCEL, CUSTOMER)).thenReturn(Optional.empty(), Optional.of(made));
+        when(deliveries.findById(PARCEL)).thenReturn(Optional.of(booked));
+        when(deliveries.recordOnlinePayment(any())).thenReturn(parcel(new FeePayment(new BigDecimal("980.00"), "LKR",
+                PaymentMethod.ONLINE, FeePaymentSource.ONLINE, null, null, VERIFIED_AT, "payments:" + made.getId())));
+        when(payments.saveAndFlush(any())).thenAnswer(call -> call.getArgument(0));
+
+        PaymentResponse paid = service.payParcelByCard(CUSTOMER, PARCEL, card("4242 4242 4242 4242"));
+
+        verify(payments).insertIfMissing(any(), any(), any(), any(), any(), any(), any(), any(), any());
+        ArgumentCaptor<RecordOnlinePaymentCommand> recorded = ArgumentCaptor.forClass(RecordOnlinePaymentCommand.class);
+        verify(deliveries).recordOnlinePayment(recorded.capture());
+        assertThat(recorded.getValue().parcelId()).isEqualTo(PARCEL);
+        assertThat(paid.status()).isEqualTo(PaymentStatus.PAID);
+        assertThat(paid.cardLast4()).isEqualTo("4242");
+    }
+
+    @Test
+    void someoneElsesDeliveryIsNotFoundAndNothingIsCharged() {
+        when(deliveries.findById(PARCEL)).thenReturn(Optional.of(parcel(null)));
+
+        assertThatThrownBy(() -> service.payParcelByCard(UUID.randomUUID(), PARCEL, card("4242 4242 4242 4242")))
+                .isInstanceOfSatisfying(NotFoundException.class,
+                        e -> assertThat(e.code()).isEqualTo(ErrorCode.NOT_FOUND));
         verify(deliveries, never()).recordOnlinePayment(any());
     }
 
