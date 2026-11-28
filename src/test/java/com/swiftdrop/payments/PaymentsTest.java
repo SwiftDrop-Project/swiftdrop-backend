@@ -230,7 +230,6 @@ class PaymentsTest extends IntegrationTest {
                 .andExpect(jsonPath("$.content", hasSize(0)));
     }
 
-<<<<<<< HEAD
     // ---- Create delivery with an online payment ----
 
     @Test
@@ -291,8 +290,6 @@ class PaymentsTest extends IntegrationTest {
                 .isEqualTo(FeePaymentStatus.AWAITING_ONLINE_VERIFICATION);
     }
 
-=======
->>>>>>> 53298e6f2d7b071eaf14fe6fefb651418225b004
     // ---- helpers ----
 
     private static Map<String, Object> card(String number) {

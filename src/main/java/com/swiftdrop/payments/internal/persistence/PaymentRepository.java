@@ -24,12 +24,9 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
     /** Someone else's payment is "not found". */
     Optional<Payment> findByIdAndCustomerId(UUID id, UUID customerId);
 
-<<<<<<< HEAD
     /** The payment of one of the customer's deliveries (one per parcel). */
     Optional<Payment> findByParcelIdAndCustomerId(UUID parcelId, UUID customerId);
 
-=======
->>>>>>> 53298e6f2d7b071eaf14fe6fefb651418225b004
     /**
      * Makes the record for a parcel unless it already has one. Two requests at once (two tabs) can both try: the
      * unique parcel_id keeps one row and the other insert does nothing, instead of failing.

@@ -10,10 +10,7 @@ import com.swiftdrop.delivery.PaymentMethod;
 import com.swiftdrop.delivery.RecordOnlinePaymentCommand;
 import com.swiftdrop.payments.internal.domain.Payment;
 import com.swiftdrop.payments.internal.domain.PaymentStatus;
-<<<<<<< HEAD
 import com.swiftdrop.payments.internal.dto.CardCheckResponse;
-=======
->>>>>>> 53298e6f2d7b071eaf14fe6fefb651418225b004
 import com.swiftdrop.payments.internal.dto.CardPaymentRequest;
 import com.swiftdrop.payments.internal.dto.PaymentResponse;
 import com.swiftdrop.payments.internal.persistence.PaymentRepository;
@@ -21,10 +18,7 @@ import com.swiftdrop.payments.internal.provider.MockCardGateway;
 import com.swiftdrop.shared.error.BusinessRuleException;
 import com.swiftdrop.shared.error.ConflictException;
 import com.swiftdrop.shared.error.ErrorCode;
-<<<<<<< HEAD
 import com.swiftdrop.shared.error.NotFoundException;
-=======
->>>>>>> 53298e6f2d7b071eaf14fe6fefb651418225b004
 import com.swiftdrop.shared.reference.District;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -129,7 +123,6 @@ class PaymentServiceTest {
         verify(deliveries, never()).recordOnlinePayment(any());
     }
 
-<<<<<<< HEAD
     // ---- Create delivery with an online payment: the gateway check, then paying by the new delivery ----
 
     @Test
@@ -181,8 +174,6 @@ class PaymentServiceTest {
         verify(deliveries, never()).recordOnlinePayment(any());
     }
 
-=======
->>>>>>> 53298e6f2d7b071eaf14fe6fefb651418225b004
     private static final UUID PARCEL = UUID.randomUUID();
 
     private static DeliverySnapshot parcel(FeePayment feePayment) {

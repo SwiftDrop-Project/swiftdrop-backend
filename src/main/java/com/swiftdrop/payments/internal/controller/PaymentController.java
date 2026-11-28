@@ -1,10 +1,7 @@
 package com.swiftdrop.payments.internal.controller;
 
 import com.swiftdrop.payments.internal.application.PaymentService;
-<<<<<<< HEAD
 import com.swiftdrop.payments.internal.dto.CardCheckResponse;
-=======
->>>>>>> 53298e6f2d7b071eaf14fe6fefb651418225b004
 import com.swiftdrop.payments.internal.dto.CardPaymentRequest;
 import com.swiftdrop.payments.internal.dto.PaymentResponse;
 import com.swiftdrop.payments.internal.dto.PaymentSummaryResponse;
@@ -71,7 +68,6 @@ public class PaymentController {
                                      @Valid @RequestBody CardPaymentRequest card) {
         return payments.payByCard(CurrentUser.id(jwt), id, card);
     }
-<<<<<<< HEAD
 
     @PostMapping("/card-check")
     @Operation(summary = "Payment gateway step of Create delivery: check a mock card (nothing is charged or stored)")
@@ -85,6 +81,4 @@ public class PaymentController {
                                            @Valid @RequestBody CardPaymentRequest card) {
         return payments.payParcelByCard(CurrentUser.id(jwt), parcelId, card);
     }
-=======
->>>>>>> 53298e6f2d7b071eaf14fe6fefb651418225b004
 }
