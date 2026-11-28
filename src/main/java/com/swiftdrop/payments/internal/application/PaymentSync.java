@@ -68,6 +68,22 @@ class PaymentSync {
     }
 
     /**
+     * The record of one parcel, made now if it has none yet (a delivery just booked online and paid on the spot,
+     * before the Payments page ever listed it), and brought up to date with the parcel. Runs in the caller's
+     * transaction; two requests at once still make one row (the insert does nothing for the second).
+     */
+    Payment recordFor(UUID customerId, DeliverySnapshot parcel) {
+        Payment payment = payments.findByParcelIdAndCustomerId(parcel.id(), customerId).orElseGet(() -> {
+            payments.insertIfMissing(UUID.randomUUID(), parcel.id(), customerId, parcel.trackingNumber(),
+                    parcel.createdAt(), parcel.paymentMethod() == null ? null : parcel.paymentMethod().name(),
+                    fee(parcel), currency(parcel), PaymentStatus.DUE.name());
+            return payments.findByParcelIdAndCustomerId(parcel.id(), customerId).orElseThrow();
+        });
+        follow(parcel, payment);
+        return payment;
+    }
+
+    /**
      * Updates one record from its parcel (also before a card payment, so its status is current). Paid or not comes
      * only from delivery's {@code feePaymentStatus}; a paid fee takes the amount and time delivery recorded.
      */

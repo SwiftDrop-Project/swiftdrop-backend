@@ -230,6 +230,66 @@ class PaymentsTest extends IntegrationTest {
                 .andExpect(jsonPath("$.content", hasSize(0)));
     }
 
+    // ---- Create delivery with an online payment ----
+
+    @Test
+    void theGatewayCheckApprovesOnlyTestCardsAndChargesNothing() throws Exception {
+        Cookie customer = registerCustomer(uniqueEmail(), uniquePhone());
+
+        postJson(PAYMENTS + "/card-check", card("4242 4242 4242 4242"), customer)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cardBrand").value("VISA"))
+                .andExpect(jsonPath("$.cardLast4").value("4242"));
+        postJson(PAYMENTS + "/card-check", card("4000 0000 0000 0002"), customer)
+                .andExpect(status().isPaymentRequired())
+                .andExpect(jsonPath("$.code").value("CARD_DECLINED"));
+        postJson(PAYMENTS + "/card-check", card("4111 1111 1111 1111"), customer)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.fieldErrors.cardNumber").value("Use a test card, like 4242 4242 4242 4242."));
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM payments.payments", Long.class)).isZero();
+    }
+
+    @Test
+    void theGatewayCheckNeedsACustomer() throws Exception {
+        postJson(PAYMENTS + "/card-check", card("4242 4242 4242 4242")).andExpect(status().isUnauthorized());
+        postJson(PAYMENTS + "/card-check", card("4242 4242 4242 4242"), loginAsAdmin())
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void aJustBookedOnlineDeliveryIsPaidByItsIdAndIsPaidEverywhere() throws Exception {
+        Cookie customer = registerCustomer(uniqueEmail(), uniquePhone());
+        String parcelId = book(customer, "ONLINE");
+
+        // Straight after booking, before the Payments page ever listed it.
+        postJson(PAYMENTS + "/parcels/" + parcelId + "/card", card("4242 4242 4242 4242"), customer)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.parcelId").value(parcelId))
+                .andExpect(jsonPath("$.status").value("PAID"))
+                .andExpect(jsonPath("$.cardLast4").value("4242"));
+
+        assertThat(deliveries.findById(UUID.fromString(parcelId)).orElseThrow().feePaymentStatus())
+                .isEqualTo(FeePaymentStatus.ONLINE_VERIFIED);
+        mvc.perform(get(PAYMENTS).cookie(customer))
+                .andExpect(jsonPath("$.totalElements").value(1))
+                .andExpect(jsonPath("$.content[0].status").value("PAID"));
+        postJson(PAYMENTS + "/parcels/" + parcelId + "/card", card("4242 4242 4242 4242"), customer)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("PAYMENT_NOT_PAYABLE"));
+    }
+
+    @Test
+    void anotherCustomersDeliveryCantBePaidByItsId() throws Exception {
+        String theirs = book(registerCustomer(uniqueEmail(), uniquePhone()), "ONLINE");
+        Cookie customer = registerCustomer(uniqueEmail(), uniquePhone());
+
+        postJson(PAYMENTS + "/parcels/" + theirs + "/card", card("4242 4242 4242 4242"), customer)
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("NOT_FOUND"));
+        assertThat(deliveries.findById(UUID.fromString(theirs)).orElseThrow().feePaymentStatus())
+                .isEqualTo(FeePaymentStatus.AWAITING_ONLINE_VERIFICATION);
+    }
+
     // ---- helpers ----
 
     private static Map<String, Object> card(String number) {

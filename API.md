@@ -587,6 +587,8 @@ and migrations: `docs/wp2-customer-migration-plan.md`.
 | Payments | `GET /payments?page&size` | - | page of Payment | "Payments" |
 | Payments | `GET /payments/summary` | - | PaymentSummary | "Payments" |
 | Payments | `POST /payments/{id}/card` | mock card (test numbers only) | Payment | "Payments" |
+| Create delivery | `POST /payments/card-check` | mock card | `cardBrand`, `cardLast4` (nothing charged) | "Online payment on Create delivery" |
+| Create delivery | `POST /payments/parcels/{parcelId}/card` | mock card | Payment | "Online payment on Create delivery" |
 
 Where the code lives: `customer` module (profile, addresses), `payments` module (payments), and the `delivery` module
 (history filters and receipts, because they read parcels; built by WP2, owned by WP3's module). New error codes:
@@ -790,6 +792,24 @@ already has a payment for the parcel (two tabs at once), the answer is `409 PAYM
 
 `200` Payment · `400` `VALIDATION_FAILED` · `401` · `402` `CARD_DECLINED` · `403` · `404` `NOT_FOUND` (no such
 payment, or not yours) · `409` `PAYMENT_NOT_PAYABLE` (not an online payment, already paid, or not charged)
+
+### Online payment on "Create delivery"
+When the customer chooses **Online payment** on the Create delivery page, the payment gateway opens first; the delivery
+can be created only after the card is approved, and the fee is paid as part of creating it:
+
+1. `POST /payments/card-check` with the card (same body and rules as `POST /payments/{id}/card`): the gateway
+   step. It checks the mock card (a test number, not expired, not the decline card) **without charging or storing
+   anything**. `200` `{ "cardBrand": "VISA", "cardLast4": "4242" }` · `400` `VALIDATION_FAILED` · `401` · `402`
+   `CARD_DECLINED` · `403`. Only now does "Online payment" count as chosen, and "Create delivery" unlocks.
+2. `POST /deliveries` with `"paymentMethod": "ONLINE"` (as usual).
+3. `POST /payments/parcels/{parcelId}/card` with the same card, straight away: pays the new delivery's fee, found by
+   its parcel id (the payment record is made if the Payments page hasn't made it yet). Same result and errors as
+   `POST /payments/{id}/card`, plus `404 NOT_FOUND` for someone else's delivery or a merchant order. The card was
+   already approved in step 1, so this only fails on a network problem; then the delivery exists with its payment
+   `DUE` and the customer pays it on the Payments page.
+
+The card details stay in the browser's memory between steps 1 and 3 and are sent only to these endpoints; the backend
+keeps only the brand and last 4 digits.
 
 ---
 
