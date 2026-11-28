@@ -6,6 +6,7 @@ import com.swiftdrop.delivery.DeliveryApi;
 import com.swiftdrop.delivery.DeliverySnapshot;
 import com.swiftdrop.delivery.DeliveryStats;
 import com.swiftdrop.delivery.ParcelSearch;
+import com.swiftdrop.delivery.ParcelSort;
 import com.swiftdrop.delivery.ParcelStatus;
 import com.swiftdrop.delivery.ParcelStatusChanged;
 import com.swiftdrop.delivery.ParcelStatusEntry;
@@ -243,6 +244,19 @@ class DeliveryService implements DeliveryApi {
                 ? parcels.findByCustomerIdOrderByCreatedAtDescIdDesc(customerId, page)
                 : parcels.findByCustomerIdAndStatusOrderByCreatedAtDescIdDesc(customerId, status, page);
         return found.map(Parcel::toSnapshot);
+    }
+
+    /** "My deliveries" tabs and search: the same customer rule and page cap, newest first. */
+    @Override
+    @Transactional(readOnly = true)
+    public Page<DeliverySnapshot> findByCustomer(UUID customerId, Set<ParcelStatus> statuses, String trackingNumber,
+                                                 Pageable pageable) {
+        Objects.requireNonNull(customerId, "customerId");
+        Pageable capped = cappedPage(pageable);
+        Pageable page = PageRequest.of(capped.getPageNumber(), capped.getPageSize(),
+                ParcelSearchSpecification.sort(ParcelSort.NEWEST));
+        return parcels.findAll(ParcelSearchSpecification.forCustomer(customerId, statuses, trackingNumber), page)
+                .map(Parcel::toSnapshot);
     }
 
     /** The same rules as {@link #findByCustomer}; a null merchant id would return every customer's parcel. */

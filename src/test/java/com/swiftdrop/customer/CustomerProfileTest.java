@@ -5,6 +5,7 @@ import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 
+import java.math.BigDecimal;
 import java.util.Map;
 import java.util.UUID;
 
@@ -63,6 +64,32 @@ class CustomerProfileTest extends IntegrationTest {
     }
 
     @Test
+    void totalDeliveriesCountsTheCustomersOwnBookings() throws Exception {
+        Cookie customer = registerCustomer(uniqueEmail(), uniquePhone());
+        Cookie someoneElse = registerCustomer(uniqueEmail(), uniquePhone());
+        postJson("/api/v1/deliveries", booking(), customer).andExpect(status().isCreated());
+        postJson("/api/v1/deliveries", booking(), customer).andExpect(status().isCreated());
+        postJson("/api/v1/deliveries", booking(), someoneElse).andExpect(status().isCreated());
+
+        mvc.perform(get("/api/v1/customer/profile").cookie(customer))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalDeliveries").value(2));
+    }
+
+    private static Map<String, Object> booking() {
+        return Map.of(
+                "pickup", Map.of("name", "Nimal Perera", "phone", uniquePhone(), "addressLine", "12 Galle Road",
+                        "city", "Colombo 03", "district", "COLOMBO"),
+                "recipient", Map.of("name", "Kamala Silva", "phone", uniquePhone(),
+                        "addressLine", "45 Peradeniya Road", "city", "Kandy", "district", "KANDY"),
+                "weightKg", new BigDecimal("1.50"),
+                "lengthCm", 30,
+                "widthCm", 20,
+                "heightCm", 10,
+                "paymentMethod", "AT_PICKUP");
+    }
+
+    @Test
     void customerCanUpdatePersonalDetails() throws Exception {
         String email = uniqueEmail();
         String phone = uniquePhone();
@@ -106,10 +133,10 @@ class CustomerProfileTest extends IntegrationTest {
     @Test
     void customerCanUpdatePreferences() throws Exception {
         Cookie customer = registerCustomer(uniqueEmail(), uniquePhone());
-        UUID fakeAddressId = UUID.randomUUID();
+        String addressId = saveAddress(customer);
 
         Map<String, Object> preferences = Map.of(
-                "defaultPickupAddressId", fakeAddressId.toString(),
+                "defaultPickupAddressId", addressId,
                 "preferredPaymentMethod", "MOCK_CARD"
         );
 
@@ -118,7 +145,37 @@ class CustomerProfileTest extends IntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json.writeValueAsString(preferences)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.defaultPickupAddressId").value(fakeAddressId.toString()))
-                .andExpect(jsonPath("$.preferredPaymentMethod").value("MOCK_CARD"));
+                .andExpect(jsonPath("$.defaultPickupAddressId").value(addressId))
+                .andExpect(jsonPath("$.preferredPaymentMethod").value("MOCK_CARD"))
+                .andExpect(jsonPath("$.savedAddressesCount").value(1));
+    }
+
+    @Test
+    void theDefaultPickupAddressMustBeOneOfTheCustomersOwn() throws Exception {
+        Cookie customer = registerCustomer(uniqueEmail(), uniquePhone());
+        String someoneElses = saveAddress(registerCustomer(uniqueEmail(), uniquePhone()));
+
+        for (String addressId : new String[] {someoneElses, UUID.randomUUID().toString()}) {
+            mvc.perform(patch("/api/v1/customer/profile/preferences")
+                            .cookie(customer)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(json.writeValueAsString(Map.of(
+                                    "defaultPickupAddressId", addressId,
+                                    "preferredPaymentMethod", "MOCK_CARD"))))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("VALIDATION_FAILED"))
+                    .andExpect(jsonPath("$.fieldErrors.defaultPickupAddressId")
+                            .value("Choose one of your saved addresses."));
+        }
+    }
+
+    private String saveAddress(Cookie customer) throws Exception {
+        Map<String, Object> address = Map.of(
+                "label", "Home", "contactName", "Nimali Perera", "phone", uniquePhone(),
+                "addressLine", "24 Temple Road", "city", "Nugegoda", "district", "COLOMBO", "postalCode", "10250");
+        String response = postJson("/api/v1/customer/addresses", address, customer)
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        return json.readTree(response).get("id").asString();
     }
 }
