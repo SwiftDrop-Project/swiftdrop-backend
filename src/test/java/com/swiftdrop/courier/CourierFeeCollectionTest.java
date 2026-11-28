@@ -281,11 +281,9 @@ class CourierFeeCollectionTest extends RealWorkflowTest {
                 .andExpect(jsonPath("$.deliveryFee.status").value("AWAITING_ONLINE_VERIFICATION"));
         assertThat(feePaymentRows(parcel)).isZero();
 
-        // What a verified online payment will look like once the payments work records one (no endpoint does today).
-        jdbc.update("insert into delivery.fee_payments (id, parcel_id, amount, currency, payment_method, source,"
-                        + " external_reference, collected_at) select ?, id, fee_amount, currency, 'ONLINE', 'ONLINE',"
-                        + " 'TEST-PROVIDER-REF', now() from delivery.parcels where id = ?",
-                UUID.randomUUID(), parcel);
+        // A verified online payment, as the payments module (WP2) records it after verifying it.
+        deliveries.recordOnlinePayment(new com.swiftdrop.delivery.RecordOnlinePaymentCommand(parcel,
+                "payments:test-provider-ref"));
         DeliverySnapshot verified = parcel(parcel);
         assertThat(verified.feePaymentStatus()).isEqualTo(FeePaymentStatus.ONLINE_VERIFIED);
         assertThat(verified.feePayment().source()).isEqualTo(FeePaymentSource.ONLINE);

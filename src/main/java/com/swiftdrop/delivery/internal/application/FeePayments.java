@@ -4,6 +4,7 @@ import com.swiftdrop.delivery.FeePayment;
 import com.swiftdrop.delivery.ParcelStatus;
 import com.swiftdrop.delivery.PaymentMethod;
 import com.swiftdrop.delivery.RecordFeeCollectionCommand;
+import com.swiftdrop.delivery.RecordOnlinePaymentCommand;
 import com.swiftdrop.delivery.internal.domain.FeePaymentRecord;
 import com.swiftdrop.delivery.internal.domain.Parcel;
 import com.swiftdrop.delivery.internal.persistence.FeePaymentRepository;
@@ -21,8 +22,9 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
- * Delivery fee payments (delivery.fee_payments, WP9 courier fee collection): reads a parcel's payment for its snapshot
- * and records a courier's cash collection. One payment per parcel, checked here and enforced by the database.
+ * Delivery fee payments (delivery.fee_payments, the record of whether a parcel's fee is paid): reads a parcel's payment
+ * for its snapshot, records a courier's cash collection (WP9) and a verified online payment (WP2). One payment per
+ * parcel, checked here and enforced by the database.
  */
 @Component
 class FeePayments {
@@ -62,12 +64,30 @@ class FeePayments {
         if (payments.existsByParcelId(parcel.getId())) {
             throw new ConflictException(ErrorCode.FEE_ALREADY_COLLECTED);
         }
-        FeePaymentRecord record = FeePaymentRecord.cashCollected(UUID.randomUUID(), parcel, command.courierId(),
-                command.assignmentId(), now);
+        return save(FeePaymentRecord.cashCollected(UUID.randomUUID(), parcel, command.courierId(),
+                command.assignmentId(), now));
+    }
+
+    /**
+     * Records a verified online payment of the parcel's fee (the parcel's own amount and currency), only for an
+     * ONLINE parcel that has no payment yet. The caller verified the payment (WP2). Flushed at once, so a duplicate
+     * (also a concurrent one) fails here with FEE_ALREADY_COLLECTED and the caller's transaction rolls back.
+     */
+    FeePayment recordOnlinePayment(Parcel parcel, RecordOnlinePaymentCommand command, Instant now) {
+        if (parcel.getPaymentMethod() != PaymentMethod.ONLINE) {
+            throw new BusinessRuleException(ErrorCode.FEE_COLLECTION_NOT_ALLOWED);
+        }
+        if (payments.existsByParcelId(parcel.getId())) {
+            throw new ConflictException(ErrorCode.FEE_ALREADY_COLLECTED);
+        }
+        return save(FeePaymentRecord.onlineVerified(UUID.randomUUID(), parcel, command.externalReference(), now));
+    }
+
+    private FeePayment save(FeePaymentRecord record) {
         try {
             payments.saveAndFlush(record);
         } catch (DataIntegrityViolationException ex) {
-            // uk_fee_payments_parcel_id: another request recorded it first.
+            // uk_fee_payments_parcel_id: another request recorded the parcel's payment first.
             throw new ConflictException(ErrorCode.FEE_ALREADY_COLLECTED);
         }
         return record.toPayment();

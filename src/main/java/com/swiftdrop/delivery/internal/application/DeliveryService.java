@@ -13,6 +13,7 @@ import com.swiftdrop.delivery.ParcelStatusEntry;
 import com.swiftdrop.delivery.ProofPhoto;
 import com.swiftdrop.delivery.ProofPhotoRef;
 import com.swiftdrop.delivery.RecordFeeCollectionCommand;
+import com.swiftdrop.delivery.RecordOnlinePaymentCommand;
 import com.swiftdrop.delivery.internal.domain.Parcel;
 import com.swiftdrop.delivery.internal.domain.ParcelPrice;
 import com.swiftdrop.delivery.internal.domain.ParcelStatusHistory;
@@ -371,6 +372,18 @@ class DeliveryService implements DeliveryApi {
         return parcel.toSnapshot(payment);
     }
 
+    /**
+     * Records a verified online payment of the parcel's fee (the parcel's own amount and currency) in the caller's
+     * transaction: a failure here, or later in that transaction, keeps no payment. No HTTP endpoint calls this.
+     */
+    @Override
+    @Transactional
+    public DeliverySnapshot recordOnlinePayment(RecordOnlinePaymentCommand command) {
+        Parcel parcel = parcels.findById(command.parcelId())
+                .orElseThrow(() -> new NotFoundException(ErrorCode.NOT_FOUND));
+        FeePayment payment = feePayments.recordOnlinePayment(parcel, command, clock.instant());
+        return parcel.toSnapshot(payment);
+    }
 
     // ---- Reports (WP4) ----
 

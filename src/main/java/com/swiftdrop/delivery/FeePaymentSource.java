@@ -11,8 +11,10 @@ public enum FeePaymentSource {
     COURIER_CASH,
 
     /**
-     * A verified online payment, with the payment provider's reference. Reserved for the payments work: nothing records
-     * it yet, and choosing {@link PaymentMethod#ONLINE} at booking never does.
+     * A verified online payment, with its external reference, recorded by the payments module (WP2) through
+     * {@link DeliveryApi#recordOnlinePayment} once it has verified the payment. Today that verification is WP2's mock
+     * card gateway (academic demonstration, not a real payment provider). Choosing {@link PaymentMethod#ONLINE} at
+     * booking never records it.
      */
     ONLINE
 }

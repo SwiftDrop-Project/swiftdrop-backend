@@ -83,7 +83,7 @@ Change it in the same PR as the code, and tell the frontend team.
 | 409 | `ASSIGNMENT_NEEDS_PARCEL` | Dispatch: removing the last parcel of a task |
 | 409 | `ASSIGNMENT_CHANGED` | Dispatch: someone else changed the task at the same moment |
 | 409 | `FEE_ALREADY_COLLECTED` | Courier: confirming a delivery fee that is already paid (or a race: one confirmation wins) |
-| 409 | `FEE_COLLECTION_NOT_ALLOWED` | Delivery (`DeliveryApi.recordFeeCollection`): not a cash fee, or the parcel isn't at its collection status |
+| 409 | `FEE_COLLECTION_NOT_ALLOWED` | Delivery (`DeliveryApi.recordFeeCollection` / `recordOnlinePayment`): the fee isn't paid that way, or the parcel isn't at its collection status |
 | 409 | `WEBHOOK_LIMIT_REACHED` | Webhooks: creating or turning on a 6th active subscription |
 | 409 | `WEBHOOK_DELIVERY_NOT_RETRYABLE` | Webhooks: retrying a delivery that is not `FAILED` |
 | 409 | `WEBHOOK_URL_IN_USE` | Webhooks: another of your active subscriptions already uses this callback URL |
@@ -1350,7 +1350,8 @@ The **task** becomes `COMPLETED` by itself, in the same transaction, when its la
   (`codAmount`, the price of the goods), which is unchanged.
   - `status`: `AWAITING_CASH_COLLECTION` (AT_PICKUP / AT_DROP_OFF, not collected yet) · `CASH_COLLECTED` (a courier
     collected it) · `AWAITING_ONLINE_VERIFICATION` (ONLINE chosen; **not paid** as far as SwiftDrop knows) ·
-    `ONLINE_VERIFIED` (a verified online payment is recorded; nothing records one yet: the payments work will) ·
+    `ONLINE_VERIFIED` (a verified online payment is recorded by the payments module through
+    `DeliveryApi.recordOnlinePayment`; see "Delivery fee payments (module contract)") ·
     `NOT_RECORDED` (booked before payment methods). Choosing `ONLINE` at booking is never a payment.
   - `collectedAt`: when it was collected or verified; `null` while unpaid.
   - `collectOn`: the status change of this step that must confirm the cash collection with `feeCollected: true`:
@@ -1359,6 +1360,22 @@ The **task** becomes `COMPLETED` by itself, in the same transaction, when its la
     handover, failed delivery or return.
   - The payment belongs to the parcel (`delivery.fee_payments`, one per parcel), so it is the same for every courier
     and task: a fee collected at pickup shows `CASH_COLLECTED` to the delivery courier.
+
+#### Delivery fee payments (module contract)
+
+`delivery.fee_payments` is the one record of whether a parcel's delivery fee is paid: at most one row per parcel
+(`uk_fee_payments_parcel_id`), the amount and currency always copied from the parcel. Two Java methods write it; **no
+HTTP endpoint marks a fee as paid**:
+
+| `DeliveryApi` method | Caller | Records | Refused with |
+|---|---|---|---|
+| `recordFeeCollection(RecordFeeCollectionCommand(parcelId, courierId, assignmentId))` | courier (WP9), with `PICKED_UP` / `DELIVERED` and `feeCollected: true` | `COURIER_CASH` (AT_PICKUP at `PICKED_UP`, AT_DROP_OFF at `DELIVERED`) | `FEE_COLLECTION_NOT_ALLOWED`, `FEE_ALREADY_COLLECTED` |
+| `recordOnlinePayment(RecordOnlinePaymentCommand(parcelId, externalReference))` | payments (WP2), after it verified an online payment | `ONLINE`, with `externalReference` (format `payments:<payment id>`, 1-100 of `A-Z a-z 0-9 : _ - .`, never card data) | `NOT_FOUND`, `FEE_COLLECTION_NOT_ALLOWED` (method isn't `ONLINE`: a cash fee or none recorded), `FEE_ALREADY_COLLECTED` (already paid, also when two requests race) |
+
+Both run in the caller's transaction: if anything later in it fails, no payment is kept. Every module reads the result
+from `DeliverySnapshot.feePaymentStatus` / `feePayment` (`FeePaymentStatus.of`): `CASH_COLLECTED` or `ONLINE_VERIFIED`
+only when a row exists. Today the online verification is WP2's **mock card gateway** (test cards, academic
+demonstration): it is not a real payment provider, and no money moves.
 - `completed`: the courier is done with this parcel (table above), whatever the other parcels of its task are doing.
   `completedAt`: when; `null` while it is active.
 - `proof`: `{ "recipientName": "Nimal Perera", "hasPhoto": true }` (who received it, and whether the photo of the

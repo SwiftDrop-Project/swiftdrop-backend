@@ -188,6 +188,24 @@ public interface DeliveryApi {
      */
     DeliverySnapshot recordFeeCollection(RecordFeeCollectionCommand command);
 
+    /**
+     * Records a verified online payment of the parcel's delivery fee ({@link FeePaymentSource#ONLINE}), with the
+     * parcel's own fee and currency and the caller's {@code externalReference}. For the payments module (WP2), after
+     * it verified the payment (today: its mock card gateway, an academic demonstration, not a real provider). There is
+     * no HTTP endpoint for this.
+     *
+     * <p>Runs in the caller's transaction: call it in the same transaction as the caller's own payment record, so
+     * both are kept or neither. A parcel has at most one fee payment: a second one is refused here and by the database
+     * ({@code uk_fee_payments_parcel_id}), also when two requests race. Afterwards the parcel's
+     * {@link DeliverySnapshot#feePaymentStatus()} is ONLINE_VERIFIED; the courier screens show it as paid.
+     *
+     * @return the parcel with its {@link DeliverySnapshot#feePayment()} (status ONLINE_VERIFIED)
+     * @throws com.swiftdrop.shared.error.NotFoundException     NOT_FOUND for an unknown parcel
+     * @throws com.swiftdrop.shared.error.BusinessRuleException FEE_COLLECTION_NOT_ALLOWED when the parcel's payment
+     *                                                          method isn't ONLINE (a cash fee, or none recorded)
+     * @throws com.swiftdrop.shared.error.ConflictException     FEE_ALREADY_COLLECTED when a payment is already recorded
+     */
+    DeliverySnapshot recordOnlinePayment(RecordOnlinePaymentCommand command);
 
     /**
      * Stores a proof-of-delivery photo for the parcel (a photo of the delivery slip the recipient signed) in private

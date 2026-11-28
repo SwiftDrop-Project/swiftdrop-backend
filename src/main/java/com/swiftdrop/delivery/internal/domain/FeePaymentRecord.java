@@ -82,9 +82,27 @@ public class FeePaymentRecord implements Persistable<UUID> {
         return record;
     }
 
+    /**
+     * A verified online payment of the parcel's fee, now: the parcel's own amount and currency, the verifier's
+     * reference, no courier and no task (ck_fee_payments_online).
+     */
+    public static FeePaymentRecord onlineVerified(UUID id, Parcel parcel, String externalReference, Instant verifiedAt) {
+        FeePaymentRecord record = new FeePaymentRecord();
+        record.id = id;
+        record.parcelId = parcel.getId();
+        record.amount = parcel.getFeeAmount();
+        record.currency = parcel.getCurrency();
+        record.paymentMethod = parcel.getPaymentMethod();
+        record.source = FeePaymentSource.ONLINE;
+        record.externalReference = externalReference;
+        record.collectedAt = verifiedAt;
+        return record;
+    }
+
     /** The public view other modules get. */
     public FeePayment toPayment() {
-        return new FeePayment(amount, currency, paymentMethod, source, collectedBy, assignmentId, collectedAt);
+        return new FeePayment(amount, currency, paymentMethod, source, collectedBy, assignmentId, collectedAt,
+                externalReference);
     }
 
     @Override
