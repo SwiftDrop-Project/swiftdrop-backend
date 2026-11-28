@@ -169,6 +169,27 @@ public interface DeliveryApi {
     DeliverySnapshot changeStatus(ChangeStatusCommand command);
 
     /**
+     * Records that a courier collected the parcel's delivery fee in cash ({@link FeePaymentSource#COURIER_CASH}),
+     * with the parcel's own fee and currency. Meant to run in the same transaction as the status change it goes with,
+     * after {@link #changeStatus}: an AT_PICKUP fee once the parcel is PICKED_UP, an AT_DROP_OFF fee once it is
+     * DELIVERED. If the transaction rolls back, no payment is kept.
+     *
+     * <p>A parcel has at most one fee payment: a second one is refused here and by the database
+     * ({@code uk_fee_payments_parcel_id}), also when two requests race. The caller authorizes the courier, as for
+     * {@link #changeStatus}.
+     *
+     * @return the parcel with its {@link DeliverySnapshot#feePayment()} (status CASH_COLLECTED)
+     * @throws com.swiftdrop.shared.error.NotFoundException     NOT_FOUND for an unknown parcel
+     * @throws com.swiftdrop.shared.error.BusinessRuleException FEE_COLLECTION_NOT_ALLOWED when the fee isn't paid in
+     *                                                          cash (ONLINE, or no payment method) or the parcel isn't at
+     *                                                          the matching status (PICKED_UP for AT_PICKUP, DELIVERED
+     *                                                          for AT_DROP_OFF)
+     * @throws com.swiftdrop.shared.error.ConflictException     FEE_ALREADY_COLLECTED when a payment is already recorded
+     */
+    DeliverySnapshot recordFeeCollection(RecordFeeCollectionCommand command);
+
+
+    /**
      * Stores a proof-of-delivery photo for the parcel (a photo of the delivery slip the recipient signed) in private
      * file storage, with a durable reference linked to the parcel id. It is not attached until a DELIVERED change names
      * it in {@link ChangeStatusCommand#proofPhotoId()}; once attached it can never be replaced. Photos that are never
