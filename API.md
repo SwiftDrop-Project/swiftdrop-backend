@@ -82,6 +82,9 @@ Change it in the same PR as the code, and tell the frontend team.
 | 409 | `ASSIGNMENT_STARTED` | Dispatch: cancelling or reassigning a task the courier has already started |
 | 409 | `ASSIGNMENT_NEEDS_PARCEL` | Dispatch: removing the last parcel of a task |
 | 409 | `ASSIGNMENT_CHANGED` | Dispatch: someone else changed the task at the same moment |
+| 409 | `ADDRESS_LIMIT_REACHED` | Customer addresses: saving a 21st address |
+| 409 | `PAYMENT_NOT_PAYABLE` | Payments: a card payment for a delivery that isn't online, is already paid or wasn't charged |
+| 402 | `CARD_DECLINED` | Payments: the mock card was declined (test card 4000 0000 0000 0002) |
 | 409 | `WEBHOOK_LIMIT_REACHED` | Webhooks: creating or turning on a 6th active subscription |
 | 409 | `WEBHOOK_DELIVERY_NOT_RETRYABLE` | Webhooks: retrying a delivery that is not `FAILED` |
 | 409 | `WEBHOOK_URL_IN_USE` | Webhooks: another of your active subscriptions already uses this callback URL |
@@ -112,6 +115,9 @@ Messages of the new codes (show them as-is):
 | `ASSIGNMENT_STARTED` | The courier has already started this task. |
 | `ASSIGNMENT_NEEDS_PARCEL` | A task needs at least one parcel. Cancel the task instead. |
 | `ASSIGNMENT_CHANGED` | This task was just changed by someone else. Refresh and try again. |
+| `ADDRESS_LIMIT_REACHED` | You can save up to 20 addresses. Delete one before adding another. |
+| `PAYMENT_NOT_PAYABLE` | This delivery doesn't need a card payment. |
+| `CARD_DECLINED` | Your card was declined. Try another card. |
 | `WEBHOOK_LIMIT_REACHED` | You can have up to 5 active webhooks. Turn one off before adding another. |
 | `WEBHOOK_DELIVERY_NOT_RETRYABLE` | Only failed deliveries can be sent again. |
 | `WEBHOOK_URL_IN_USE` | You already have a webhook for this address. Add the events to it instead. |
@@ -553,6 +559,35 @@ summary.
 
 ### Customer (role `CUSTOMER` only)
 
+#### WP2 contract at a glance
+Everything the customer pages (Overview, Profile, Addresses, My deliveries, Payments) call, in one list. Owner: WP2.
+Every endpoint is under `/api/v1`, needs a logged-in `CUSTOMER` (`401` without login, `403` for other roles), takes
+the customer from the login, and answers `404 NOT_FOUND` for another customer's data. Request and response shapes are
+in the sections linked below; the frontend can build against them with mock data before the code is merged. Tables
+and migrations: `docs/wp2-customer-migration-plan.md`.
+
+| Page | Endpoint | Request | Response | Shapes in |
+|---|---|---|---|---|
+| Profile | `GET /customer/profile` | - | CustomerProfile | this section |
+| Profile | `PATCH /customer/profile/personal-details` | `fullName`, `phone` | CustomerProfile | this section |
+| Profile | `PATCH /customer/profile/preferences` | `defaultPickupAddressId`, `preferredPaymentMethod` | CustomerProfile | this section |
+| Addresses | `GET /customer/addresses` | - | CustomerAddress[] (default first) | "Saved addresses" |
+| Addresses | `POST /customer/addresses` | address body | `201` CustomerAddress | "Saved addresses" |
+| Addresses | `PUT /customer/addresses/{id}` | address body | CustomerAddress | "Saved addresses" |
+| Addresses | `PUT /customer/addresses/{id}/default` | - | CustomerAddress | "Saved addresses" |
+| Addresses | `DELETE /customer/addresses/{id}` | - | `204` | "Saved addresses" |
+| My deliveries | `GET /deliveries?page&size&status&q` | `status` repeatable (tabs), `q` tracking number | page of Delivery | "Deliveries (WP3)" → "My deliveries" |
+| My deliveries | `GET /deliveries/{id}` | - | Delivery + history | "Deliveries (WP3)" |
+| Receipts | `GET /deliveries/{id}/receipt` | - | Receipt (fee lines, payment) | "Deliveries (WP3)" → "Receipt of a delivery" |
+| Receipts | `GET /deliveries/{id}/receipt/pdf` | - | `application/pdf` download | "Deliveries (WP3)" → "Receipt of a delivery" |
+| Payments | `GET /payments?page&size` | - | page of Payment | "Payments" |
+| Payments | `GET /payments/summary` | - | PaymentSummary | "Payments" |
+| Payments | `POST /payments/{id}/card` | mock card (test numbers only) | Payment | "Payments" |
+
+Where the code lives: `customer` module (profile, addresses), `payments` module (payments), and the `delivery` module
+(history filters and receipts, because they read parcels; built by WP2, owned by WP3's module). New error codes:
+`ADDRESS_LIMIT_REACHED`, `PAYMENT_NOT_PAYABLE`, `CARD_DECLINED` (see the error tables at the top).
+
 #### `GET /customer/profile`
 Returns customer account details, delivery preferences, and stats counters.
 - `200`:
@@ -569,6 +604,8 @@ Returns customer account details, delivery preferences, and stats counters.
     "preferredPaymentMethod": "CASH_ON_DELIVERY"
   }
   ```
+- `totalDeliveries`: every delivery the customer has booked (from the delivery module). `savedAddressesCount` is
+  `0` until saved addresses are built.
 - `401` `UNAUTHENTICATED` · `403` `FORBIDDEN`
 
 #### `PATCH /customer/profile/personal-details`
@@ -591,7 +628,158 @@ Updates delivery preferences (default pickup address and preferred payment metho
 }
 ```
 - `200`: Updated CustomerProfileResponse
-- `400` `VALIDATION_FAILED` · `401` `UNAUTHENTICATED` · `403` `FORBIDDEN`
+- `defaultPickupAddressId` must be one of the customer's saved addresses (below), or `null` for no default.
+- `400` `VALIDATION_FAILED` (`fieldErrors.defaultPickupAddressId`: "Choose one of your saved addresses.") · `401`
+  `UNAUTHENTICATED` · `403` `FORBIDDEN`
+
+### Saved addresses (role `CUSTOMER` only)
+Pickup and drop-off addresses the customer saves once and reuses when booking. A customer can save up to 20. The
+default pickup address is the profile's `defaultPickupAddressId` (so there is at most one). Someone else's address
+and an unknown id are both `404 NOT_FOUND`.
+
+**CustomerAddress (response)**
+```json
+{
+  "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+  "label": "Home",
+  "contactName": "Nimali Perera",
+  "phone": "+94771234567",
+  "addressLine": "24 Temple Road",
+  "city": "Nugegoda",
+  "district": "COLOMBO",
+  "postalCode": "10250",
+  "landmark": "Opposite the post office",
+  "isDefault": true,
+  "createdAt": "2026-11-22T15:00:00Z",
+  "updatedAt": "2026-11-22T15:00:00Z"
+}
+```
+`landmark` is `null` when not given. `phone` comes back as `+947XXXXXXXX`.
+
+**Request body** (POST and PUT)
+```json
+{
+  "label": "Home",
+  "contactName": "Nimali Perera",
+  "phone": "077 123 4567",
+  "addressLine": "24 Temple Road",
+  "city": "Nugegoda",
+  "district": "COLOMBO",
+  "postalCode": "10250",
+  "landmark": "Opposite the post office",
+  "useAsDefault": true
+}
+```
+| Field | Rule | Error message |
+|---|---|---|
+| `label` | Required, max 40 | Enter a label, like Home or Office. |
+| `contactName` | Required, max 100 | Enter a name. |
+| `phone` | Sri Lankan mobile (as `phone` above) | Enter a Sri Lankan mobile number, like 077 123 4567. |
+| `addressLine` | Required, max 200 | Enter the address. |
+| `city` | Required, max 80 | Enter the city. |
+| `district` | One of the 25 district codes | Select a district. |
+| `postalCode` | Exactly 5 digits | Enter the 5-digit postal code. |
+| `landmark` | Optional, max 150 | Use 150 characters or fewer. |
+| `useAsDefault` | Optional. `true`: make it the default pickup address; `false` (on PUT): stop it being the default; left out: leave the default as it is | - |
+
+The fields match a delivery's `pickup` / `recipient`, so a saved address can fill the booking form.
+
+#### `GET /customer/addresses`
+The customer's addresses as an array of CustomerAddress: the default pickup address first, then the rest in the order
+they were saved. `200` (an empty array when none) · `401` · `403`
+
+#### `POST /customer/addresses`
+Saves an address. `201` CustomerAddress · `400` `VALIDATION_FAILED` · `401` · `403` · `409` `ADDRESS_LIMIT_REACHED`
+(already 20 addresses)
+
+#### `PUT /customer/addresses/{id}`
+Replaces every field of one of the customer's addresses. `200` CustomerAddress · `400` `VALIDATION_FAILED` · `401` ·
+`403` · `404` `NOT_FOUND`
+
+#### `PUT /customer/addresses/{id}/default`
+Makes it the default pickup address (no body); the old default stops being the default. `200` CustomerAddress ·
+`401` · `403` · `404` `NOT_FOUND`
+
+#### `DELETE /customer/addresses/{id}`
+Deletes it. Deleting the default pickup address leaves the customer without a default. `204` · `401` · `403` · `404`
+`NOT_FOUND`
+
+---
+
+## Payments (role `CUSTOMER` only)
+One payment record for every delivery the customer booked (the "Payments" page). The records follow the deliveries:
+every request first brings them up to date, so a new booking has its payment straight away. How the fee is paid is
+the delivery's `paymentMethod`:
+
+| `method` | Shown as | `status` |
+|---|---|---|
+| `ONLINE` | Mock card | `DUE` until paid here with a test card, then `PAID` (with `cardBrand` and `cardLast4`). `NOT_CHARGED` while the delivery has `FAILED` and it wasn't paid. |
+| `AT_PICKUP` | Cash at pickup | `DUE` while `CREATED`, then `PAID` (the courier took the cash at pickup). |
+| `AT_DROP_OFF` | Cash on delivery | `PAID` once `DELIVERED`, `NOT_CHARGED` while `FAILED`, otherwise `DUE`. |
+| `null` (booked before payment methods) | Cash on delivery | as `AT_DROP_OFF`. |
+
+`paidAt`: for cash, when the parcel reached `PICKED_UP` / `DELIVERED`; for a card, when it was paid. A failed delivery
+that is tried again is `DUE` again. No real money moves: the mock card accepts only test numbers.
+
+**Payment (response)**
+```json
+{
+  "id": "5f0c7a52-1f0e-4b6e-9a4e-0d3c1c1f2a10",
+  "parcelId": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+  "trackingNumber": "SD2611003152",
+  "bookedAt": "2026-11-09T05:12:00Z",
+  "method": "ONLINE",
+  "status": "PAID",
+  "amount": 980.00,
+  "currency": "LKR",
+  "cardBrand": "VISA",
+  "cardLast4": "4242",
+  "paidAt": "2026-11-09T05:20:41Z"
+}
+```
+
+#### `GET /payments?page=0&size=20`
+The customer's payments, newest booking first, as a page:
+`{ "content": [ /* Payment */ ], "page": 0, "size": 20, "totalElements": 5, "totalPages": 1 }`.
+`page` from 0, `size` 1-100. `200` · `400` `VALIDATION_FAILED` (`fieldErrors.page` / `fieldErrors.size`, as My
+deliveries) · `401` · `403`
+
+#### `GET /payments/summary`
+```json
+{
+  "currency": "LKR",
+  "paidTotal": 3370.00, "paidCount": 3,
+  "dueTotal": 1250.00, "dueCount": 1,
+  "dueCashTotal": 1250.00, "dueCashCount": 1,
+  "dueOnlineTotal": 0.00, "dueOnlineCount": 0,
+  "notChargedCount": 1,
+  "dueCashTrackingNumber": "SD2611004817"
+}
+```
+"Due" is split into cash (to hand to the courier) and online (to pay here). `dueCashTrackingNumber` only when exactly
+one cash payment is due. `200` · `401` · `403`
+
+#### `POST /payments/{id}/card`
+Pays an `ONLINE` payment that is `DUE` with a mock card. Nothing is charged and the card details are not stored (only
+the brand and last 4 digits are kept).
+```json
+{ "cardNumber": "4242 4242 4242 4242", "expiry": "12/28", "cvc": "123", "nameOnCard": "Nimali Perera" }
+```
+| Test card | Result |
+|---|---|
+| `4242 4242 4242 4242` (Visa), `5555 5555 5555 4444` (Mastercard) | Approved: `200` Payment, `PAID` |
+| `4000 0000 0000 0002` | Declined: `402` `CARD_DECLINED`, nothing changes |
+| any other number | `400`, `fieldErrors.cardNumber`: "Use a test card, like 4242 4242 4242 4242." |
+
+| Field | Rule | Error message |
+|---|---|---|
+| `cardNumber` | Required, digits (spaces allowed) | Enter the card number. |
+| `expiry` | `MM/YY`, this month or later | Enter the expiry date as MM/YY. / This card has expired. |
+| `cvc` | 3 or 4 digits | Enter the 3 or 4 digit security code. |
+| `nameOnCard` | Required, max 100 | Enter the name on the card. |
+
+`200` Payment · `400` `VALIDATION_FAILED` · `401` · `402` `CARD_DECLINED` · `403` · `404` `NOT_FOUND` (no such
+payment, or not yours) · `409` `PAYMENT_NOT_PAYABLE` (not an online payment, already paid, or not charged)
 
 ---
 
@@ -1021,15 +1209,21 @@ Response `201`: a Delivery.
   `FORBIDDEN` (logged in, but not a `CUSTOMER`) · `409` `PARCEL_NEEDS_MANUAL_QUOTE` (no vehicle carries or fits it)
 
 ### My deliveries
-`GET /deliveries?page=0&size=20&status=AT_BRANCH` (logged-in `CUSTOMER`)
+`GET /deliveries?page=0&size=20&status=AT_BRANCH&q=SD2611` (logged-in `CUSTOMER`)
 
 The customer's own deliveries, newest first, as a page of Delivery (the shape above):
 ```json
 { "content": [ /* Delivery */ ], "page": 0, "size": 20, "totalElements": 3, "totalPages": 1 }
 ```
-- `page` from 0 (default 0); `size` 1-100 (default 20); `status` optional, one of the parcel statuses.
+- `page` from 0 (default 0); `size` 1-100 (default 20).
+- `status` optional, one of the parcel statuses, and may be repeated: the delivery is in any of them. The tabs on
+  "My deliveries" use it: **Active** `status=CREATED&status=PICKED_UP&status=AT_BRANCH&status=IN_TRANSIT&status=OUT_FOR_DELIVERY`,
+  **Delivered** `status=DELIVERED`, **Failed** `status=FAILED`; no `status` is every delivery.
+- `q` optional, at most 30 characters: part of the tracking number, spaces and case ignored (`sd 2611 0031` finds
+  `SD2611003152`). Only the customer's own deliveries are searched.
 - `200` · `400` `VALIDATION_FAILED` (`fieldErrors.page`: "Use a page number of 0 or more.", `fieldErrors.size`:
-  "Use a page size from 1 to 100."; an unknown `status` too) · `401` · `403` (not a `CUSTOMER`)
+  "Use a page size from 1 to 100.", `fieldErrors.q`: "Use at most 30 characters."; an unknown `status` too) · `401`
+  · `403` (not a `CUSTOMER`)
 
 ### One delivery with its history
 `GET /deliveries/{id}` (logged-in `CUSTOMER`)
@@ -1049,6 +1243,49 @@ The customer's own deliveries, newest first, as a page of Delivery (the shape ab
 - `history`: newest first. `branch` only on `AT_BRANCH` entries, `failureReason` only on `FAILED` entries.
 - `200` · `400` (`id` is not a UUID) · `401` · `403` (not a `CUSTOMER`) · `404` `NOT_FOUND`: no such delivery, or it
   isn't yours (the same answer, so ids can't be probed).
+
+### Receipt of a delivery
+`GET /deliveries/{id}/receipt` (logged-in `CUSTOMER`): the receipt as JSON, for the preview on "My deliveries".
+```json
+{
+  "trackingNumber": "SD2611003152",
+  "status": "DELIVERED",
+  "bookedAt": "2026-11-09T05:12:00Z",
+  "pickup": { "name": "Nimali Perera", "phone": "+94771234567", "addressLine": "24 Temple Road",
+              "city": "Gampaha", "district": "GAMPAHA" },
+  "recipient": { "name": "Kamal Silva", "phone": "+94719876543", "addressLine": "118 Galle Road",
+                 "city": "Colombo 03", "district": "COLOMBO" },
+  "weightKg": 2.00,
+  "billableWeightKg": 2,
+  "size": { "lengthCm": 30, "widthCm": 20, "heightCm": 15, "keepUpright": false },
+  "vehicle": "BIKE",
+  "lines": [
+    { "component": "BASE", "label": "Base fee", "amount": 650.00 },
+    { "component": "WEIGHT", "label": "Extra weight (1 kg)", "amount": 330.00 }
+  ],
+  "total": 980.00,
+  "currency": "LKR",
+  "codAmount": null,
+  "paymentMethod": "AT_PICKUP",
+  "paymentStatus": "PAID"
+}
+```
+- The fee is the one fixed at booking (the parcel's stored fee lines), never a new quote, so a receipt doesn't change
+  when the rate card does. `lines` add up to `total`; a parcel booked before pricing has one line
+  `{ "component": "FEE", "label": "Delivery fee" }`. `label` is the text to show: "Base fee", "Extra weight (N kg)",
+  "Pickup", "Drop-off", "Between branches", "Cash on delivery handling".
+- `billableWeightKg`, `size` and `vehicle` are null for parcels booked before sizes; `paymentMethod` for parcels booked
+  before payment methods. `codAmount` is the cash collected from the recipient for the sender, not part of the fee.
+- `paymentStatus`: `PAID` once the courier has collected the fee (`AT_PICKUP`: from `PICKED_UP` on; `AT_DROP_OFF`:
+  once `DELIVERED`), otherwise `DUE`. `null` for `ONLINE` (online payments aren't recorded yet) and without a method.
+- `200` · `400` (`id` is not a UUID) · `401` · `403` (not a `CUSTOMER`) · `404` `NOT_FOUND` (no such delivery, or it
+  isn't yours).
+
+`GET /deliveries/{id}/receipt/pdf` (logged-in `CUSTOMER`): the same receipt as a one-page A4 PDF to download.
+- `200` `application/pdf` with `Content-Disposition: attachment; filename="SwiftDrop-receipt-SD2611003152.pdf"` and
+  `Cache-Control: no-store` (it holds personal data). Dates in Sri Lankan time; amounts "Rs. 1,250.00".
+- The frontend links to it directly (the browser sends the `SD_TOKEN` cookie), so the download needs no JavaScript.
+- Errors as above, as the usual JSON error body.
 
 ---
 
