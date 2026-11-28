@@ -117,6 +117,17 @@ abstract class RealWorkflowTest extends IntegrationTest {
 
     protected UUID bookParcel(String pickupCity, String pickupDistrict, String recipientCity,
                               String recipientDistrict) throws Exception {
+        return bookParcel(pickupCity, pickupDistrict, recipientCity, recipientDistrict, "AT_PICKUP",
+                new BigDecimal("2500.00"));
+    }
+
+    /** A booking from Delgoda (GAMPAHA) to Deniyaya (MATARA) paid this way, with this cash on delivery (null: none). */
+    protected UUID bookParcel(String paymentMethod, BigDecimal codAmount) throws Exception {
+        return bookParcel("Delgoda", "GAMPAHA", "Deniyaya", "MATARA", paymentMethod, codAmount);
+    }
+
+    protected UUID bookParcel(String pickupCity, String pickupDistrict, String recipientCity,
+                              String recipientDistrict, String paymentMethod, BigDecimal codAmount) throws Exception {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("pickup", Map.of("name", "Delgoda Spice Traders", "phone", "0771234567",
                 "addressLine", "14 Kandy Road", "city", pickupCity, "district", pickupDistrict));
@@ -127,8 +138,10 @@ abstract class RealWorkflowTest extends IntegrationTest {
         body.put("lengthCm", 40);
         body.put("widthCm", 30);
         body.put("heightCm", 12);
-        body.put("paymentMethod", "AT_PICKUP");
-        body.put("codAmount", new BigDecimal("2500.00"));
+        body.put("paymentMethod", paymentMethod);
+        if (codAmount != null) {
+            body.put("codAmount", codAmount);
+        }
         String response = postJson("/api/v1/deliveries", body, customer)
                 .andExpect(status().isCreated())
                 .andReturn().getResponse().getContentAsString();
@@ -146,6 +159,11 @@ abstract class RealWorkflowTest extends IntegrationTest {
 
     protected int outboxRows(UUID parcelId) {
         return count("select count(*) from delivery.outbox_events where parcel_id = ?", parcelId);
+    }
+
+    /** The parcel's recorded delivery fee payments (delivery.fee_payments): 0 or 1. */
+    protected int feePaymentRows(UUID parcelId) {
+        return count("select count(*) from delivery.fee_payments where parcel_id = ?", parcelId);
     }
 
     protected String itemOutcomeRow(UUID assignmentId, UUID parcelId) {
@@ -211,8 +229,14 @@ abstract class RealWorkflowTest extends IntegrationTest {
         return postJson(COURIER + "/" + parcelId + "/status", body, courier.cookie());
     }
 
+    /**
+     * A status change with no other field. PICKED_UP confirms the delivery fee's cash collection, as the courier screens
+     * do: {@link #bookParcel()} books AT_PICKUP, so the sender pays the courier at pickup.
+     */
     protected ResultActions moveTo(StaffCourier courier, UUID parcelId, String status) throws Exception {
-        return changeStatus(courier, parcelId, Map.of("status", status));
+        return changeStatus(courier, parcelId, "PICKED_UP".equals(status)
+                ? Map.of("status", status, "feeCollected", true)
+                : Map.of("status", status));
     }
 
     /** Uploads a photo of the signed delivery slip for a parcel the courier is delivering; its proofPhotoId. */

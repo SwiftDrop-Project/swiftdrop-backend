@@ -1,6 +1,7 @@
 package com.swiftdrop.courier;
 
 import com.swiftdrop.delivery.DeliverySnapshot;
+import com.swiftdrop.delivery.FeePaymentStatus;
 import com.swiftdrop.delivery.ParcelStatus;
 import com.swiftdrop.dispatch.AssignmentApi;
 import org.junit.jupiter.api.Test;
@@ -47,16 +48,20 @@ class CourierWorkflowRollbackTest extends RealWorkflowTest {
 
         doThrow(new IllegalStateException("simulated dispatch failure"))
                 .when(spiedAssignments).recordOutcome(any());
-        changeStatus(courier, parcelId, Map.of("status", "PICKED_UP", "note", "From the front desk"))
+        // Booked AT_PICKUP: the delivery fee's cash collection is recorded in the same transaction.
+        changeStatus(courier, parcelId, Map.of("status", "PICKED_UP", "note", "From the front desk",
+                "feeCollected", true))
                 .andExpect(status().isInternalServerError())
                 .andExpect(jsonPath("$.code").value("INTERNAL_ERROR"));
 
-        // delivery's change, its history row and its outbox event were all rolled back
+        // delivery's change, its history row, its outbox event and the fee payment were all rolled back
         DeliverySnapshot after = parcel(parcelId);
         assertThat(after.status()).isEqualTo(ParcelStatus.CREATED);
         assertThat(after.version()).isEqualTo(before.version());
         assertThat(historyRows(parcelId)).isEqualTo(historyBefore);
         assertThat(outboxRows(parcelId)).isEqualTo(outboxBefore);
+        assertThat(feePaymentRows(parcelId)).isZero();
+        assertThat(after.feePaymentStatus()).isEqualTo(FeePaymentStatus.AWAITING_CASH_COLLECTION);
         // and dispatch has nothing either
         assertThat(itemOutcomeRow(task, parcelId)).isEqualTo("PENDING");
         assertThat(taskStatusRow(task)).isEqualTo("ASSIGNED");
@@ -68,6 +73,7 @@ class CourierWorkflowRollbackTest extends RealWorkflowTest {
         assertThat(itemOutcomeRow(task, parcelId)).isEqualTo("COLLECTED");
         assertThat(taskStatusRow(task)).isEqualTo("IN_PROGRESS");
         assertThat(historyRows(parcelId)).isEqualTo(historyBefore + 1);
+        assertThat(feePaymentRows(parcelId)).isEqualTo(1);
     }
 
     /**
