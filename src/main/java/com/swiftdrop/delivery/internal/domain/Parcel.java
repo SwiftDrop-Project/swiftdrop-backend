@@ -6,6 +6,7 @@ import com.swiftdrop.delivery.DeliverySnapshot;
 import com.swiftdrop.delivery.FailureReason;
 import com.swiftdrop.delivery.ParcelSize;
 import com.swiftdrop.delivery.ParcelStatus;
+import com.swiftdrop.delivery.FeePayment;
 import com.swiftdrop.delivery.PaymentMethod;
 import com.swiftdrop.shared.error.BusinessRuleException;
 import com.swiftdrop.shared.error.ErrorCode;
@@ -251,11 +252,19 @@ public class Parcel {
      * value the table gets.
      */
     public DeliverySnapshot toSnapshot() {
+        return toSnapshot(null);
+    }
+
+    /**
+     * The read-only copy with the fee's recorded payment (delivery.fee_payments, kept apart from the parcel), or null
+     * while the fee is not paid. The fee payment status follows from the two.
+     */
+    public DeliverySnapshot toSnapshot(FeePayment feePayment) {
         return new DeliverySnapshot(id, trackingNumber, status, customerId, merchantId, pickup.toContact(),
                 recipient.toContact(), weightKg, codAmount, instructions, assignedCourierId, assignedAt, createdAt,
                 updatedAt, proofRecipientName, proofPhotoId != null, failureReason, merchantOrderRef, feeAmount,
                 currency, version == null ? 0L : version, currentBranch, size(), vehicle, billableWeightKg,
-                rateCardVersion, paymentMethod);
+                rateCardVersion, paymentMethod, null, feePayment);
     }
 
     /**

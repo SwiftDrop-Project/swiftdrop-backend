@@ -12,7 +12,7 @@ import java.util.UUID;
 
 /**
  * One parcel in the courier's lists (API.md "Courier"). Leaves out what the courier doesn't need: customer and
- * merchant ids, the merchant's order reference, the fee and the version.
+ * merchant ids, the merchant's order reference, the fee lines and the version.
  *
  * <p>Privacy: the courier gets only the contact they need, and only while the parcel is still theirs to work: the
  * sender ({@code pickup}) in a pickup, the recipient in a delivery, nobody in a transfer; both are null once the
@@ -20,6 +20,9 @@ import java.util.UUID;
  *
  * @param status                 the parcel's own status (delivery); unchanged by "Unable to Collect"
  * @param codAmount              cash to collect in rupees; null when already paid
+ * @param deliveryFee            the delivery fee and how the customer chose to pay it (never the cash on delivery);
+ *                               always there, its {@code paymentMethod} null for parcels booked before payment methods.
+ *                               It carries no payment status: SwiftDrop doesn't record payments yet
  * @param nextStatuses           the statuses the courier may set now, in life-cycle order (AT_BRANCH = hand over at,
  *                               or return to, {@code task.branch}); empty once the parcel is completed
  * @param canMarkUnableToCollect "Unable to Collect" is possible now (the parcel hasn't been taken yet)
@@ -41,6 +44,7 @@ public record CourierDeliveryResponse(
         PlaceResponse to,
         BigDecimal weightKg,
         BigDecimal codAmount,
+        DeliveryFeeResponse deliveryFee,
         String instructions,
         Instant assignedAt,
         Instant updatedAt,
@@ -55,7 +59,8 @@ public record CourierDeliveryResponse(
         return new CourierDeliveryResponse(parcel.id(), parcel.trackingNumber(), parcel.status(),
                 Stop.of(task), pickupContact(parcel, task), recipientContact(parcel, task),
                 PlaceResponse.from(parcel.pickup()), PlaceResponse.from(parcel.recipient()),
-                parcel.weightKg(), parcel.codAmount(), parcel.instructions(), task.assignedAt(), parcel.updatedAt(),
+                parcel.weightKg(), parcel.codAmount(), DeliveryFeeResponse.from(parcel, task), parcel.instructions(),
+                task.assignedAt(), parcel.updatedAt(),
                 task.nextStatuses(parcel.status(), parcel.currentBranch()), task.canMarkUnableToCollect(),
                 task.completed(), task.completedAt(), ProofResponse.of(parcel, task), TaskResponse.from(task));
     }

@@ -5,6 +5,7 @@ import com.swiftdrop.delivery.CreateDeliveryCommand;
 import com.swiftdrop.delivery.DeliveryApi;
 import com.swiftdrop.delivery.DeliverySnapshot;
 import com.swiftdrop.delivery.DeliveryStats;
+import com.swiftdrop.delivery.FeePayment;
 import com.swiftdrop.delivery.ParcelSearch;
 import com.swiftdrop.delivery.ParcelSort;
 import com.swiftdrop.delivery.ParcelStatus;
@@ -12,6 +13,8 @@ import com.swiftdrop.delivery.ParcelStatusChanged;
 import com.swiftdrop.delivery.ParcelStatusEntry;
 import com.swiftdrop.delivery.ProofPhoto;
 import com.swiftdrop.delivery.ProofPhotoRef;
+import com.swiftdrop.delivery.RecordFeeCollectionCommand;
+import com.swiftdrop.delivery.RecordOnlinePaymentCommand;
 import com.swiftdrop.delivery.internal.domain.Parcel;
 import com.swiftdrop.delivery.internal.domain.ParcelPrice;
 import com.swiftdrop.delivery.internal.domain.ParcelStatusHistory;
@@ -99,25 +102,46 @@ class DeliveryService implements DeliveryApi {
     private final FeeQuoter feeQuoter;
     private final TrackingNumberGenerator trackingNumbers;
     private final ProofPhotos proofPhotos;
+    private final FeePayments feePayments;
     private final Clock clock;
 
     @Autowired
     DeliveryService(ParcelRepository parcels, ParcelStatusHistoryRepository statusHistory, OutboxWriter outbox,
-                    FeeQuoter feeQuoter, TrackingNumberGenerator trackingNumbers, ProofPhotos proofPhotos) {
-        this(parcels, statusHistory, outbox, feeQuoter, trackingNumbers, proofPhotos, DATABASE_CLOCK);
+                    FeeQuoter feeQuoter, TrackingNumberGenerator trackingNumbers, ProofPhotos proofPhotos,
+                    FeePayments feePayments) {
+        this(parcels, statusHistory, outbox, feeQuoter, trackingNumbers, proofPhotos, feePayments, DATABASE_CLOCK);
     }
 
     /** For tests: a fixed clock. */
     DeliveryService(ParcelRepository parcels, ParcelStatusHistoryRepository statusHistory, OutboxWriter outbox,
                     FeeQuoter feeQuoter, TrackingNumberGenerator trackingNumbers, ProofPhotos proofPhotos,
-                    Clock clock) {
+                    FeePayments feePayments, Clock clock) {
         this.parcels = parcels;
         this.statusHistory = statusHistory;
         this.outbox = outbox;
         this.feeQuoter = feeQuoter;
         this.trackingNumbers = trackingNumbers;
         this.proofPhotos = proofPhotos;
+        this.feePayments = feePayments;
         this.clock = clock;
+    }
+
+    // ---- Snapshots with the fee's payment (delivery.fee_payments) ----
+
+    private DeliverySnapshot snapshot(Parcel parcel) {
+        return parcel.toSnapshot(feePayments.forParcel(parcel.getId()).orElse(null));
+    }
+
+    /** One query for the payments of the whole list. */
+    private List<DeliverySnapshot> snapshots(List<Parcel> found) {
+        Map<UUID, FeePayment> paid = feePayments.forParcels(found.stream().map(Parcel::getId).toList());
+        return found.stream().map(parcel -> parcel.toSnapshot(paid.get(parcel.getId()))).toList();
+    }
+
+    /** One query for the payments of the whole page. */
+    private Page<DeliverySnapshot> snapshots(Page<Parcel> found) {
+        Map<UUID, FeePayment> paid = feePayments.forParcels(found.getContent().stream().map(Parcel::getId).toList());
+        return found.map(parcel -> parcel.toSnapshot(paid.get(parcel.getId())));
     }
 
     /**
@@ -131,7 +155,7 @@ class DeliveryService implements DeliveryApi {
             Optional<Parcel> earlier = parcels.findByMerchantIdAndMerchantOrderRef(command.merchantId(),
                     command.merchantOrderRef());
             if (earlier.isPresent()) {
-                return earlier.get().toSnapshot();
+                return snapshot(earlier.get());
             }
         }
         // Checked here too, not only in the request bodies, so no caller of DeliveryApi.create can leave it out.
@@ -167,7 +191,7 @@ class DeliveryService implements DeliveryApi {
     @Override
     @Transactional(readOnly = true)
     public Optional<DeliverySnapshot> findById(UUID parcelId) {
-        return parcels.findById(parcelId).map(Parcel::toSnapshot);
+        return parcels.findById(parcelId).map(this::snapshot);
     }
 
     /**
@@ -182,7 +206,7 @@ class DeliveryService implements DeliveryApi {
             return Optional.empty();
         }
         return parcels.findByTrackingNumber(TrackingNumberGenerator.normalise(trackingNumber))
-                .map(Parcel::toSnapshot);
+                .map(this::snapshot);
     }
 
     @Override
@@ -197,26 +221,20 @@ class DeliveryService implements DeliveryApi {
     @Override
     @Transactional(readOnly = true)
     public List<DeliverySnapshot> findAllById(Collection<UUID> parcelIds) {
-        return parcels.findAllById(parcelIds).stream()
-                .map(Parcel::toSnapshot)
-                .toList();
+        return snapshots(parcels.findAllById(parcelIds));
     }
 
     /** For dispatch (WP8): the parcels waiting at this branch, oldest status change first. */
     @Override
     @Transactional(readOnly = true)
     public List<DeliverySnapshot> findAtBranch(District branch) {
-        return parcels.findWaitingAtBranch(branch).stream()
-                .map(Parcel::toSnapshot)
-                .toList();
+        return snapshots(parcels.findWaitingAtBranch(branch));
     }
 
     @Override
     @Transactional(readOnly = true)
     public List<DeliverySnapshot> findForCourier(UUID courierId, Instant finishedSince) {
-        return parcels.findForCourier(courierId, FINISHED, finishedSince).stream()
-                .map(Parcel::toSnapshot)
-                .toList();
+        return snapshots(parcels.findForCourier(courierId, FINISHED, finishedSince));
     }
 
     @Override
@@ -226,7 +244,7 @@ class DeliveryService implements DeliveryApi {
                 ? parcels.findByAssignedCourierIdAndStatusInOrderByStatusChangedAtDesc(courierId, FINISHED, pageable)
                 : parcels.findByAssignedCourierIdAndStatusInAndTrackingNumberOrderByStatusChangedAtDesc(
                         courierId, FINISHED, trackingNumber, pageable);
-        return finished.map(Parcel::toSnapshot);
+        return snapshots(finished);
     }
 
     // ---- A customer's parcels and a merchant's orders ----
@@ -243,7 +261,7 @@ class DeliveryService implements DeliveryApi {
         Page<Parcel> found = status == null
                 ? parcels.findByCustomerIdOrderByCreatedAtDescIdDesc(customerId, page)
                 : parcels.findByCustomerIdAndStatusOrderByCreatedAtDescIdDesc(customerId, status, page);
-        return found.map(Parcel::toSnapshot);
+        return snapshots(found);
     }
 
     /** "My deliveries" tabs and search: the same customer rule and page cap, newest first. */
@@ -268,7 +286,7 @@ class DeliveryService implements DeliveryApi {
         Page<Parcel> found = status == null
                 ? parcels.findByMerchantIdOrderByCreatedAtDescIdDesc(merchantId, page)
                 : parcels.findByMerchantIdAndStatusOrderByCreatedAtDescIdDesc(merchantId, status, page);
-        return found.map(Parcel::toSnapshot);
+        return snapshots(found);
     }
 
     /** For the admin's All Parcels page (WP4). The order comes from {@code search.sort()}, never from the caller. */
@@ -279,7 +297,7 @@ class DeliveryService implements DeliveryApi {
         Pageable capped = cappedPage(pageable);
         Pageable page = PageRequest.of(capped.getPageNumber(), capped.getPageSize(),
                 ParcelSearchSpecification.sort(search.sort()));
-        return parcels.findAll(ParcelSearchSpecification.of(search), page).map(Parcel::toSnapshot);
+        return snapshots(parcels.findAll(ParcelSearchSpecification.of(search), page));
     }
 
     @Override
@@ -344,13 +362,41 @@ class DeliveryService implements DeliveryApi {
             throw new BusinessRuleException(ErrorCode.INVALID_STATUS_TRANSITION);
         }
         statusHistory.save(ParcelStatusHistory.forChange(UUID.randomUUID(), from, command, now));
-        DeliverySnapshot snapshot = parcel.toSnapshot();
+        DeliverySnapshot snapshot = snapshot(parcel);
         outbox.write(new ParcelStatusChanged(UUID.randomUUID(), parcel.getId(), snapshot.version(),
                 parcel.getTrackingNumber(), parcel.getCustomerId(), parcel.getMerchantId(), from, parcel.getStatus(),
                 command.actorId(), command.actorRole(), command.note(),
                 parcel.getFailureReason() == null ? null : parcel.getFailureReason().name(), now,
                 parcel.getCurrentBranch(), parcel.getMerchantOrderRef()));
         return snapshot;
+    }
+
+    // ---- Delivery fee collection (agreed with WP9; see FeePayments) ----
+
+    /**
+     * Records the courier's cash collection of the parcel's fee (the parcel's own amount and currency), in the
+     * caller's transaction: a failure here, or later in that transaction, keeps no payment.
+     */
+    @Override
+    @Transactional
+    public DeliverySnapshot recordFeeCollection(RecordFeeCollectionCommand command) {
+        Parcel parcel = parcels.findById(command.parcelId())
+                .orElseThrow(() -> new NotFoundException(ErrorCode.NOT_FOUND));
+        FeePayment payment = feePayments.recordCashCollection(parcel, command, clock.instant());
+        return parcel.toSnapshot(payment);
+    }
+
+    /**
+     * Records a verified online payment of the parcel's fee (the parcel's own amount and currency) in the caller's
+     * transaction: a failure here, or later in that transaction, keeps no payment. No HTTP endpoint calls this.
+     */
+    @Override
+    @Transactional
+    public DeliverySnapshot recordOnlinePayment(RecordOnlinePaymentCommand command) {
+        Parcel parcel = parcels.findById(command.parcelId())
+                .orElseThrow(() -> new NotFoundException(ErrorCode.NOT_FOUND));
+        FeePayment payment = feePayments.recordOnlinePayment(parcel, command, clock.instant());
+        return parcel.toSnapshot(payment);
     }
 
     // ---- Reports (WP4) ----

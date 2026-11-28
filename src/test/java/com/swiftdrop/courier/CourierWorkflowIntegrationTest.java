@@ -114,6 +114,11 @@ class CourierWorkflowIntegrationTest extends RealWorkflowTest {
                 .andExpect(jsonPath("$.recipient.name").value("Kamala Silva"))
                 .andExpect(jsonPath("$.pickup").isEmpty())
                 .andExpect(jsonPath("$.codAmount").value(2500.00))
+                // The fee and payment method booked by the customer survive the pickup, handover and transfer,
+                // and stay apart from the cash on delivery.
+                .andExpect(jsonPath("$.deliveryFee.amount").value(parcel(parcel).feeAmount().doubleValue()))
+                .andExpect(jsonPath("$.deliveryFee.currency").value("LKR"))
+                .andExpect(jsonPath("$.deliveryFee.paymentMethod").value("AT_PICKUP"))
                 .andExpect(jsonPath("$.canMarkUnableToCollect").value(false));
         assertThat(parcel(parcel).status()).isEqualTo(ParcelStatus.OUT_FOR_DELIVERY);
         deliver(deliveryCourier, parcel, "Kamala Silva")

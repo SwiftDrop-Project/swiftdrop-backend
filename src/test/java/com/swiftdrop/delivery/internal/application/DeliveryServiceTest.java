@@ -81,8 +81,10 @@ class DeliveryServiceTest {
     private final FeeQuoter feeQuoter = mock(FeeQuoter.class);
     private final TrackingNumberGenerator trackingNumbers = mock(TrackingNumberGenerator.class);
     private final ProofPhotos proofPhotos = mock(ProofPhotos.class);
+    // A mock answers "no payment" for every parcel (empty Optional, empty map).
+    private final FeePayments feePayments = mock(FeePayments.class);
     private final DeliveryService service = new DeliveryService(parcels, statusHistory, outbox, feeQuoter,
-            trackingNumbers, proofPhotos, Clock.fixed(NOW, ZoneOffset.UTC));
+            trackingNumbers, proofPhotos, feePayments, Clock.fixed(NOW, ZoneOffset.UTC));
 
     @BeforeEach
     void aFeeAndAFreeTrackingNumber() {

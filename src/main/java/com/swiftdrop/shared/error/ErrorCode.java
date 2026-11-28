@@ -61,6 +61,8 @@ public enum ErrorCode {
         ASSIGNMENT_NEEDS_PARCEL(HttpStatus.CONFLICT, "A task needs at least one parcel. Cancel the task instead."),
         /** Dispatch: someone else changed the task at the same moment. */
         ASSIGNMENT_CHANGED(HttpStatus.CONFLICT, "This task was just changed by someone else. Refresh and try again."),
+        FEE_ALREADY_COLLECTED(HttpStatus.CONFLICT, "The delivery fee for this parcel has already been paid."),
+        FEE_COLLECTION_NOT_ALLOWED(HttpStatus.CONFLICT, "The delivery fee for this parcel can't be collected now."),
         COURIER_NOT_ASSIGNABLE(HttpStatus.CONFLICT, "This courier is not active and cannot be assigned parcels."),
         ACCOUNT_REMOVED(HttpStatus.CONFLICT, "This account has been permanently removed and cannot be modified."),
         /** Customer addresses: saving a 21st address. */

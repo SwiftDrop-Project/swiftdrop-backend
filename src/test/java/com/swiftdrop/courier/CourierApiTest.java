@@ -6,7 +6,11 @@ import com.swiftdrop.delivery.DeliveryApi;
 import com.swiftdrop.delivery.DeliveryContact;
 import com.swiftdrop.delivery.DeliverySnapshot;
 import com.swiftdrop.delivery.FailureReason;
+import com.swiftdrop.delivery.FeePayment;
+import com.swiftdrop.delivery.FeePaymentSource;
 import com.swiftdrop.delivery.ParcelStatus;
+import com.swiftdrop.delivery.PaymentMethod;
+import com.swiftdrop.delivery.RecordFeeCollectionCommand;
 import com.swiftdrop.dispatch.AssignmentApi;
 import com.swiftdrop.dispatch.AssignmentItemView;
 import com.swiftdrop.dispatch.AssignmentStatus;
@@ -123,6 +127,25 @@ abstract class CourierApiTest extends IntegrationTest {
             parcels.put(moved.id(), moved);
             return moved;
         });
+        // As delivery: the parcel's own fee is recorded as collected in cash by this courier, in this task.
+        when(delivery.recordFeeCollection(any())).thenAnswer(call -> {
+            RecordFeeCollectionCommand command = call.getArgument(0);
+            DeliverySnapshot p = parcels.get(command.parcelId());
+            DeliverySnapshot paid = withPayment(p, new FeePayment(p.feeAmount(), p.currency(), p.paymentMethod(),
+                    FeePaymentSource.COURIER_CASH, command.courierId(), command.assignmentId(), Instant.now()));
+            parcels.put(paid.id(), paid);
+            return paid;
+        });
+    }
+
+    /** The same parcel with this recorded fee payment (its status follows: CASH_COLLECTED or ONLINE_VERIFIED). */
+    @SuppressWarnings("deprecation")
+    protected static DeliverySnapshot withPayment(DeliverySnapshot p, FeePayment payment) {
+        return new DeliverySnapshot(p.id(), p.trackingNumber(), p.status(), p.customerId(), p.merchantId(),
+                p.pickup(), p.recipient(), p.weightKg(), p.codAmount(), p.instructions(), p.assignedCourierId(),
+                p.assignedAt(), p.createdAt(), p.updatedAt(), p.proofRecipientName(), p.hasProofPhoto(),
+                p.failureReason(), p.merchantOrderRef(), p.feeAmount(), p.currency(), p.version(), p.currentBranch(),
+                p.size(), p.vehicle(), p.billableWeightKg(), p.rateCardVersion(), p.paymentMethod(), null, payment);
     }
 
     /** The parcel as delivery has it now. */
@@ -141,7 +164,19 @@ abstract class CourierApiTest extends IntegrationTest {
                 status == ParcelStatus.FAILED ? command.failureReason() : null,
                 p.merchantOrderRef(), p.feeAmount(), p.currency(), p.version() + 1,
                 status == ParcelStatus.AT_BRANCH ? command.branch() : null,
-                p.size(), p.vehicle(), p.billableWeightKg(), p.rateCardVersion());
+                p.size(), p.vehicle(), p.billableWeightKg(), p.rateCardVersion(), p.paymentMethod(), null,
+                p.feePayment());
+    }
+
+    /** The same parcel with this fee, currency and payment method (null = booked before payment methods). */
+    @SuppressWarnings("deprecation")
+    protected static DeliverySnapshot withFee(DeliverySnapshot p, BigDecimal feeAmount, String currency,
+                                              BigDecimal codAmount, PaymentMethod paymentMethod) {
+        return new DeliverySnapshot(p.id(), p.trackingNumber(), p.status(), p.customerId(), p.merchantId(),
+                p.pickup(), p.recipient(), p.weightKg(), codAmount, p.instructions(), p.assignedCourierId(),
+                p.assignedAt(), p.createdAt(), p.updatedAt(), p.proofRecipientName(), p.hasProofPhoto(),
+                p.failureReason(), p.merchantOrderRef(), feeAmount, currency, p.version(), p.currentBranch(),
+                p.size(), p.vehicle(), p.billableWeightKg(), p.rateCardVersion(), paymentMethod);
     }
 
     /** An ACTIVE courier (created through IdentityApi, as an admin would) and its login cookie. */

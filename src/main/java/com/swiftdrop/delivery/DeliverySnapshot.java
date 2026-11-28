@@ -51,6 +51,10 @@ import java.util.UUID;
  *                           flat fee
  * @param paymentMethod      how the delivery fee is paid ({@link PaymentMethod}), so the courier knows whether to
  *                           collect it and from whom; null for parcels booked before payment methods
+ * @param feePaymentStatus   where the delivery fee stands ({@link FeePaymentStatus#of}: awaiting cash collection,
+ *                           collected, awaiting online verification, verified online, or not recorded). Never null:
+ *                           worked out from {@code paymentMethod} and {@code feePayment} when not given
+ * @param feePayment         the recorded payment of the delivery fee, or null while it is not paid
  */
 public record DeliverySnapshot(
         UUID id,
@@ -79,7 +83,32 @@ public record DeliverySnapshot(
         String vehicle,
         Integer billableWeightKg,
         Integer rateCardVersion,
-        PaymentMethod paymentMethod) {
+        PaymentMethod paymentMethod,
+        FeePaymentStatus feePaymentStatus,
+        FeePayment feePayment) {
+
+    public DeliverySnapshot {
+        if (feePaymentStatus == null) {
+            feePaymentStatus = FeePaymentStatus.of(paymentMethod, feePayment);
+        }
+    }
+
+    /**
+     * A snapshot of a parcel whose fee is not paid. Kept so callers written before fee payments still compile; the
+     * status follows from the payment method.
+     */
+    public DeliverySnapshot(UUID id, String trackingNumber, ParcelStatus status, UUID customerId, UUID merchantId,
+                            DeliveryContact pickup, DeliveryContact recipient, BigDecimal weightKg,
+                            BigDecimal codAmount, String instructions, UUID assignedCourierId, Instant assignedAt,
+                            Instant createdAt, Instant updatedAt, String proofRecipientName, boolean hasProofPhoto,
+                            FailureReason failureReason, String merchantOrderRef, BigDecimal feeAmount,
+                            String currency, long version, District currentBranch, ParcelSize size, String vehicle,
+                            Integer billableWeightKg, Integer rateCardVersion, PaymentMethod paymentMethod) {
+        this(id, trackingNumber, status, customerId, merchantId, pickup, recipient, weightKg, codAmount, instructions,
+                assignedCourierId, assignedAt, createdAt, updatedAt, proofRecipientName, hasProofPhoto, failureReason,
+                merchantOrderRef, feeAmount, currency, version, currentBranch, size, vehicle, billableWeightKg,
+                rateCardVersion, paymentMethod, null, null);
+    }
 
     /** A snapshot without a payment method. Kept so callers written before payment methods still compile. */
     public DeliverySnapshot(UUID id, String trackingNumber, ParcelStatus status, UUID customerId, UUID merchantId,
@@ -138,6 +167,7 @@ public record DeliverySnapshot(
                 + ", merchantOrderRef=" + merchantOrderRef + ", feeAmount=" + feeAmount + ", currency=" + currency
                 + ", version=" + version + ", currentBranch=" + currentBranch + ", size=" + size
                 + ", vehicle=" + vehicle + ", billableWeightKg=" + billableWeightKg
-                + ", rateCardVersion=" + rateCardVersion + ", paymentMethod=" + paymentMethod + "]";
+                + ", rateCardVersion=" + rateCardVersion + ", paymentMethod=" + paymentMethod
+                + ", feePaymentStatus=" + feePaymentStatus + ", feePayment=" + feePayment + "]";
     }
 }
